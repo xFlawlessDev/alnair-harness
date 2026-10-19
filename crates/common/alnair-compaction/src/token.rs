@@ -1,0 +1,17 @@
+//! Token-count seam.
+//!
+//! Budgeting math in the shared engine needs a *trusted* token count, but the
+//! two harnesses disagree on how to produce one: Alnair chat has a real tokenizer
+//! (`TextTokenizer` / `ImageTokenizer`) and counts whole turns via
+//! `AlnairTurn::get_num_tokens`, while alnair estimates with `bytes / 4`. Rather
+//! than bake either policy into the shared crate, callers supply an
+//! [`ItemTokenCounter`].
+//!
+//! There is intentionally **no** blanket `Arc` forwarding here: each harness
+//! implements the counter directly for the item type its algorithms run on
+//! (Alnair chat: `ItemTokenCounter<Arc<AlnairTurn>>`), so exactly one mechanism
+//! is in play.
+
+pub trait ItemTokenCounter<T: ?Sized>: Send + Sync {
+    fn count_item_tokens(&self, item: &T) -> u32;
+}

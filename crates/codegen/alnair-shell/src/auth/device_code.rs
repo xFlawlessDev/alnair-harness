@@ -1,0 +1,557 @@
+//! Kimi Code device-code login (PRD F1).
+//!
+//! Two-phase API mirroring kimi-cli's `login_kimi_code`:
+//!   1. [`crate::auth::kimi_oauth::request_device_authorization`] — get a
+//!      user code + verification URL from the OAuth host
+//!   2. [`complete_device_code_login`] — poll the token endpoint until
+//!      approved, then persist the token set via the `AuthManager`
+//!
+//! Poll semantics: the server-provided interval (default 5s, floored at 1s)
+//! paces the loop; `slow_down` bumps it by 5s; `expired_token` restarts the
+//! whole device authorization (fresh user code); every other non-200 outcome
+//! (`authorization_pending`, unknown errors) waits and continues.
+
+use std::sync::Arc;
+
+use alnair_models::OAuthConfig;
+
+use crate::auth::kimi_oauth::{DeviceAuthorization, DevicePollResult};
+use crate::auth::{AuthChannels, AuthManager, AuthUrlInfo, AuthUrlMode, KimiAuth};
+
+/// Extra wait added to the poll interval when the server answers `slow_down`
+/// (OAuth-standard device-flow backpressure).
+const SLOW_DOWN_INCREMENT_SECS: u64 = 5;
+
+/// The wire behind a device-code login. The `Kimi` arm calls the bespoke Kimi
+/// Code wire (X-Msh headers, `/api/oauth/*`) verbatim; the `Generic` arm
+/// drives a registry [`OAuthConfig`] provider (xai-grok) through
+/// [`crate::auth::oauth_device`].
+enum DeviceFlowBackend<'a> {
+    Kimi {
+        host: &'a str,
+    },
+    Generic(&'a OAuthConfig),
+    /// GitHub Copilot two-stage flow: the device authorization is the generic
+    /// one, but the token POLL reads GitHub's 200-body errors, and login
+    /// FINALIZES the durable github token into a copilot session token via the
+    /// Stage-2 exchange (see [`DeviceFlowBackend::finalize`]).
+    GithubCopilot(&'a OAuthConfig),
+}
+
+impl DeviceFlowBackend<'_> {
+    async fn request(&self) -> anyhow::Result<DeviceAuthorization> {
+        match self {
+            Self::Kimi { host } => {
+                crate::auth::kimi_oauth::request_device_authorization(host).await
+            }
+            Self::Generic(cfg) | Self::GithubCopilot(cfg) => {
+                crate::auth::oauth_device::request_device_authorization(cfg).await
+            }
+        }
+    }
+    async fn poll(&self, device_code: &str) -> anyhow::Result<DevicePollResult> {
+        match self {
+            Self::Kimi { host } => {
+                crate::auth::kimi_oauth::poll_device_token(host, device_code).await
+            }
+            Self::Generic(cfg) => {
+                crate::auth::oauth_device::poll_device_token(cfg, device_code).await
+            }
+            Self::GithubCopilot(cfg) => {
+                crate::auth::github_copilot::poll_github_device_token(cfg, device_code).await
+            }
+        }
+    }
+    /// Transform the device-grant credential before it is persisted. The Kimi
+    /// and generic flows persist the poll result verbatim; the GitHub Copilot
+    /// flow exchanges the durable github token (in `auth.key`) for the
+    /// short-lived copilot token, persisting BOTH (copilot as `key`, github as
+    /// `refresh_token`).
+    async fn finalize(&self, auth: KimiAuth) -> anyhow::Result<KimiAuth> {
+        match self {
+            Self::Kimi { .. } | Self::Generic(_) => Ok(auth),
+            Self::GithubCopilot(cfg) => {
+                crate::auth::github_copilot::exchange_copilot_token(cfg, &auth.key).await
+            }
+        }
+    }
+}
+
+/// Outcome of one full poll loop over a single device authorization.
+enum PollLoopOutcome {
+    /// Access token issued.
+    Done(Box<KimiAuth>),
+    /// The device code expired before the user approved — request a fresh
+    /// authorization and start over.
+    Restart,
+}
+
+/// Device-code login shared by the TUI and CLI.
+///
+/// With `channels` (TUI) the verification URL goes to `url_tx` and the
+/// browser opens automatically. Without `channels` (CLI) the URL + code are
+/// printed to stderr. The caller reports success (`✓ Signed in`).
+pub async fn run_device_code_login_channels(
+    host: &str,
+    auth_manager: &Arc<AuthManager>,
+    channels: &mut Option<AuthChannels>,
+) -> anyhow::Result<(KimiAuth, bool)> {
+    run_device_code_login_backend(DeviceFlowBackend::Kimi { host }, auth_manager, channels).await
+}
+
+/// Device-code login for a GENERIC [`OAuthConfig`] provider (xai-grok). Same
+/// TUI/CLI presentation as the Kimi login; only the wire differs.
+pub async fn run_device_code_login_generic(
+    oauth: &OAuthConfig,
+    auth_manager: &Arc<AuthManager>,
+    channels: &mut Option<AuthChannels>,
+) -> anyhow::Result<(KimiAuth, bool)> {
+    run_device_code_login_backend(DeviceFlowBackend::Generic(oauth), auth_manager, channels).await
+}
+
+/// GitHub Copilot two-stage login (github-copilot): the same device-flow
+/// presentation as the generic path, but the token poll reads GitHub's 200-body
+/// errors and the minted github token is finalized into a copilot session token
+/// before it is persisted (see [`DeviceFlowBackend::finalize`]).
+pub async fn run_device_code_login_github_copilot(
+    oauth: &OAuthConfig,
+    auth_manager: &Arc<AuthManager>,
+    channels: &mut Option<AuthChannels>,
+) -> anyhow::Result<(KimiAuth, bool)> {
+    run_device_code_login_backend(
+        DeviceFlowBackend::GithubCopilot(oauth),
+        auth_manager,
+        channels,
+    )
+    .await
+}
+
+async fn run_device_code_login_backend(
+    backend: DeviceFlowBackend<'_>,
+    auth_manager: &Arc<AuthManager>,
+    channels: &mut Option<AuthChannels>,
+) -> anyhow::Result<(KimiAuth, bool)> {
+    let interactive_tui = channels.is_some();
+    let mut channels = channels.take();
+    loop {
+        let device_auth = backend.request().await?;
+        let display_uri = device_auth.verification_uri_complete.clone();
+
+        if interactive_tui {
+            // TUI: push the URL through the channel BEFORE opening the
+            // browser, so the UI isn't blocked on a slow/hanging browser
+            // launch (e.g. SSH/headless).
+            if let Some(tx) = channels.as_mut().and_then(|c| c.url_tx.take()) {
+                let _ = tx.send(AuthUrlInfo {
+                    url: display_uri.clone(),
+                    mode: AuthUrlMode::Device,
+                });
+            }
+            open_browser_detached(&display_uri).await;
+        } else {
+            prompt_on_stderr(&device_auth).await;
+        }
+
+        match complete_device_code_login(&backend, &device_auth).await? {
+            PollLoopOutcome::Done(auth) => {
+                // Finalize before persisting: the GitHub Copilot flow exchanges
+                // the durable github token for the short-lived copilot token
+                // here; the Kimi / generic flows pass the credential through.
+                let auth = backend.finalize(*auth).await?;
+                let auth = auth_manager
+                    .update(auth)
+                    .await
+                    .map_err(|e| anyhow::anyhow!("Failed to save credentials: {e}"))?;
+                return Ok((auth, true));
+            }
+            PollLoopOutcome::Restart => {
+                tracing::info!("auth: device code expired, restarting device authorization");
+                if !interactive_tui {
+                    eprintln!("Device code expired — requesting a new one...");
+                }
+                // The TUI already consumed url_tx; the restarted flow can
+                // only reach the user via the (re-)opened browser page.
+                continue;
+            }
+        }
+    }
+}
+
+/// Print the verification URL + user code to stderr and open the browser.
+async fn prompt_on_stderr(device_auth: &DeviceAuthorization) {
+    let display_uri = &device_auth.verification_uri_complete;
+    eprintln!();
+    eprintln!("To sign in, open this URL in your browser:");
+    eprintln!();
+    eprintln!("  {display_uri}");
+    eprintln!();
+    if !open_browser_detached(display_uri).await {
+        eprintln!("  (Could not open browser automatically — open the URL above manually.)");
+        eprintln!();
+    }
+    // Show the code so the user can confirm it matches the browser
+    // (anti-phishing): the complete URL pre-fills it.
+    eprintln!("Confirm this code in your browser:");
+    eprintln!();
+    eprintln!("  {}", device_auth.user_code);
+    eprintln!();
+    eprintln!(
+        "\x1b[90mOnly continue with a code you requested. \
+         Don't share it with anyone.\x1b[0m"
+    );
+    eprintln!();
+    eprintln!("Waiting for authorization...");
+}
+
+/// Poll the token endpoint until the user approves, the device code expires
+/// (→ [`PollLoopOutcome::Restart`]), or the wire fails.
+async fn complete_device_code_login(
+    backend: &DeviceFlowBackend<'_>,
+    device_auth: &DeviceAuthorization,
+) -> anyhow::Result<PollLoopOutcome> {
+    let mut poll_interval = std::time::Duration::from_secs(device_auth.interval.max(1) as u64);
+    loop {
+        // Sleep first: an immediate poll on a fresh code only returns
+        // authorization_pending (and risks slow_down).
+        tokio::time::sleep(poll_interval).await;
+        match backend.poll(&device_auth.device_code).await? {
+            DevicePollResult::Success(auth) => {
+                tracing::info!("auth: device login authorized");
+                return Ok(PollLoopOutcome::Done(auth));
+            }
+            DevicePollResult::Expired => return Ok(PollLoopOutcome::Restart),
+            DevicePollResult::Pending { error, description } => {
+                if error == "slow_down" {
+                    poll_interval += std::time::Duration::from_secs(SLOW_DOWN_INCREMENT_SECS);
+                    tracing::info!(
+                        new_interval_secs = poll_interval.as_secs(),
+                        "auth: server asked to slow down device polling"
+                    );
+                } else {
+                    tracing::debug!(
+                        error = %error,
+                        description = ?description,
+                        "auth: device authorization pending"
+                    );
+                }
+            }
+        }
+    }
+}
+
+/// Open `url` in the browser off-thread: `webbrowser::open` is synchronous and
+/// would stall the single-threaded TUI loop. Returns `true` on success so the
+/// caller can decide how to notify the user (eprintln on CLI, nothing on TUI
+/// where the URL is already rendered in the widget). Shared with the PKCE flow.
+pub(super) async fn open_browser_detached(url: &str) -> bool {
+    // Unit tests drive the full login flow against mock servers — their
+    // fixture URLs must never reach a real browser.
+    if cfg!(test) {
+        return false;
+    }
+    let url = url.to_owned();
+    match tokio::task::spawn_blocking(move || webbrowser::open(&url)).await {
+        Ok(Ok(())) => true,
+        Ok(Err(e)) => {
+            tracing::info!(error = %e, "device auth: could not open browser automatically");
+            false
+        }
+        Err(e) => {
+            tracing::info!(error = %e, "device auth: browser-open task failed");
+            false
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::auth::KimiCodeConfig;
+    use wiremock::matchers::{body_string_contains, method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    /// Fixture mirroring the live `device_authorization` payload (verified
+    /// against auth.kimi.com): verification URLs are passed through verbatim
+    /// by the login flow, so they use the real shape.
+    fn device_auth_json(code: &str) -> serde_json::Value {
+        serde_json::json!({
+            "user_code": "WXYZ-6789",
+            "device_code": code,
+            "verification_uri": "https://www.kimi.com/code/authorize_device",
+            "verification_uri_complete": "https://www.kimi.com/code/authorize_device?user_code=WXYZ-6789",
+            "expires_in": 1800,
+            // floored to 1s by the poll loop
+            "interval": 0,
+        })
+    }
+
+    fn token_json(access: &str) -> serde_json::Value {
+        serde_json::json!({
+            "access_token": access,
+            "refresh_token": "rt-1",
+            "expires_in": 3600,
+            "scope": "kimi-code",
+            "token_type": "bearer",
+        })
+    }
+
+    fn auth_manager(dir: &tempfile::TempDir) -> Arc<AuthManager> {
+        Arc::new(AuthManager::new(dir.path(), KimiCodeConfig::default()))
+    }
+
+    /// End-to-end (mock server): authorization → pending → token, persisting
+    /// via the AuthManager.
+    #[tokio::test]
+    async fn device_login_persists_token_after_pending() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/api/oauth/device_authorization"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(device_auth_json("dev-1")))
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/api/oauth/token"))
+            .respond_with(
+                ResponseTemplate::new(400)
+                    .set_body_json(serde_json::json!({ "error": "authorization_pending" })),
+            )
+            .up_to_n_times(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/api/oauth/token"))
+            .and(body_string_contains("device_code=dev-1"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(token_json("at-done")))
+            .mount(&server)
+            .await;
+
+        let dir = tempfile::tempdir().unwrap();
+        let mgr = auth_manager(&dir);
+        let mut channels = None;
+        let (auth, is_new) = run_device_code_login_channels(&server.uri(), &mgr, &mut channels)
+            .await
+            .unwrap();
+        assert!(is_new);
+        assert_eq!(auth.key, "at-done");
+        assert_eq!(
+            mgr.current_or_expired().map(|a| a.key),
+            Some("at-done".into()),
+            "login must land in the manager cache"
+        );
+        assert!(
+            dir.path().join("auth.json").exists(),
+            "login must persist to the fallback file store"
+        );
+    }
+
+    /// `expired_token` during polling restarts the whole device
+    /// authorization (fresh device code), then completes.
+    #[tokio::test]
+    async fn expired_token_restarts_device_authorization() {
+        let server = MockServer::start().await;
+        // First authorization issues dev-1; second issues dev-2.
+        Mock::given(method("POST"))
+            .and(path("/api/oauth/device_authorization"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(device_auth_json("dev-1")))
+            .up_to_n_times(1)
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/api/oauth/device_authorization"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(device_auth_json("dev-2")))
+            .expect(1)
+            .mount(&server)
+            .await;
+        // dev-1 polls expire; dev-2 polls succeed.
+        Mock::given(method("POST"))
+            .and(path("/api/oauth/token"))
+            .and(body_string_contains("device_code=dev-1"))
+            .respond_with(
+                ResponseTemplate::new(400)
+                    .set_body_json(serde_json::json!({ "error": "expired_token" })),
+            )
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/api/oauth/token"))
+            .and(body_string_contains("device_code=dev-2"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(token_json("at-restarted")))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let dir = tempfile::tempdir().unwrap();
+        let mgr = auth_manager(&dir);
+        let mut channels = None;
+        let (auth, _) = run_device_code_login_channels(&server.uri(), &mgr, &mut channels)
+            .await
+            .unwrap();
+        assert_eq!(auth.key, "at-restarted");
+    }
+
+    /// `slow_down` is wait-and-continue (interval bumped), never fatal.
+    /// Unknown-error continuation is covered at the wire level by
+    /// `kimi_oauth::tests::poll_maps_pending_and_unknown_errors_to_pending`.
+    #[tokio::test]
+    async fn slow_down_keeps_polling_then_succeeds() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/api/oauth/device_authorization"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(device_auth_json("dev-1")))
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/api/oauth/token"))
+            .respond_with(
+                ResponseTemplate::new(400)
+                    .set_body_json(serde_json::json!({ "error": "slow_down" })),
+            )
+            .up_to_n_times(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/api/oauth/token"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(token_json("at-patient")))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let dir = tempfile::tempdir().unwrap();
+        let mgr = auth_manager(&dir);
+        let mut channels = None;
+        let started = std::time::Instant::now();
+        let (auth, _) = run_device_code_login_channels(&server.uri(), &mgr, &mut channels)
+            .await
+            .unwrap();
+        assert_eq!(auth.key, "at-patient");
+        assert!(
+            started.elapsed() >= std::time::Duration::from_secs(6),
+            "slow_down must bump the poll interval by {SLOW_DOWN_INCREMENT_SECS}s"
+        );
+    }
+
+    /// GitHub Copilot two-stage login e2e (mock wire): device authorization →
+    /// poll (pending → github token) → Stage-2 copilot-token exchange (Bearer
+    /// github token + editor headers → copilot token + expiry). The persisted
+    /// credential keys the COPILOT token, keeps the GITHUB token as
+    /// `refresh_token`, and carries the copilot expiry.
+    #[tokio::test]
+    async fn github_copilot_two_stage_login_persists_copilot_and_github() {
+        let server = MockServer::start().await;
+        let host: &'static str = Box::leak(server.uri().into_boxed_str());
+        let cfg = OAuthConfig {
+            auth_host: host,
+            token_host: host,
+            copilot_exchange: Some((host, "/copilot_internal/v2/token")),
+            ..alnair_models::COPILOT_OAUTH_CONFIG
+        };
+        // Stage 1a: device authorization (github.com/login/device/code).
+        Mock::given(method("POST"))
+            .and(path("/login/device/code"))
+            .and(body_string_contains("client_id=Iv1.b507a08c87ecfe98"))
+            .and(body_string_contains("scope=read"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "device_code": "gh-dev-1",
+                "user_code": "WDJB-MJHT",
+                "verification_uri": "https://github.com/login/device",
+                "expires_in": 900,
+                "interval": 0,
+            })))
+            .mount(&server)
+            .await;
+        // Stage 1b: token poll — GitHub returns errors AND success in a 200 body.
+        Mock::given(method("POST"))
+            .and(path("/login/oauth/access_token"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(serde_json::json!({ "error": "authorization_pending" })),
+            )
+            .up_to_n_times(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/login/oauth/access_token"))
+            .and(body_string_contains("device_code=gh-dev-1"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(serde_json::json!({ "access_token": "gho_github_tok" })),
+            )
+            .mount(&server)
+            .await;
+        // Stage 2: copilot-token exchange (Bearer github token + editor headers).
+        let future = (chrono::Utc::now() + chrono::Duration::minutes(30)).timestamp();
+        Mock::given(method("GET"))
+            .and(path("/copilot_internal/v2/token"))
+            .and(wiremock::matchers::header(
+                "Authorization",
+                "Bearer gho_github_tok",
+            ))
+            .and(wiremock::matchers::header(
+                "Editor-Plugin-Version",
+                "copilot-chat/0.35.0",
+            ))
+            .respond_with(ResponseTemplate::new(200).set_body_json(
+                serde_json::json!({ "token": "copilot-session-tok", "expires_at": future }),
+            ))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let dir = tempfile::tempdir().unwrap();
+        let mgr = auth_manager(&dir);
+        let mut channels = None;
+        let (auth, is_new) = run_device_code_login_github_copilot(&cfg, &mgr, &mut channels)
+            .await
+            .unwrap();
+        assert!(is_new);
+        assert_eq!(
+            auth.key, "copilot-session-tok",
+            "key = copilot session token"
+        );
+        assert_eq!(
+            auth.refresh_token.as_deref(),
+            Some("gho_github_tok"),
+            "the durable github token is persisted as refresh_token"
+        );
+        assert!(
+            auth.expires_at.is_some_and(|e| e > chrono::Utc::now()),
+            "the copilot expiry must be persisted"
+        );
+        assert_eq!(
+            mgr.current_or_expired().map(|a| a.key),
+            Some("copilot-session-tok".into()),
+            "login must land the copilot token in the manager cache"
+        );
+    }
+
+    /// A 5xx from the token endpoint is a hard error (kimi-cli parity).
+    #[tokio::test]
+    async fn server_error_during_poll_fails_login() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/api/oauth/device_authorization"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(device_auth_json("dev-1")))
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/api/oauth/token"))
+            .respond_with(ResponseTemplate::new(500))
+            .mount(&server)
+            .await;
+
+        let dir = tempfile::tempdir().unwrap();
+        let mgr = auth_manager(&dir);
+        let mut channels = None;
+        let err = run_device_code_login_channels(&server.uri(), &mgr, &mut channels)
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("server error"), "{err}");
+        assert!(
+            mgr.current_or_expired().is_none(),
+            "failed login must not persist credentials"
+        );
+    }
+}

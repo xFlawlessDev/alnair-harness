@@ -1,0 +1,227 @@
+[package]
+license = "Apache-2.0"
+name = "alnair-shell"
+version.workspace = true
+edition.workspace = true
+
+[features]
+default = []
+unstable = []
+default-bazel = [
+    ]
+
+[dependencies]
+dunce = { workspace = true }
+tonic-prost = { workspace = true, optional = true }
+agent-client-protocol = { workspace = true }
+anyhow = { workspace = true }
+alnair-prompt-queue = { workspace = true }
+alnair-version = { workspace = true }
+
+async-openai = { workspace = true }
+async-trait = { workspace = true }
+blake3 = { workspace = true }
+bm25 = "2.3"
+bytes = { workspace = true }
+chrono = { workspace = true }
+indexmap = { workspace = true, features = ["serde"] }
+ignore = { workspace = true }
+jsonschema = { workspace = true }
+futures = { workspace = true }
+glob = { workspace = true }
+globset = { workspace = true }
+kanal = "0.1"
+regex = { workspace = true }
+# rmcp 2.1 + reqwest 0.13 are quarantined inside `alnair-mcp`. The remaining
+# MCP code in this crate (extensions/mcp.rs, mcp_doctor.rs) reaches rmcp model
+# types via `alnair_mcp::rmcp::model::*`. reqwest 0.13 is a private impl
+# detail of alnair-mcp::servers; shell never sees it. Every HTTP call site
+# in this crate uses workspace reqwest 0.12.
+alnair-mcp = { workspace = true }
+reqwest = { workspace = true, features = ["stream", "blocking"] }
+reqwest-middleware = { workspace = true }
+# rusqlite 0.37 + bundled = self-contained SQLite (>= 3.50.2) with FTS5.
+# Bumped from 0.32 to resolve CVE-2025-29087, CVE-2025-3277, CVE-2025-6965.
+# sqlite-vec is C ABI, not Rust-version dependent — any rusqlite with `bundled` works.
+rusqlite = { version = "0.37", features = ["bundled"] }
+serde = { workspace = true }
+serde_ignored = "0.1"
+serde_json = { workspace = true, features = ["preserve_order"] }
+similar = { workspace = true }
+thiserror = { workspace = true }
+clap = { workspace = true }
+dirs = "6"
+tokio-stream = { workspace = true }
+tower-http = { workspace = true, features = ["cors"] }
+toml = { workspace = true, features = ["preserve_order"] }
+toml_edit = { workspace = true }
+tokio = { workspace = true, features = [
+    "io-std",
+    "process",
+    "rt",
+    "macros",
+    "rt-multi-thread",
+    "net",
+    "sync",
+] }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true, features = [
+    "env-filter",
+    "fmt",
+    "json",
+    "time",
+] }
+obfstr = { workspace = true }
+tokio-util = { workspace = true, features = ["compat"] }
+tokio-retry = { workspace = true }
+uuid = { workspace = true, features = ["v4", "v5", "v7"] }
+alnair-acp-lib = { workspace = true }
+axum = { workspace = true, features = ["ws", "multipart"] }
+backon = { workspace = true }
+webbrowser = { workspace = true }
+tokio-rustls = { version = "0.26", default-features = false, features = [
+    "ring",
+    "logging",
+    "tls12",
+] }
+rustls = { version = "0.23", default-features = false, features = [
+    "ring",
+    "logging",
+    "std",
+    "tls12",
+] }
+rustls-native-certs = "0.8"
+futures-util = { workspace = true }
+urlencoding = { workspace = true }
+gethostname = { workspace = true }
+git2 = { workspace = true }
+notify = { workspace = true }
+notify-debouncer-mini = { workspace = true }
+nucleo = { workspace = true }
+arc-swap = { workspace = true }
+infer = "0.15"
+image = { workspace = true, features = ["png", "jpeg", "gif", "webp"] }
+moka = { workspace = true, features = ["future"] }
+base64 = { workspace = true }
+jsonwebtoken = { version = "10", features = ["rust_crypto"] }
+sha2 = { workspace = true }
+rand = { workspace = true }
+shlex = { workspace = true }
+strum = { workspace = true }
+alnair-fast-worktree = { path = "../alnair-fast-worktree", features = ["metadata"] }
+
+tonic = { workspace = true, optional = true }
+prost = { workspace = true, optional = true }
+alnair-paths = { path = "../alnair-paths" }
+alnair-shell-base = { workspace = true }
+alnair-env = { workspace = true }
+alnair-shared = { workspace = true }
+alnair-tracing-macros = { path = "../alnair-tracing-macros" }
+alnair-fsnotify = { path = "../alnair-fsnotify" }
+alnair-codebase-graph = { path = "../alnair-codebase-graph" }
+alnair-hunk-tracker = { path = "../alnair-hunk-tracker" }
+alnair-agent-lifecycle = { workspace = true }
+alnair-interjection-core = { workspace = true }
+alnair-sandbox = { path = "../alnair-sandbox", default-features = false }
+alnair-chat-state = { path = "../alnair-chat-state" }
+alnair-compaction = { path = "../../common/alnair-compaction" }
+alnair-sampler = { path = "../alnair-sampler" }
+alnair-sqlite-journal = { workspace = true }
+alnair-token-estimation = { workspace = true }
+alnair-sampling-types = { path = "../alnair-sampling-types" }
+alnair-tools = { path = "../alnair-tools" }
+alnair-tty-utils = { workspace = true }
+alnair-system-power = { workspace = true }
+alnair-workspace = { workspace = true }
+alnair-subagent-resolution = { path = "../alnair-subagent-resolution" }
+alnair-agent = { path = "../alnair-agent" }
+alnair-config = { workspace = true }
+alnair-config-types = { workspace = true }
+alnair-memory = { workspace = true }
+alnair-hooks = { path = "../alnair-hooks" }
+alnair-hooks-plugins-types = { path = "../alnair-hooks-plugins-types" }
+alnair-file-utils = { path = "../alnair-file-utils" }
+alnair-auth = { workspace = true, features = ["middleware"] }
+alnair-log = { workspace = true }
+alnair-http = { workspace = true }
+alnair-models = { workspace = true }
+flate2 = { workspace = true }
+fs2 = { workspace = true }
+zstd = { workspace = true }
+tar = { workspace = true }
+url = { workspace = true }
+alnair-secrets = { path = "../alnair-secrets" }
+walkdir = { workspace = true }
+tdigests = "1.0"
+semver = { workspace = true }
+process-wrap = { version = "9.0.0", features = ["tokio1", "job-object", "creation-flags"] }
+portable-pty = "0.9"
+parking_lot.workspace = true
+dashmap.workspace = true
+
+# Used by acp_session.rs and mcp_servers.rs for the unified
+# alnair_tool_runtime::Tool dispatch model.
+alnair-tool-runtime = { workspace = true }
+alnair-tool-protocol = { workspace = true }
+alnair-tool-types = { workspace = true }
+
+[target.'cfg(unix)'.dependencies]
+libc = { workspace = true }
+nix = { workspace = true }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+# System-keyring credential storage for the Kimi Code OAuth session (PRD F1).
+keyring = { workspace = true, features = ["apple-native"] }
+
+[target.'cfg(windows)'.dependencies]
+siphasher = { workspace = true }
+windows = { workspace = true }
+# System-keyring credential storage for the Kimi Code OAuth session (PRD F1).
+keyring = { workspace = true, features = ["windows-native"] }
+
+[dev-dependencies]
+criterion = { workspace = true }
+wiremock = { workspace = true }
+filetime = { workspace = true }
+tempfile = { workspace = true }
+alnair-memory = { workspace = true, features = [] }
+alnair-workspace = { workspace = true, features = ["test-support"] }
+# Feature-unification applies the signing seam to the lib when building tests, so
+# integration tests can inject a throwaway trusted key; production builds exclude
+# dev-deps and compile the seam out.
+alnair-config = { workspace = true, features = ["test-support"] }
+# Ed25519 signing for the managed-config signature tests.
+ring = { workspace = true }
+tar = { workspace = true }
+flate2 = { workspace = true }
+rsa = { workspace = true }
+semver = { workspace = true }
+serial_test = { workspace = true }
+# Test-only builds expose `env::EnvVarGuard` and the cpu_profile test seams to
+# this crate's test targets.
+alnair-shell-base = { workspace = true, features = [] }
+alnair-test-support = { workspace = true, features = [] }
+alnair-test-utils = { workspace = true }
+# `test-util` enables `#[tokio::test(start_paused = true)]` (paused virtual
+# clock with auto-advance) so interval-driven loop tests in `auth::refresh`
+# can assert exact tick counts deterministically without real-time sleep.
+tokio = { workspace = true, features = ["test-util"] }
+
+[dependencies.tempfile]
+workspace = true
+
+[[bench]]
+name = "session_list"
+harness = false
+
+[lints]
+workspace = true
+[build-dependencies]
+# build.rs only downloads ripgrep — no rmcp involvement. Workspace reqwest
+# (0.12) is plenty.
+reqwest = { workspace = true, features = ["blocking"] }
+flate2 = { workspace = true }
+tar = { workspace = true }
+[[bin]]
+name = "chat-history-downgrade"
+path = "src/bin/chat-history-downgrade.rs"

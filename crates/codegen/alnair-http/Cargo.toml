@@ -1,0 +1,20 @@
+[package]
+license = "Apache-2.0"
+name = "alnair-http"
+version.workspace = true
+edition.workspace = true
+description = "Shared reqwest HTTP clients and User-Agent construction for the alnair CLI."
+
+[dependencies]
+reqwest = { workspace = true, features = ["blocking"] }
+reqwest-middleware = { workspace = true }
+serde_json = { workspace = true }
+tracing = { workspace = true }
+alnair-auth = { workspace = true, features = ["middleware"] }
+alnair-sampler = { path = "../alnair-sampler" }
+alnair-log = { workspace = true }
+alnair-version = { workspace = true }
+alnair-workspace = { workspace = true }
+
+[lints]
+workspace = true

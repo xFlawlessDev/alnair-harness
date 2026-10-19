@@ -1,0 +1,12 @@
+[package]
+license = "Apache-2.0"
+name = "alnair-markdown-core"
+version.workspace = true
+edition.workspace = true
+description = "Headless markdown analysis sharing Alnair's exact pulldown-cmark config."
+
+[dependencies]
+pulldown-cmark = { workspace = true }
+
+[lints]
+workspace = true

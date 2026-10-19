@@ -1,0 +1,176 @@
+//! Shared environment helpers: binary resolution, git workdirs, env var setup.
+
+use std::ffi::{OsStr, OsString};
+use std::path::{Path, PathBuf};
+use std::process::Command;
+
+use tempfile::TempDir;
+
+/// RAII guard for a single environment variable in `#[serial]` tests: snapshots
+/// the prior value on construction, applies the change, then restores the prior
+/// value (or unsets it) on drop — even if an assertion panics. Restoring rather
+/// than always unsetting avoids clobbering vars a parent process/harness set
+/// (e.g. `RUST_LOG`).
+///
+/// Callers MUST be `#[serial_test::serial]`: the `unsafe` `set_var`/`remove_var`
+/// are sound only when no other thread accesses the environment concurrently.
+pub struct EnvGuard {
+    key: &'static str,
+    prior: Option<OsString>,
+}
+
+impl EnvGuard {
+    /// Set `key` to `value` for the guard's lifetime.
+    pub fn set(key: &'static str, value: impl AsRef<OsStr>) -> Self {
+        let prior = std::env::var_os(key);
+        // SAFETY: callers are `#[serial]`, so no other thread touches the env.
+        unsafe { std::env::set_var(key, value) };
+        Self { key, prior }
+    }
+
+    pub fn unset(key: &'static str) -> Self {
+        let prior = std::env::var_os(key);
+        // SAFETY: see [`EnvGuard::set`].
+        unsafe { std::env::remove_var(key) };
+        Self { key, prior }
+    }
+}
+
+impl Drop for EnvGuard {
+    fn drop(&mut self) {
+        // SAFETY: see [`EnvGuard::set`].
+        match self.prior.take() {
+            Some(v) => unsafe { std::env::set_var(self.key, v) },
+            None => unsafe { std::env::remove_var(self.key) },
+        }
+    }
+}
+
+fn workspace_root() -> PathBuf {
+    // nth(3): crate is nested three levels below the cargo workspace root.
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .ancestors()
+        .nth(3)
+        .expect("workspace root")
+        .to_path_buf()
+}
+
+fn target_dir() -> PathBuf {
+    std::env::var_os("CARGO_TARGET_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| workspace_root().join("target"))
+}
+
+fn local_alnair_binary_path() -> PathBuf {
+    target_dir()
+        .join("debug")
+        .join(format!("alnair-tui{}", std::env::consts::EXE_SUFFIX))
+}
+
+fn ensure_local_alnair_binary(binary: &Path) {
+    if binary.exists() {
+        return;
+    }
+
+    let cargo = std::env::var("CARGO").unwrap_or_else(|_| "cargo".to_string());
+    let output = Command::new(&cargo)
+        .current_dir(workspace_root())
+        .args(["build", "-p", "alnair-tui", "--bin", "alnair-tui"])
+        .output()
+        .unwrap_or_else(|e| panic!("failed to spawn {cargo} to build alnair-tui: {e}"));
+
+    assert!(
+        output.status.success(),
+        "failed to build alnair-tui for lifecycle tests (exit {:?})\nstdout:\n{}\nstderr:\n{}",
+        output.status.code(),
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr),
+    );
+    assert!(
+        binary.exists(),
+        "alnair-tui build completed but binary missing at {}",
+        binary.display()
+    );
+}
+
+/// Resolve the alnair binary, building `alnair-tui` on demand if neither
+/// `ALNAIR_BINARY` (CI) nor cargo's own path points at an existing file.
+pub fn alnair_binary() -> PathBuf {
+    if let Ok(path) = std::env::var("ALNAIR_BINARY") {
+        let p = PathBuf::from(path);
+        assert!(p.exists(), "ALNAIR_BINARY does not exist: {}", p.display());
+        return p;
+    }
+
+    if let Ok(path) = std::env::var("CARGO_BIN_EXE_alnair-tui") {
+        let p = PathBuf::from(path);
+        if p.exists() {
+            return p;
+        }
+    }
+
+    let binary = local_alnair_binary_path();
+    ensure_local_alnair_binary(&binary);
+    binary
+}
+
+/// Temp dir with a git repo + one committed file.
+/// Forces libgit2 to fully init (the codepath that breaks with bad OpenSSL linking).
+pub fn git_workdir() -> TempDir {
+    let dir = TempDir::new().expect("create temp dir");
+    let path = dir.path();
+
+    fn run_git(args: &[&str], dir: &Path) {
+        let output = Command::new("git")
+            .args(args)
+            .current_dir(dir)
+            .output()
+            .unwrap_or_else(|e| panic!("failed to spawn git {}: {e}", args.join(" ")));
+        assert!(
+            output.status.success(),
+            "git {} failed (exit {:?}):\n{}",
+            args.join(" "),
+            output.status.code(),
+            String::from_utf8_lossy(&output.stderr),
+        );
+    }
+
+    run_git(&["init"], path);
+    // CI has no global git identity, so commits need one configured here.
+    run_git(&["config", "user.email", "test@test.com"], path);
+    run_git(&["config", "user.name", "Test"], path);
+
+    std::fs::write(path.join("README.md"), "test file\n").expect("write test file");
+
+    run_git(&["add", "-A"], path);
+    run_git(&["commit", "-m", "init", "--no-gpg-sign"], path);
+
+    dir
+}
+
+/// Point alnair at the mock server with a fake API key and telemetry disabled.
+pub fn test_env_cmd_tokio(
+    cmd: &mut tokio::process::Command,
+    mock_url: &str,
+    home: &std::path::Path,
+) {
+    cmd.env("HOME", home)
+        // HOME alone does not sandbox alnair on Windows: the product resolves
+        // `~` via `USERPROFILE`/Known Folders (`std::env::home_dir()`), so
+        // without an explicit ALNAIR_SHARE_DIR every spawned child shares the real
+        // `%USERPROFILE%\.alnair` — test 1's models_cache.json (which embeds
+        // its per-test mock-server URL) then poisons every later test's
+        // prompt (the windows-x86_64 lifecycle "prompt timed out" failure).
+        // Mirrors `leader.rs` and the pty-harness `env_for_pager`.
+        .env("ALNAIR_SHARE_DIR", home.join(".alnair"))
+        .env("ALNAIR_CODE_BASE_URL", mock_url)
+        .env("ALNAIR_API_BASE_URL", mock_url)
+        .env("ALNAIR_API_KEY", "test-key-for-ci")
+        .env("ALNAIR_TELEMETRY_ENABLED", "false")
+        .env("ALNAIR_FEEDBACK_ENABLED", "false")
+        .env("ALNAIR_TRACE_UPLOAD", "false")
+        .env("ALNAIR_INSTRUMENTATION", "disabled")
+        // Release binaries (CI lifecycle tests) otherwise spawn a background
+        // update check that hits the network and can add latency under Rosetta.
+        .env("ALNAIR_DISABLE_AUTOUPDATER", "1");
+}

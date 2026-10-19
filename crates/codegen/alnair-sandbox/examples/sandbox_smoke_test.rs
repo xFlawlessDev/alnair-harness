@@ -1,0 +1,178 @@
+//! Smoke test for sandbox enforcement.
+//!
+//! This binary applies a sandbox profile and then attempts various operations
+//! to verify kernel enforcement. Run it directly to test:
+//!
+//! ```bash
+//! # Test workspace profile (should allow writes to CWD, block ~/Desktop)
+//! cargo run -p alnair-sandbox --example sandbox_smoke_test
+//!
+//! # Test strict profile
+//! cargo run -p alnair-sandbox --example sandbox_smoke_test -- strict
+//!
+//! # Test read-only profile
+//! cargo run -p alnair-sandbox --example sandbox_smoke_test -- read-only
+//! ```
+
+// Kernel enforcement is unix-only (Seatbelt / Landlock); Windows builds a
+// stub so `--all-targets` stays green everywhere.
+#[cfg(unix)]
+use alnair_sandbox::{ProfileName, SandboxManager};
+#[cfg(unix)]
+use std::path::Path;
+
+#[cfg(not(unix))]
+fn main() {
+    eprintln!("sandbox_smoke_test exercises kernel enforcement and only runs on Unix.");
+}
+
+#[cfg(unix)]
+fn main() {
+    let profile_name = std::env::args()
+        .nth(1)
+        .unwrap_or_else(|| "workspace".to_string());
+
+    let profile: ProfileName = profile_name.parse().unwrap_or_else(|e| {
+        eprintln!("Error: {e}");
+        std::process::exit(1);
+    });
+
+    let support = SandboxManager::support_info();
+    println!(
+        "Platform support: {}",
+        if support.is_supported { "YES" } else { "NO" }
+    );
+    println!("Details: {}", support.details);
+
+    if !support.is_supported {
+        println!("\n⚠️  Sandbox not supported on this platform.");
+        println!("   On macOS: Seatbelt should be available (10.5+)");
+        println!("   On Linux: Landlock requires kernel ≥ 5.13");
+        println!("\n   Tests will show what WOULD happen, but won't enforce.");
+    }
+
+    let workspace = std::env::current_dir().expect("failed to get cwd");
+    println!("\nProfile:      {profile}");
+    println!("Workspace:    {}", workspace.display());
+
+    println!("\n--- Applying sandbox ---");
+    let mut sandbox = SandboxManager::new(profile, &workspace);
+    match sandbox.apply(&workspace) {
+        Ok(()) => {
+            if sandbox.is_applied() {
+                println!("✅ Sandbox applied (kernel-enforced, irreversible)");
+            } else {
+                println!("⚠️  Sandbox was not applied (unsupported platform or Off profile)");
+            }
+        }
+        Err(e) => {
+            println!("❌ Sandbox apply failed: {e}");
+        }
+    }
+
+    println!(
+        "Child network restricted: {}",
+        sandbox.restrict_child_network()
+    );
+
+    println!("\n--- Testing filesystem operations ---\n");
+
+    // Nothing below asserts; each comment is the outcome the operator should
+    // see on stdout for the profile named.
+
+    // Always allowed.
+    test_read("Read CWD", &workspace);
+
+    // Allowed for workspace/read-only.
+    test_read("Read /tmp", Path::new("/tmp"));
+
+    // Allowed for workspace/read-only, blocked for strict.
+    if let Some(home) = dirs::home_dir() {
+        test_read("Read ~/", &home);
+    }
+
+    // Allowed for workspace/strict, blocked for read-only.
+    let test_file = workspace.join(".sandbox-test-write");
+    test_write("Write to CWD", &test_file);
+    let _ = std::fs::remove_file(&test_file);
+
+    // Allowed for workspace/strict, blocked for read-only.
+    let tmp_test = Path::new("/tmp/.alnair-sandbox-test");
+    test_write("Write to /tmp", tmp_test);
+    let _ = std::fs::remove_file(tmp_test);
+
+    // Blocked for all active profiles.
+    if let Some(home) = dirs::home_dir() {
+        let outside = home.join(".sandbox-test-blocked");
+        test_write("Write to ~/", &outside);
+        let _ = std::fs::remove_file(&outside);
+    }
+
+    // A custom profile's `deny` list could block this.
+    if let Some(home) = dirs::home_dir() {
+        let ssh = home.join(".ssh");
+        if ssh.exists() {
+            test_read("Read ~/.ssh/", &ssh);
+        }
+    }
+
+    println!("\n--- Sandbox event log ---");
+    let events = sandbox.logger().take_events();
+    for event in &events {
+        println!(
+            "  {:?}: {} {:?}",
+            event.event_type, event.profile, event.target
+        );
+    }
+    if events.is_empty() {
+        println!("  (no events recorded)");
+    }
+
+    println!("\n✅ Smoke test complete");
+}
+
+#[cfg(unix)]
+fn test_read(label: &str, path: &Path) {
+    if path.is_file() {
+        match std::fs::read(path) {
+            Ok(_) => println!("  ✅ {label}: OK (read)"),
+            Err(e)
+                if e.raw_os_error() == Some(libc::EACCES)
+                    || e.raw_os_error() == Some(libc::EPERM) =>
+            {
+                println!("  🔒 {label}: BLOCKED ({e})");
+            }
+            Err(e) => println!("  ❌ {label}: ERROR ({e})"),
+        }
+        return;
+    }
+    match std::fs::read_dir(path) {
+        Ok(mut entries) => {
+            let count = entries.by_ref().take(5).count();
+            println!("  ✅ {label}: OK ({count} entries)");
+        }
+        Err(e) => {
+            if e.raw_os_error() == Some(libc::EACCES) || e.raw_os_error() == Some(libc::EPERM) {
+                println!("  🔒 {label}: BLOCKED ({e})");
+            } else {
+                println!("  ❌ {label}: ERROR ({e})");
+            }
+        }
+    }
+}
+
+#[cfg(unix)]
+fn test_write(label: &str, path: &Path) {
+    match std::fs::write(path, b"sandbox-test") {
+        Ok(()) => {
+            println!("  ✅ {label}: OK (written)");
+        }
+        Err(e) => {
+            if e.raw_os_error() == Some(libc::EACCES) || e.raw_os_error() == Some(libc::EPERM) {
+                println!("  🔒 {label}: BLOCKED ({e})");
+            } else {
+                println!("  ❌ {label}: ERROR ({e})");
+            }
+        }
+    }
+}

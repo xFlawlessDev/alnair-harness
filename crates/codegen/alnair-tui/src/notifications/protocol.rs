@@ -1,0 +1,389 @@
+use std::borrow::Cow;
+
+use crate::notifications::tmux;
+use crate::terminal::{MultiplexerKind, TerminalContext, TerminalName};
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NotificationProtocol {
+    /// iTerm2/WezTerm/Warp: `\x1b]9;{message}\x07`
+    Osc9,
+    /// Kitty: `\x1b]99;i=alnair;{message}\x1b\\`
+    Osc99,
+    /// Ghostty/VTE: `\x1b]777;notify;{title};{body}\x1b\\`
+    Osc777,
+    /// Universal fallback: `\x07`
+    Bel,
+    /// No notification capability
+    None,
+}
+
+impl NotificationProtocol {
+    /// Stable lowercase name for telemetry and analytics output.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Osc9 => "osc9",
+            Self::Osc99 => "osc99",
+            Self::Osc777 => "osc777",
+            Self::Bel => "bel",
+            Self::None => "none",
+        }
+    }
+}
+
+pub fn select_protocol(ctx: &TerminalContext) -> NotificationProtocol {
+    if ctx.multiplexer == MultiplexerKind::Zellij {
+        return NotificationProtocol::Bel;
+    }
+    match ctx.brand {
+        TerminalName::Iterm2 | TerminalName::WezTerm | TerminalName::WarpTerminal => {
+            NotificationProtocol::Osc9
+        }
+        TerminalName::Kitty => NotificationProtocol::Osc99,
+        TerminalName::Ghostty
+        | TerminalName::Vte
+        | TerminalName::Terminator
+        | TerminalName::Foot => NotificationProtocol::Osc777,
+        TerminalName::AlnairDesktop => NotificationProtocol::None,
+        TerminalName::AppleTerminal
+        | TerminalName::Alacritty
+        | TerminalName::Rio
+        | TerminalName::VsCode
+        | TerminalName::WindowsTerminal
+        | TerminalName::JetBrains
+        | TerminalName::Cursor
+        | TerminalName::Windsurf
+        | TerminalName::Zed
+        | TerminalName::Otty
+        | TerminalName::Unknown => NotificationProtocol::Bel,
+    }
+}
+
+const BEL_BYTE: &[u8] = b"\x07";
+
+/// When running under tmux the sequence is wrapped in DCS passthrough so the
+/// outer terminal sees it.
+pub fn emit_notification(
+    protocol: NotificationProtocol,
+    title: &str,
+    body: &str,
+    ctx: &TerminalContext,
+    writer: &crate::render::draw::EscapeWriter,
+) {
+    // For body-only protocols (OSC 9, OSC 99), fold the title (session
+    // name) into the body so it's visible.  For OSC 777 (Ghostty), the
+    // tab title already appears as the notification subtitle, so we use
+    // the app name to avoid showing the session name twice.
+    let sequence: Cow<'_, str> = match protocol {
+        NotificationProtocol::Osc9 => format!("\x1b]9;{body} \u{b7} {title}\x07").into(),
+        NotificationProtocol::Osc99 => format!("\x1b]99;i=alnair;{body} \u{b7} {title}\x1b\\").into(),
+        NotificationProtocol::Osc777 => format!("\x1b]777;notify;Alnair;{body}\x1b\\").into(),
+        NotificationProtocol::Bel => Cow::Borrowed("\x07"),
+        NotificationProtocol::None => return,
+    };
+
+    // Notifications fire from the event-loop thread: queued, never an inline stderr write.
+    if ctx.is_tmux_backed() {
+        writer.emit(tmux::tmux_passthrough(&sequence));
+    } else if matches!(protocol, NotificationProtocol::Bel) {
+        writer.emit(BEL_BYTE);
+    } else {
+        writer.emit(sequence.as_bytes());
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::terminal::{MultiplexerKind, TerminalContext, TerminalName};
+
+    fn ctx_with_brand(brand: TerminalName) -> TerminalContext {
+        TerminalContext {
+            brand,
+            ..Default::default()
+        }
+    }
+
+    fn ctx_with_brand_and_mux(brand: TerminalName, mux: MultiplexerKind) -> TerminalContext {
+        TerminalContext {
+            brand,
+            multiplexer: mux,
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn select_iterm2_uses_osc9() {
+        assert_eq!(
+            select_protocol(&ctx_with_brand(TerminalName::Iterm2)),
+            NotificationProtocol::Osc9
+        );
+    }
+
+    #[test]
+    fn select_wezterm_uses_osc9() {
+        assert_eq!(
+            select_protocol(&ctx_with_brand(TerminalName::WezTerm)),
+            NotificationProtocol::Osc9
+        );
+    }
+
+    #[test]
+    fn select_warp_uses_osc9() {
+        assert_eq!(
+            select_protocol(&ctx_with_brand(TerminalName::WarpTerminal)),
+            NotificationProtocol::Osc9
+        );
+    }
+
+    #[test]
+    fn select_kitty_uses_osc99() {
+        assert_eq!(
+            select_protocol(&ctx_with_brand(TerminalName::Kitty)),
+            NotificationProtocol::Osc99
+        );
+    }
+
+    #[test]
+    fn select_ghostty_uses_osc777() {
+        assert_eq!(
+            select_protocol(&ctx_with_brand(TerminalName::Ghostty)),
+            NotificationProtocol::Osc777
+        );
+    }
+
+    #[test]
+    fn select_vte_uses_osc777() {
+        assert_eq!(
+            select_protocol(&ctx_with_brand(TerminalName::Vte)),
+            NotificationProtocol::Osc777
+        );
+    }
+
+    #[test]
+    fn select_alnair_desktop_uses_none() {
+        assert_eq!(
+            select_protocol(&ctx_with_brand(TerminalName::AlnairDesktop)),
+            NotificationProtocol::None
+        );
+    }
+
+    #[test]
+    fn select_apple_terminal_uses_bel() {
+        assert_eq!(
+            select_protocol(&ctx_with_brand(TerminalName::AppleTerminal)),
+            NotificationProtocol::Bel
+        );
+    }
+
+    #[test]
+    fn select_alacritty_uses_bel() {
+        assert_eq!(
+            select_protocol(&ctx_with_brand(TerminalName::Alacritty)),
+            NotificationProtocol::Bel
+        );
+    }
+
+    #[test]
+    fn select_vscode_uses_bel() {
+        assert_eq!(
+            select_protocol(&ctx_with_brand(TerminalName::VsCode)),
+            NotificationProtocol::Bel
+        );
+    }
+
+    #[test]
+    fn select_unknown_uses_bel() {
+        assert_eq!(
+            select_protocol(&ctx_with_brand(TerminalName::Unknown)),
+            NotificationProtocol::Bel
+        );
+    }
+
+    #[test]
+    fn zellij_overrides_to_bel_for_kitty() {
+        assert_eq!(
+            select_protocol(&ctx_with_brand_and_mux(
+                TerminalName::Kitty,
+                MultiplexerKind::Zellij
+            )),
+            NotificationProtocol::Bel
+        );
+    }
+
+    #[test]
+    fn zellij_overrides_to_bel_for_ghostty() {
+        assert_eq!(
+            select_protocol(&ctx_with_brand_and_mux(
+                TerminalName::Ghostty,
+                MultiplexerKind::Zellij
+            )),
+            NotificationProtocol::Bel
+        );
+    }
+
+    #[test]
+    fn zellij_overrides_to_bel_for_iterm2() {
+        assert_eq!(
+            select_protocol(&ctx_with_brand_and_mux(
+                TerminalName::Iterm2,
+                MultiplexerKind::Zellij
+            )),
+            NotificationProtocol::Bel
+        );
+    }
+
+    #[test]
+    fn zellij_overrides_to_bel_for_wezterm() {
+        assert_eq!(
+            select_protocol(&ctx_with_brand_and_mux(
+                TerminalName::WezTerm,
+                MultiplexerKind::Zellij
+            )),
+            NotificationProtocol::Bel
+        );
+    }
+
+    // tmux does not override protocol selection: passthrough wrapping
+    // happens at emission time, not selection time.
+
+    #[test]
+    fn tmux_preserves_osc9_for_iterm2() {
+        assert_eq!(
+            select_protocol(&ctx_with_brand_and_mux(
+                TerminalName::Iterm2,
+                MultiplexerKind::Tmux
+            )),
+            NotificationProtocol::Osc9
+        );
+    }
+
+    #[test]
+    fn tmux_preserves_osc99_for_kitty() {
+        assert_eq!(
+            select_protocol(&ctx_with_brand_and_mux(
+                TerminalName::Kitty,
+                MultiplexerKind::Tmux
+            )),
+            NotificationProtocol::Osc99
+        );
+    }
+
+    #[test]
+    fn screen_preserves_osc777_for_ghostty() {
+        assert_eq!(
+            select_protocol(&ctx_with_brand_and_mux(
+                TerminalName::Ghostty,
+                MultiplexerKind::Screen
+            )),
+            NotificationProtocol::Osc777
+        );
+    }
+
+    #[test]
+    fn emit_none_is_noop() {
+        let ctx = ctx_with_brand(TerminalName::AlnairDesktop);
+        emit_notification(
+            NotificationProtocol::None,
+            "title",
+            "body",
+            &ctx,
+            &crate::render::draw::EscapeWriter::disconnected(),
+        );
+    }
+
+    #[test]
+    fn emit_bel_does_not_panic() {
+        let ctx = ctx_with_brand(TerminalName::Unknown);
+        emit_notification(
+            NotificationProtocol::Bel,
+            "",
+            "",
+            &ctx,
+            &crate::render::draw::EscapeWriter::disconnected(),
+        );
+    }
+
+    #[test]
+    fn emit_osc9_does_not_panic() {
+        let ctx = ctx_with_brand(TerminalName::Iterm2);
+        emit_notification(
+            NotificationProtocol::Osc9,
+            "title",
+            "body",
+            &ctx,
+            &crate::render::draw::EscapeWriter::disconnected(),
+        );
+    }
+
+    #[test]
+    fn emit_osc99_does_not_panic() {
+        let ctx = ctx_with_brand(TerminalName::Kitty);
+        emit_notification(
+            NotificationProtocol::Osc99,
+            "title",
+            "body",
+            &ctx,
+            &crate::render::draw::EscapeWriter::disconnected(),
+        );
+    }
+
+    #[test]
+    fn emit_osc777_does_not_panic() {
+        let ctx = ctx_with_brand(TerminalName::Ghostty);
+        emit_notification(
+            NotificationProtocol::Osc777,
+            "title",
+            "body",
+            &ctx,
+            &crate::render::draw::EscapeWriter::disconnected(),
+        );
+    }
+
+    #[test]
+    fn all_brands_have_defined_protocol() {
+        let cases: &[(TerminalName, NotificationProtocol)] = &[
+            (TerminalName::Iterm2, NotificationProtocol::Osc9),
+            (TerminalName::WezTerm, NotificationProtocol::Osc9),
+            (TerminalName::WarpTerminal, NotificationProtocol::Osc9),
+            (TerminalName::Kitty, NotificationProtocol::Osc99),
+            (TerminalName::Ghostty, NotificationProtocol::Osc777),
+            (TerminalName::Vte, NotificationProtocol::Osc777),
+            (TerminalName::Foot, NotificationProtocol::Osc777),
+            (TerminalName::AlnairDesktop, NotificationProtocol::None),
+            (TerminalName::AppleTerminal, NotificationProtocol::Bel),
+            (TerminalName::Alacritty, NotificationProtocol::Bel),
+            (TerminalName::VsCode, NotificationProtocol::Bel),
+            (TerminalName::WindowsTerminal, NotificationProtocol::Bel),
+            (TerminalName::Unknown, NotificationProtocol::Bel),
+        ];
+
+        for &(brand, expected) in cases {
+            let ctx = ctx_with_brand(brand);
+            assert_eq!(
+                select_protocol(&ctx),
+                expected,
+                "protocol mismatch for {brand:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn zellij_forces_bel_for_all_osc_brands() {
+        let osc_brands = [
+            TerminalName::Iterm2,
+            TerminalName::WezTerm,
+            TerminalName::WarpTerminal,
+            TerminalName::Kitty,
+            TerminalName::Ghostty,
+            TerminalName::Vte,
+        ];
+        for brand in osc_brands {
+            let ctx = ctx_with_brand_and_mux(brand, MultiplexerKind::Zellij);
+            assert_eq!(
+                select_protocol(&ctx),
+                NotificationProtocol::Bel,
+                "zellij should force BEL for {brand:?}"
+            );
+        }
+    }
+}

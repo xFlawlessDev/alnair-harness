@@ -1,0 +1,181 @@
+//! `memory_get` tool.
+
+use std::sync::Arc;
+
+use super::types::MemoryGetInput;
+use crate::types::memory_backend::MemoryBackend;
+use crate::types::output::ToolOutput;
+use crate::types::tool::{ToolKind, ToolNamespace};
+
+/// Format content with line numbers: `{line_num}→{line}`. `first_line_num`
+/// is the 1-based number of the first line of `content` (accounts for the
+/// `from` offset).
+///
+/// Uses `split('\n')` rather than `lines()` so that content ending with a
+/// newline (`"a\n"`) emits a trailing blank numbered line, matching the
+/// standard `read_file` tool. `lines()` would silently drop that trailing
+/// element, causing off-by-one line references for files (virtually all
+/// Markdown memory files) that end with a newline.
+pub(crate) fn format_with_line_numbers(content: &str, first_line_num: usize) -> String {
+    if content.is_empty() {
+        return String::new();
+    }
+    content
+        .split('\n')
+        .enumerate()
+        .map(|(i, line)| format!("{}→{}", first_line_num + i, line))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+#[derive(Debug, Default)]
+pub struct MemoryGetImpl;
+
+impl crate::types::tool_metadata::ToolMetadata for MemoryGetImpl {
+    fn kind(&self) -> ToolKind {
+        ToolKind::MemoryGet
+    }
+
+    fn tool_namespace(&self) -> ToolNamespace {
+        ToolNamespace::Alnair
+    }
+
+    fn description_template(&self) -> &str {
+        "Read a memory file by path. Returns the file content with line numbers, optionally \
+         limited to a range of lines.\n\n\
+         Use after `memory_search` returns a relevant result and you need the full context \
+         around a snippet, or to read a specific MEMORY.md file in full.\n\n\
+         Line numbers are 1-based and match the line offsets accepted by the `from` parameter, \
+         so targeted follow-up reads or edits can reference exact positions."
+    }
+}
+
+impl alnair_tool_runtime::Tool for MemoryGetImpl {
+    type Args = MemoryGetInput;
+    type Output = ToolOutput;
+
+    fn id(&self) -> alnair_tool_protocol::ToolId {
+        alnair_tool_protocol::ToolId::new("memory_get").expect("valid tool id")
+    }
+
+    fn description(
+        &self,
+        _ctx: &::alnair_tool_runtime::ListToolsContext,
+    ) -> alnair_tool_types::ToolDescription {
+        alnair_tool_types::ToolDescription::new(
+            "memory_get",
+            crate::types::tool_metadata::ToolMetadata::description_template(self),
+        )
+    }
+
+    fn capabilities(&self) -> alnair_tool_protocol::ToolCapabilities {
+        alnair_tool_protocol::ToolCapabilities {
+            is_read_only: true,
+            tool_scope: Some(alnair_tool_protocol::ToolScope::Read),
+            ..Default::default()
+        }
+    }
+
+    async fn run(
+        &self,
+        ctx: alnair_tool_runtime::ToolCallContext,
+        input: MemoryGetInput,
+    ) -> Result<ToolOutput, alnair_tool_runtime::ToolError> {
+        use crate::types::tool_metadata::shared_resources;
+        let resources = shared_resources(&ctx)?;
+        let Some(memory) = resources
+            .lock()
+            .await
+            .get::<Arc<dyn MemoryBackend>>()
+            .cloned()
+        else {
+            return Ok(ToolOutput::Text(
+                "Memory is not enabled. Use --experimental-memory to enable.".into(),
+            ));
+        };
+        let memory = memory.clone();
+        tracing::info!(target: crate::types::memory_backend::MEMORY_LOG_TARGET,"MEMORY_GET: invoked");
+        let content = memory
+            .get(&input.path, input.from, input.lines)
+            .map_err(|e| {
+                alnair_tool_runtime::ToolError::execution(
+                    alnair_tool_protocol::ToolId::new("memory_get").expect("valid"),
+                    format!("memory get failed: {e}"),
+                )
+            })?;
+        let total_lines = content.lines().count();
+        let first_line_num = input.from.unwrap_or(0) + 1;
+        let numbered = format_with_line_numbers(&content, first_line_num);
+        let output = format!(
+            "**File:** {}\n**Lines:** {} (from: {}, limit: {})\n\n{}",
+            input.path,
+            total_lines,
+            input.from.map_or("start".to_string(), |f| f.to_string()),
+            input.lines.map_or("all".to_string(), |l| l.to_string()),
+            numbered,
+        );
+        Ok(ToolOutput::Text(output.into()))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_format_basic_line_numbers() {
+        let out = format_with_line_numbers("alpha\nbeta\ngamma", 1);
+        assert_eq!(out, "1→alpha\n2→beta\n3→gamma");
+    }
+
+    #[test]
+    fn test_format_offset_adjusts_line_numbers() {
+        // from=4 (0-based) makes the first displayed line number 5 (1-based).
+        let out = format_with_line_numbers("line five\nline six", 5);
+        assert!(out.starts_with("5→line five"), "got: {out}");
+        assert!(out.ends_with("6→line six"), "got: {out}");
+    }
+
+    #[test]
+    fn test_format_empty_content() {
+        let out = format_with_line_numbers("", 1);
+        assert!(out.is_empty(), "empty input must produce empty output");
+    }
+
+    #[test]
+    fn test_format_single_line() {
+        let out = format_with_line_numbers("only line", 1);
+        assert_eq!(out, "1→only line");
+    }
+
+    #[test]
+    fn test_format_large_line_numbers() {
+        let out = format_with_line_numbers("x", 1_000_000);
+        assert!(out.starts_with("1000000→"), "got: {out}");
+    }
+
+    /// Regression test for the `lines()` vs `split('\n')` difference:
+    /// virtually all Markdown memory files end with a trailing newline, so
+    /// with `lines()` `memory_get` line numbers would be off-by-one relative
+    /// to `read_file`.
+    #[test]
+    fn test_format_trailing_newline_emits_blank_line() {
+        let out = format_with_line_numbers("alpha\n", 1);
+        assert_eq!(
+            out, "1→alpha\n2→",
+            "trailing newline must produce a numbered blank final line"
+        );
+    }
+
+    #[test]
+    fn test_format_double_trailing_newline() {
+        let out = format_with_line_numbers("a\n\n", 1);
+        assert_eq!(out, "1→a\n2→\n3→");
+    }
+
+    #[test]
+    fn test_format_no_trailing_newline_no_blank_line() {
+        let out = format_with_line_numbers("alpha", 1);
+        assert_eq!(out, "1→alpha", "no trailing newline → no extra line");
+    }
+}

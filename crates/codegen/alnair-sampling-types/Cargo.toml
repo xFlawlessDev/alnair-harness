@@ -1,0 +1,24 @@
+[package]
+license = "Apache-2.0"
+name = "alnair-sampling-types"
+version.workspace = true
+edition.workspace = true
+description = "Pure data types for the xAI sampling / chat-completion API layer"
+
+[dependencies]
+async-openai = { workspace = true }
+base64 = { workspace = true }
+indexmap = { workspace = true, features = ["serde"] }
+reqwest = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true, features = ["preserve_order"] }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+alnair-compaction = { path = "../../common/alnair-compaction" }
+alnair-tools = { path = "../alnair-tools" }
+
+[dev-dependencies]
+assert_matches = { workspace = true }
+
+[lints]
+workspace = true

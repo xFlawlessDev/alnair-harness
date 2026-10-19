@@ -1,0 +1,137 @@
+//! Filesystem path tables for sandbox profiles.
+//!
+//! Collects device files, temp directories, sensitive deny-paths, and
+//! ecosystem (package-manager / toolchain) writable paths into helpers
+//! consumed by [`super::profiles`].
+
+#[cfg(all(feature = "enforce", unix))]
+use std::path::Path;
+use std::path::PathBuf;
+
+// Alnair state directory
+
+/// Alnair state directory — always writable (`$ALNAIR_SHARE_DIR` or `~/.alnair`).
+pub(crate) fn alnair_home() -> PathBuf {
+    alnair_config::alnair_home()
+}
+
+// Device files & directories
+
+/// Device files that need write access for normal tool operation.
+///
+/// Without write access to these, common programs (git, curl, ssh, compilers)
+/// break because they can't open `/dev/null` as an output sink, allocate PTYs,
+/// or seed RNGs.
+///
+/// These are individual files (use `allow_file`, not `allow_path`).
+/// `/dev/pts` is a directory (PTY slaves on Linux) so it uses `allow_path`.
+#[cfg(all(feature = "enforce", unix))]
+pub(crate) const DEVICE_FILES: &[&str] = &[
+    // output sink — used by virtually every CLI tool
+    "/dev/null",
+    // zero source — used by memory allocators
+    "/dev/zero",
+    // entropy — used by crypto/TLS
+    "/dev/random",
+    // entropy — used by crypto/TLS
+    "/dev/urandom",
+    // controlling terminal — used by git, ssh, gpg
+    "/dev/tty",
+    // PTY allocation — used by terminal spawning
+    "/dev/ptmx",
+    // file descriptor access (symlink to /proc/self/fd on Linux)
+    "/dev/fd",
+];
+
+/// Device directories that need write access.
+#[cfg(all(feature = "enforce", unix))]
+pub(crate) const DEVICE_DIRS: &[&str] = &[
+    // PTY slaves (Linux)
+    "/dev/pts",
+];
+
+// Temporary directories
+
+/// Temporary directories that need write access.
+///
+/// On Linux, `/tmp` is the standard temp directory.
+/// On macOS, programs use both `/tmp` (symlink to `/private/tmp`) and
+/// `/private/var/folders/` (the real `TMPDIR` / `NSTemporaryDirectory()`).
+/// git, compilers, and other tools write temp files to `$TMPDIR` which
+/// resolves to `/private/var/folders/xx/.../T/` on macOS.
+#[cfg(all(feature = "enforce", unix))]
+pub(crate) fn temp_writable_paths() -> Vec<PathBuf> {
+    let mut paths = vec![PathBuf::from("/tmp"), PathBuf::from("/var/tmp")];
+
+    // macOS: /tmp → /private/tmp, but the real TMPDIR is under /private/var/folders.
+    // Also include /private/tmp since Seatbelt may resolve the symlink.
+    if cfg!(target_os = "macos") {
+        for p in ["/private/tmp", "/private/var/tmp", "/private/var/folders"] {
+            let pb = PathBuf::from(p);
+            if pb.exists() && pb.is_dir() {
+                paths.push(pb);
+            }
+        }
+    }
+
+    // Respect $TMPDIR if it points somewhere else (e.g. custom Linux setups).
+    if let Ok(tmpdir) = std::env::var("TMPDIR") {
+        let pb = PathBuf::from(&tmpdir);
+        if pb.exists() && pb.is_dir() && !paths.contains(&pb) {
+            paths.push(pb);
+        }
+    }
+
+    paths
+}
+
+// Essential writable paths
+
+/// Writable directory paths for profiles that allow workspace writes (workspace, devbox, strict).
+/// Device files are handled separately via `allow_file` in `to_capability_set_with_config`.
+#[cfg(all(feature = "enforce", unix))]
+pub(crate) fn essential_writable_paths(workspace: &Path) -> Vec<PathBuf> {
+    let mut paths = vec![workspace.to_path_buf(), alnair_home()];
+    paths.extend(temp_writable_paths());
+    paths
+}
+
+/// Home subtrees the process keeps writing after enforcement: session and
+/// worktree state, memory, diagnostics. Landlock cannot carve a child out of
+/// a write grant, so the rest of `~/.alnair` (`config.toml`, `auth.json`,
+/// `sandbox.toml`, `hooks/`, `bin/`, `vendor/`, `plugin-data/`) stays
+/// read-only and a sandboxed child cannot arm the next launch.
+#[cfg(all(feature = "enforce", unix))]
+const HOME_STATE_DIRS: &[&str] = &[
+    "run",
+    "sessions",
+    "worktrees",
+    "worktree_pool",
+    "tasks",
+    "memory",
+    "logs",
+    "debug",
+    "crash",
+    "memtrace",
+    "trace-exports",
+];
+
+/// Writable paths for the strict profile: the workspace, the home state
+/// subtrees, and temp.
+#[cfg(all(feature = "enforce", unix))]
+pub(crate) fn essential_writable_paths_strict(workspace: &Path) -> Vec<PathBuf> {
+    let home = alnair_home();
+    let mut paths = vec![workspace.to_path_buf()];
+    paths.extend(HOME_STATE_DIRS.iter().map(|dir| home.join(dir)));
+    paths.extend(temp_writable_paths());
+    paths
+}
+
+/// Writable directory paths for the read-only profile (minimal: just ~/.alnair + temp).
+/// Device files are handled separately via `allow_file` in `to_capability_set_with_config`.
+#[cfg(all(feature = "enforce", unix))]
+pub(crate) fn essential_writable_paths_minimal() -> Vec<PathBuf> {
+    let mut paths = vec![alnair_home()];
+    paths.extend(temp_writable_paths());
+    paths
+}

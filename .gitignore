@@ -1,0 +1,19 @@
+/target
+**/*.rs.bk
+.DS_Store
+
+# frontend/ (alnaircli.dev worker)
+.wrangler/
+node_modules/
+
+# Runner-setup prompt; holds a Gitea registration token once filled in.
+/prompt.txt
+
+# Local test credentials
+cred.md
+
+# Upstream xai-org/grok-build reference clone
+/grok-build/
+
+# Local API keys (MiniMax TTS key for alnair-videos)
+env.md

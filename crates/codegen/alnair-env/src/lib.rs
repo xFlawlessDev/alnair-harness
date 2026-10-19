@@ -1,0 +1,171 @@
+//! Backend endpoint defaults for the Alnair crate family.
+//!
+//! Alnair talks to exactly four first-party endpoints (PRD §8.2); everything
+//! else (MCP servers, GitHub release assets) is user- or release-configured.
+//! Each value resolves as an env-var override when set, else the compiled
+//! production default.
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct AlnairEndpoints {
+    /// Kimi Code subscription inference API (OpenAI chat/completions compatible).
+    pub coding_api_base_url: &'static str,
+    /// OAuth device-flow host for Kimi Code subscription login.
+    pub oauth_host: &'static str,
+    /// Releases API endpoint the self-updater polls (GitHub-Releases-shaped;
+    /// Gitea's `/api/v1` serves the same wire format).
+    pub update_base_url: &'static str,
+    /// Human-facing page for subscription upgrade guidance.
+    pub upgrade_page_url: &'static str,
+}
+
+pub const PRODUCTION_ENDPOINTS: AlnairEndpoints = AlnairEndpoints {
+    coding_api_base_url: "https://api.kimi.com/coding/v1",
+    oauth_host: "https://auth.kimi.com",
+    update_base_url: "https://git.zacharyzhang.com/api/v1/repos/ZacharyZhang-NY/Alnair-CLI/releases",
+    upgrade_page_url: "https://www.kimi.com/code/",
+};
+
+/// Env var overriding [`coding_api_base_url`] (PRD F3).
+pub const CODE_BASE_URL_ENV: &str = "ALNAIR_CODE_BASE_URL";
+/// Env var overriding [`oauth_host`] (PRD F1).
+pub const OAUTH_HOST_ENV: &str = "ALNAIR_OAUTH_HOST";
+/// Env var overriding [`update_base_url`] (PRD F8). Points the self-updater
+/// at an alternate GitHub/Gitea-Releases-shaped API (mirrors, tests).
+pub const UPDATE_BASE_URL_ENV: &str = "ALNAIR_UPDATE_BASE_URL";
+
+fn resolve(var: &str, compiled: &'static str) -> String {
+    match std::env::var(var) {
+        Ok(v) if !v.trim().is_empty() => v,
+        _ => compiled.to_string(),
+    }
+}
+
+pub fn coding_api_base_url() -> String {
+    resolve(CODE_BASE_URL_ENV, PRODUCTION_ENDPOINTS.coding_api_base_url)
+}
+
+pub fn oauth_host() -> String {
+    resolve(OAUTH_HOST_ENV, PRODUCTION_ENDPOINTS.oauth_host)
+}
+
+pub fn update_base_url() -> String {
+    resolve(UPDATE_BASE_URL_ENV, PRODUCTION_ENDPOINTS.update_base_url)
+}
+
+pub fn upgrade_page_url() -> &'static str {
+    PRODUCTION_ENDPOINTS.upgrade_page_url
+}
+
+/// Serializes env-var mutation across tests; `std::env` is process-global.
+static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+fn env_lock() -> std::sync::MutexGuard<'static, ()> {
+    ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner())
+}
+
+/// RAII env-var override for tests: the constructors snapshot the prior value
+/// under [`ENV_LOCK`] and `Drop` restores it, panics included.
+pub struct EnvVarGuard {
+    key: &'static str,
+    prev: Option<String>,
+    _lock: std::sync::MutexGuard<'static, ()>,
+}
+
+impl EnvVarGuard {
+    pub fn set(key: &'static str, value: &str) -> Self {
+        let lock = env_lock();
+        let prev = std::env::var(key).ok();
+        unsafe { std::env::set_var(key, value) };
+        Self {
+            key,
+            prev,
+            _lock: lock,
+        }
+    }
+
+    pub fn remove(key: &'static str) -> Self {
+        let lock = env_lock();
+        let prev = std::env::var(key).ok();
+        unsafe { std::env::remove_var(key) };
+        Self {
+            key,
+            prev,
+            _lock: lock,
+        }
+    }
+
+    /// Overwrite the value without releasing [`ENV_LOCK`].
+    pub fn set_value(&self, value: &str) {
+        unsafe { std::env::set_var(self.key, value) };
+    }
+}
+
+impl Drop for EnvVarGuard {
+    fn drop(&mut self) {
+        match self.prev.take() {
+            Some(prev) => unsafe { std::env::set_var(self.key, prev) },
+            None => unsafe { std::env::remove_var(self.key) },
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn env_var_guard_set_value_updates_then_restores_on_drop() {
+        const KEY: &str = "ALNAIR_ENV_VAR_GUARD_SET_VALUE_PROBE";
+        let before = std::env::var(KEY).ok();
+        {
+            let guard = EnvVarGuard::set(KEY, "initial");
+            assert_eq!(std::env::var(KEY).ok().as_deref(), Some("initial"));
+            guard.set_value("updated");
+            assert_eq!(
+                std::env::var(KEY).ok().as_deref(),
+                Some("updated"),
+                "set_value must update the env var while the guard is live"
+            );
+        }
+        assert_eq!(
+            std::env::var(KEY).ok(),
+            before,
+            "Drop must restore the pre-guard snapshot (was {before:?})"
+        );
+    }
+
+    #[test]
+    fn override_env_vars_win_over_compiled_defaults() {
+        let _g = EnvVarGuard::set(CODE_BASE_URL_ENV, "https://example.test/v1");
+        assert_eq!(coding_api_base_url(), "https://example.test/v1");
+        drop(_g);
+        let _g2 = EnvVarGuard::set(OAUTH_HOST_ENV, "https://auth.example.test");
+        assert_eq!(oauth_host(), "https://auth.example.test");
+        drop(_g2);
+        let _g3 = EnvVarGuard::set(UPDATE_BASE_URL_ENV, "http://127.0.0.1:1/releases");
+        assert_eq!(update_base_url(), "http://127.0.0.1:1/releases");
+        drop(_g3);
+        let _unset = EnvVarGuard::remove(UPDATE_BASE_URL_ENV);
+        assert_eq!(update_base_url(), PRODUCTION_ENDPOINTS.update_base_url);
+    }
+
+    #[test]
+    fn blank_override_falls_back_to_compiled_default() {
+        let _g = EnvVarGuard::set(CODE_BASE_URL_ENV, "  ");
+        assert_eq!(
+            coding_api_base_url(),
+            PRODUCTION_ENDPOINTS.coding_api_base_url
+        );
+    }
+
+    #[test]
+    fn production_endpoints_are_https() {
+        for url in [
+            PRODUCTION_ENDPOINTS.coding_api_base_url,
+            PRODUCTION_ENDPOINTS.oauth_host,
+            PRODUCTION_ENDPOINTS.update_base_url,
+            PRODUCTION_ENDPOINTS.upgrade_page_url,
+        ] {
+            assert!(url.starts_with("https://"), "{url} must be https");
+        }
+    }
+}
