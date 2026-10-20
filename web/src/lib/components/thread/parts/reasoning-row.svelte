@@ -1,5 +1,5 @@
 <script lang="ts">
-	import CircleCheckIcon from '@lucide/svelte/icons/circle-check';
+	import BrainIcon from '@lucide/svelte/icons/brain';
 	import LoaderIcon from '@lucide/svelte/icons/loader';
 	import * as Trace from '#lib/components/ui/trace/index.js';
 	import { formatDuration } from '#lib/harness/format.js';
@@ -23,7 +23,7 @@
 			{#if running}
 				<LoaderIcon class="animate-spin" />
 			{:else}
-				<CircleCheckIcon />
+				<BrainIcon />
 			{/if}
 		</Trace.Icon>
 		<Trace.Title>{label}</Trace.Title>
