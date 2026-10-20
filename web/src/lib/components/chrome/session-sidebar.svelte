@@ -2,6 +2,9 @@
 	import FolderTreeIcon from '@lucide/svelte/icons/folder-tree';
 	import ChevronRightIcon from '@lucide/svelte/icons/chevron-right';
 	import MessageSquareIcon from '@lucide/svelte/icons/message-square';
+	import SettingsIcon from '@lucide/svelte/icons/settings';
+	import { Button } from '#lib/components/ui/button/index.js';
+	import * as Tooltip from '#lib/components/ui/tooltip/index.js';
 	import { formatRelative } from '#lib/harness/format.js';
 	import type { Session, WorkspaceGroup } from '#lib/harness/types.js';
 	import Logo from './logo.svelte';
@@ -16,11 +19,13 @@
 	let {
 		groups,
 		activeId,
-		onselect
+		onselect,
+		onsettings
 	}: {
 		groups: WorkspaceGroup[];
 		activeId: string;
 		onselect: (id: string) => void;
+		onsettings: () => void;
 	} = $props();
 
 	/** Groups start open when they hold the active session or have live work. */
@@ -151,11 +156,27 @@
 		</div>
 	</nav>
 
-	<div class="flex items-center justify-between border-t border-line px-4 py-2.5">
-		<p class="text-[10.5px] text-ink-tertiary">
+	<div class="flex items-center justify-between gap-2 border-t border-line px-2 py-2">
+		<p class="min-w-0 truncate pl-2 text-[10.5px] text-ink-tertiary">
 			<span class="tabular font-mono">{groups.length}</span>
 			workspaces · <span class="tabular font-mono">{total}</span> sessions
 		</p>
-		<span class="font-mono text-[10px] text-ink-tertiary/60">v0.1.20</span>
+		<Tooltip.Root>
+			<Tooltip.Trigger>
+				{#snippet child({ props })}
+					<Button
+						{...props}
+						variant="ghost"
+						size="icon-sm"
+						class="shrink-0 text-ink-tertiary hover:text-ink"
+						aria-label="Settings"
+						onclick={onsettings}
+					>
+						<SettingsIcon />
+					</Button>
+				{/snippet}
+			</Tooltip.Trigger>
+			<Tooltip.Content><p>Settings</p></Tooltip.Content>
+		</Tooltip.Root>
 	</div>
 </aside>

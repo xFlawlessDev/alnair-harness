@@ -7,6 +7,7 @@
 	import SessionSidebar from '#lib/components/chrome/session-sidebar.svelte';
 	import ThreadHeader from '#lib/components/chrome/thread-header.svelte';
 	import Thread from '#lib/components/thread/thread.svelte';
+	import SettingsDialog from '#lib/components/settings/settings-dialog.svelte';
 	import { Button } from '#lib/components/ui/button/index.js';
 	import * as Tooltip from '#lib/components/ui/tooltip/index.js';
 	import { useSessionStore } from '#lib/harness/context.js';
@@ -18,6 +19,7 @@
 	// header toggle wins after that.
 	const WIDE = '(min-width: 1280px)';
 	let inspectorOpen = $state(false);
+	let settingsOpen = $state(false);
 
 	onMount(() => {
 		const query = window.matchMedia(WIDE);
@@ -35,6 +37,7 @@
 				groups={store.groups}
 				activeId={store.activeSessionId}
 				onselect={(id) => store.selectSession(id)}
+				onsettings={() => (settingsOpen = true)}
 			/>
 		</div>
 
@@ -130,5 +133,11 @@
 				context={store.context}
 			/>
 		{/if}
+
+		<SettingsDialog
+			bind:open={settingsOpen}
+			settings={store.settings}
+			onchange={(key, value) => store.setSetting(key, value)}
+		/>
 	</div>
 </Tooltip.Provider>

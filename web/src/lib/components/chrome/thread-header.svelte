@@ -6,7 +6,6 @@
 	import GraphChip from './graph-chip.svelte';
 	import PlanPopover from './plan-popover.svelte';
 	import StatusDot from './status-dot.svelte';
-	import ThemeToggle from './theme-toggle.svelte';
 	import TodoPopover from './todo-popover.svelte';
 
 	/**
@@ -65,8 +64,6 @@
 		{#if graph}
 			<GraphChip {graph} />
 		{/if}
-
-		<ThemeToggle />
 
 		<Tooltip.Root>
 			<Tooltip.Trigger>

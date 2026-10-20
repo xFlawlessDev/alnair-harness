@@ -10,6 +10,7 @@
  * frames come from.
  */
 
+import { setMode } from 'mode-watcher';
 import { planQuestionTurn } from './fixtures.js';
 import {
 	initialPlan,
@@ -39,6 +40,8 @@ import type { Acc } from './reducer.js';
 import { turnForPrompt } from './fixtures.js';
 import type { ScriptedTurn } from './fixtures.js';
 import type { ExtSessionUpdate } from './types/ext.js';
+import { DEFAULT_SETTINGS } from './settings.js';
+import type { SettingsState, SettingValue } from './settings.js';
 import type { AskUserQuestionRequest, AskUserQuestionResponse } from './types/ext.js';
 import type { SessionUpdate } from './types/acp.js';
 import type {
@@ -97,6 +100,8 @@ export interface SessionStore {
 	readonly effort: string;
 	/** How much the agent may do without asking. */
 	readonly access: AccessMode;
+	/** Every tunable setting, keyed by the registry's key. */
+	readonly settings: SettingsState;
 	readonly busy: boolean;
 	/** A parked permission request, if the agent is waiting on the user. */
 	readonly permission: PermissionRequest | undefined;
@@ -113,6 +118,8 @@ export interface SessionStore {
 	setModel(id: string): void;
 	setEffort(effort: string): void;
 	setAccess(mode: AccessMode): void;
+	/** Change one setting; the adapter forwards it to `alnair/settings/update`. */
+	setSetting(key: string, value: SettingValue): void;
 	send(text: string): void;
 	cancel(): void;
 	clear(): void;
@@ -129,6 +136,16 @@ export interface SessionStore {
 }
 
 const STREAM_TICK_MS = 24;
+
+/**
+ * Point mode-watcher at the chosen theme. `system` clears the stored
+ * preference so the OS decides, which is what the toggle used to do.
+ */
+function applyTheme(theme: string) {
+	if (theme === 'system') setMode('system');
+	else if (theme === 'dark') setMode('dark');
+	else setMode('light');
+}
 
 /**
  * Replays a scripted turn on a timer so the UI exercises streaming rather than
@@ -196,6 +213,7 @@ export class HarnessStore implements SessionStore {
 	effort = $state('high');
 	/** The mock starts in `auto`: the mode a fresh interactive session gets. */
 	access = $state<AccessMode>('auto');
+	settings = $state<SettingsState>({ ...DEFAULT_SETTINGS });
 	busy = $state(false);
 
 	get groups(): WorkspaceGroup[] {
@@ -297,6 +315,16 @@ export class HarnessStore implements SessionStore {
 
 	setAccess(mode: AccessMode) {
 		this.access = mode;
+	}
+
+	setSetting(key: string, value: SettingValue) {
+		this.settings = { ...this.settings, [key]: value };
+		// The composer's access control and the settings dialog edit the same
+		// runtime mode; keep them from disagreeing.
+		if (key === 'permission_mode' && typeof value === 'string') {
+			this.access = value as AccessMode;
+		}
+		if (key === 'theme') applyTheme(String(value));
 	}
 
 	send(text: string) {

@@ -1,0 +1,17 @@
+<script lang="ts">
+	import { Label as LabelPrimitive } from 'bits-ui';
+	import { cn } from '#lib/utils.js';
+
+	let {
+		ref = $bindable(null),
+		class: className,
+		...restProps
+	}: LabelPrimitive.RootProps = $props();
+</script>
+
+<LabelPrimitive.Root
+	bind:ref
+	data-slot="label"
+	class={cn('text-[12.5px] leading-snug font-medium text-ink select-none', className)}
+	{...restProps}
+/>

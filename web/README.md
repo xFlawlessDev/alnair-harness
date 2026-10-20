@@ -172,6 +172,7 @@ src/
       chrome/             sidebar, thread header, plan + todo popovers, graph chip
       thread/             thread, turn, markdown, one row per part kind
       composer/           prompt card, access picker, model picker, checkout row
+      settings/           the settings dialog
       inspector/          graph panel, files panel, activity stats
       ui/                 shadcn-svelte components (vendored)
     highlighter.ts        Shiki, loaded per language
@@ -236,14 +237,23 @@ self-hosted in `static/fonts/`; nothing loads from a CDN.
   conversation, each naming its repo (`repoName`, which the agent derives from
   the cwd). `workspaces.ts` regroups those rows so the sidebar shows the shape
   the runtime actually has: a workspace, with its conversations underneath.
-  Groups open when they hold the active session or live work, and the current
-  workspace is pinned first — the same rule the TUI picker uses. Neither the
+  Groups stay in alphabetical order — clicking a conversation never reorders
+  the list — and the current workspace is marked rather than moved. Neither the
   sidebar nor the header repeats the branch; that belongs to the composer's
-  checkout row.
+  checkout row. The sidebar's footer holds the settings button.
+- **Settings** live in a dialog behind that button. The registry is large, so
+  the sections sit in a rail on the left, in the registry's own order, with a
+  search box that flattens the whole list. Every row is a `SettingMeta` from
+  `alnair-tui/src/settings/`: same key, same label, same wording, so the dialog
+  and the TUI explain a setting identically. Terminal-only entries (mouse
+  scroll speed, vim mode, screen mode) are deliberately absent — they change a
+  TUI the browser does not render. The theme control lives here, not in the
+  chat header.
 - **The composer is one card.** The field sits on top, a control row under it
   (`+`, access, then model · effort · context · send), and a checkout row
   attached below. The access menu offers the runtime's three
-  `PermissionMode`s — Ask first, Auto, Full access — not a UI invention.
+  `PermissionMode`s — Ask first, Auto, Full access — and stays in step with the
+  same setting in the dialog.
 - **Trace** is the backbone. Every step is a `Trace.Root` line, so they share one
   shape and one status vocabulary. `groupParts()` batches consecutive steps into
   one `Trace.Root` and breaks the run at text, notices, and permission cards.
