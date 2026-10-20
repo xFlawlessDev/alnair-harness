@@ -220,7 +220,7 @@ impl WelcomeLayout {
         let flex_gap = 1u16;
         // The menu is the only unbounded row group. With more items than the
         // content area holds, the constraint solver squeezes every `Length`
-        // above it — clipping the moon — and silently truncates the menu.
+        // above it — clipping the logo — and silently truncates the menu.
         // Cap the menu to the rows genuinely left over; `render_menu`
         // scrolls its items inside the capped viewport.
         let menu_height = menu_height.min(
@@ -2491,10 +2491,10 @@ mod tests {
     /// With one row per advertised platform the login picker outgrows a
     /// normal terminal. The stacked layout must cap the menu to the rows
     /// genuinely left over (never letting the constraint solver squeeze the
-    /// moon or the bottom chrome) and the menu must scroll its viewport to
+    /// logo or the bottom chrome) and the menu must scroll its viewport to
     /// keep the selected row visible.
     #[test]
-    fn pending_menu_scrolls_and_never_clips_the_moon() {
+    fn pending_menu_scrolls_and_never_clips_the_logo() {
         use alnair_shell::agent::auth_method::{AuthMethodsBuildInputs, build_auth_methods};
         let built = build_auth_methods(AuthMethodsBuildInputs {
             has_external_api_key: false,
@@ -2514,7 +2514,7 @@ mod tests {
             .count();
         assert_eq!(
             braille_rows, 10,
-            "the full moon must render whole, not squeezed:\n{text}"
+            "the full logo must render whole, not squeezed:\n{text}"
         );
         assert!(
             text.contains(alnair_version::VERSION),
@@ -3248,7 +3248,7 @@ mod tests {
 
     #[test]
     fn hero_box_inactive_when_warning_would_overflow() {
-        // Regression: the box is forced to the full 10-row moon, so even a
+        // Regression: the box is forced to the full 10-row logo, so even a
         // 3-item menu needs 14 box rows (min content 20). A startup warning
         // (error_height = 2, +1 gap) pushes the total past height 20, so the
         // gate must fall back to the stacked layout instead of overflowing.
@@ -3307,7 +3307,7 @@ mod tests {
         // (derived from the default box) must be clamped or the box gets
         // pushed down and the version row clips at exactly
         // min_content_height. 20 == min_content_height(0, 6, 0, 0): a 14-row
-        // box (10-row moon) + 1 flex gap + 5 fixed-below.
+        // box (10-row logo) + 1 flex gap + 5 fixed-below.
         let area = Rect::new(0, 0, 100, 20);
         let layout = WelcomeLayout::compute(WelcomeLayoutInput {
             content_area: area,
@@ -3334,7 +3334,7 @@ mod tests {
 
     #[test]
     fn hero_box_height_accounts_for_borders_and_padding() {
-        // At h >= 26 the full moon is used (10 lines). With menu_height=3:
+        // At h >= 26 the full logo is used (10 lines). With menu_height=3:
         // right_col = 2 + 0 + 0 + 1 + 3 = 6, inner = max(10, 6) = 10.
         // hero_box_height = 2 (borders) + 2 (v_pad) + 10 = 14.
         let area = Rect::new(0, 0, 100, 50);
