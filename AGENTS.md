@@ -80,6 +80,8 @@ a design against the 0.1.15 teardown), MCP servers on protocol 2026-07-28
   `cargo check --workspace --all-targets`,
   `cargo clippy --workspace --all-targets` (zero warnings),
   `cargo fmt --all --check`, `cargo deny check advisories`.
+  The web harness has its own, run from `web/`: `npm run check`,
+  `npm run lint`, `npm test`.
 - **Observability is local**: `alnair-log` (unified session log, `--debug`
   firehose, subsystem file logs, opt-in instrumentation) writes under
   `~/.alnair` only. Its zero-network property is a contract.
@@ -119,6 +121,13 @@ a design against the 0.1.15 teardown), MCP servers on protocol 2026-07-28
   checkpoint/worktree), `alnair-log` (local observability).
 - `crates/common/`, `crates/build/`, `prod/mc/` — shared libs, proto build,
   proxy wire types (the latter to be redefined against Kimi in M1).
+- `web/` — the browser harness: SvelteKit + Tailwind v4 + shadcn-svelte, composed
+  into the AI Elements patterns. Its own `README.md` is the source of truth for
+  the palette, the `SessionStore` seam, and what is still mocked. It is a
+  separate npm project (never part of the Cargo workspace or its gates); it
+  makes no external requests — fonts are self-hosted, nothing loads from a CDN.
+- `frontend/` — the alnaircli.dev landing site and installer Worker (`dist/` is
+  build output recovered from the live deployment, not source).
 - `third_party/` — vendored Mermaid rendering stack (untouched policy).
 - `bin/protoc` — dotslash launcher used by proto codegen.
 

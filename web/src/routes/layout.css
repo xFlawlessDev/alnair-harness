@@ -1,0 +1,357 @@
+@import 'tailwindcss';
+@plugin '@tailwindcss/typography';
+@import 'shadcn-svelte/tailwind.css';
+
+/* ---------------------------------------------------------------------------
+ * Fonts — self-hosted (no external requests; the harness is offline-first).
+ * Geist Sans / Geist Mono, same pairing the landing site uses.
+ * ------------------------------------------------------------------------- */
+@font-face {
+	font-family: 'Geist Sans';
+	src: url('/fonts/geist-sans-400.woff2') format('woff2');
+	font-weight: 400;
+	font-style: normal;
+	font-display: swap;
+}
+
+@font-face {
+	font-family: 'Geist Sans';
+	src: url('/fonts/geist-sans-500.woff2') format('woff2');
+	font-weight: 500;
+	font-style: normal;
+	font-display: swap;
+}
+
+@font-face {
+	font-family: 'Geist Sans';
+	src: url('/fonts/geist-sans-600.woff2') format('woff2');
+	font-weight: 600;
+	font-style: normal;
+	font-display: swap;
+}
+
+@font-face {
+	font-family: 'Geist Mono';
+	src: url('/fonts/geist-mono-400.woff2') format('woff2');
+	font-weight: 400;
+	font-style: normal;
+	font-display: swap;
+}
+
+@font-face {
+	font-family: 'Geist Mono';
+	src: url('/fonts/geist-mono-500.woff2') format('woff2');
+	font-weight: 500;
+	font-style: normal;
+	font-display: swap;
+}
+
+/* ---------------------------------------------------------------------------
+ * Alnair design tokens.
+ *
+ * Two surfaces:
+ *   - "paper" (light) is white with a neutral gray chrome ramp; the olive /
+ *     sage / terra brand accents are the only chroma on the surface.
+ *   - "well" (dark) is black with the same neutral ramp, accented in lime.
+ *
+ * Agent-turn accents follow the TUI themes (alnair-pager-render/theme):
+ * assistant = violet, thinking = violet, tool = dim gray, system = blue,
+ * success = green, error = red, plan = gold, verify = violet, skill = blue.
+ * ------------------------------------------------------------------------- */
+:root {
+	--radius: 0.75rem;
+
+	/* Brand ramp — exposed as utilities (bg-paper, text-ink-tertiary, …). */
+	--paper: #ffffff;
+	--paper-raised: #fafafa;
+	--paper-card: #f4f4f4;
+	--ink: #0a0a0a;
+	--ink-hover: #000000;
+	--ink-secondary: #525252;
+	/* Dim enough to recede, dark enough to stay legible on white (4.6:1). */
+	--ink-tertiary: #757575;
+	--line: #e5e5e5;
+	--line-strong: #d4d4d4;
+	--olive: #7a8c3e;
+	--sage: #a8b87a;
+	--terra: #c46b2d;
+	--taupe: #b8b8b8;
+
+	/* Agent-turn accents (light variants, deepened for contrast). */
+	--accent-assistant: #7d4bc6;
+	--accent-thinking: #7d4bc6;
+	--accent-tool: #626262;
+	--accent-system: #2f64d2;
+	--accent-success: #378e23;
+	--accent-error: #cd3048;
+	--accent-plan: #a8780a;
+	--accent-verify: #7850a0;
+	--accent-running: #0f87a2;
+
+	/* shadcn tokens, mapped onto the paper surface. */
+	--background: var(--paper);
+	--foreground: var(--ink);
+	--card: var(--paper-raised);
+	--card-foreground: var(--ink);
+	--popover: #ffffff;
+	--popover-foreground: var(--ink);
+	--primary: var(--ink);
+	--primary-foreground: var(--paper);
+	--secondary: var(--paper-card);
+	--secondary-foreground: var(--ink);
+	--muted: var(--paper-raised);
+	--muted-foreground: var(--ink-secondary);
+	--accent: var(--paper-card);
+	--accent-foreground: var(--ink);
+	--destructive: #c0392f;
+	--border: var(--line);
+	--input: var(--line-strong);
+	--ring: var(--olive);
+
+	--sidebar: var(--paper-raised);
+	--sidebar-foreground: var(--ink);
+	--sidebar-primary: var(--olive);
+	--sidebar-primary-foreground: var(--paper);
+	--sidebar-accent: var(--paper-card);
+	--sidebar-accent-foreground: var(--ink);
+	--sidebar-border: var(--line);
+	--sidebar-ring: var(--olive);
+
+	--chart-1: var(--olive);
+	--chart-2: var(--terra);
+	--chart-3: var(--accent-system);
+	--chart-4: var(--accent-assistant);
+	--chart-5: var(--sage);
+
+	/* Chat surfaces. Kept separate from the page so a thread can sit on white
+	   while the chrome around it is a step gray. */
+	--thread: var(--paper);
+	--thread-rule: var(--line);
+	--user-bubble: #f0f0f0;
+	--user-bubble-foreground: var(--ink);
+	--code-surface: #f7f7f7;
+
+	--font-sans: 'Geist Sans', ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif;
+	--font-mono: 'Geist Mono', ui-monospace, 'SF Mono', Menlo, monospace;
+
+	--dur-fast: 0.2s;
+	--dur-med: 0.42s;
+	--ease-out: cubic-bezier(0.25, 0.1, 0.25, 1);
+}
+
+.dark {
+	/* The well: black ground, neutral gray chrome, colour for the work.
+	 *
+	 * The chrome ramp is deliberately achromatic — a green-tinted neutral makes
+	 * a dark UI read as murky and strains the eye over a long session. The only
+	 * chroma on the surface is the lime accent, which now stands out because
+	 * nothing else competes with it. */
+	--paper: #000000;
+	--paper-raised: #0a0a0a;
+	--paper-card: #141414;
+	--ink: #ededed;
+	--ink-hover: #ffffff;
+	--ink-secondary: #b4b4b4;
+	--ink-tertiary: #8a8a8a;
+	/* Borders step up from the surface so they stay visible on black; a tinted
+	   line here is what made the whole panel look green. */
+	--line: #262626;
+	--line-strong: #3d3d3d;
+	--olive: #a7d129;
+	--sage: #c8e86a;
+	--terra: #ff9e64;
+	--taupe: #7d7d7d;
+
+	/* Agent-turn accents, back to the AlnairNight hues — colour is the point. */
+	--accent-assistant: #bb9af7;
+	--accent-thinking: #bb9af7;
+	--accent-tool: #a3a3a3;
+	--accent-system: #7aa2f7;
+	--accent-success: #9ece6a;
+	--accent-error: #f7768e;
+	--accent-plan: #ffdb8d;
+	--accent-verify: #bb9af7;
+	--accent-running: #7dcfff;
+
+	--background: var(--paper);
+	--foreground: var(--ink);
+	--card: var(--paper-raised);
+	--card-foreground: var(--ink);
+	--popover: #121212;
+	--popover-foreground: var(--ink);
+	--primary: var(--olive);
+	--primary-foreground: #0a0c07;
+	--secondary: #1c1c1c;
+	--secondary-foreground: var(--ink);
+	--muted: var(--paper-card);
+	--muted-foreground: var(--ink-secondary);
+	--accent: #212121;
+	--accent-foreground: var(--ink);
+	--destructive: #f7768e;
+	--border: var(--line);
+	--input: var(--line-strong);
+	--ring: var(--olive);
+
+	--sidebar: #0a0a0a;
+	--sidebar-foreground: var(--ink);
+	--sidebar-primary: var(--olive);
+	--sidebar-primary-foreground: #0a0c07;
+	--sidebar-accent: #171717;
+	--sidebar-accent-foreground: var(--ink);
+	--sidebar-border: var(--line);
+	--sidebar-ring: var(--olive);
+
+	--chart-1: var(--olive);
+	--chart-2: var(--accent-running);
+	--chart-3: var(--accent-system);
+	--chart-4: var(--accent-assistant);
+	--chart-5: var(--accent-plan);
+
+	--thread: var(--paper);
+	--thread-rule: var(--line);
+	--user-bubble: #262626;
+	--user-bubble-foreground: var(--ink);
+	--code-surface: #0f0f0f;
+}
+
+@theme inline {
+	--font-sans: var(--font-sans);
+	--font-mono: var(--font-mono);
+
+	--radius-sm: calc(var(--radius) * 0.6);
+	--radius-md: calc(var(--radius) * 0.8);
+	--radius-lg: var(--radius);
+	--radius-xl: calc(var(--radius) * 1.4);
+	--radius-2xl: calc(var(--radius) * 1.8);
+	--radius-3xl: calc(var(--radius) * 2.2);
+	--radius-4xl: calc(var(--radius) * 2.6);
+
+	--color-background: var(--background);
+	--color-foreground: var(--foreground);
+	--color-card: var(--card);
+	--color-card-foreground: var(--card-foreground);
+	--color-popover: var(--popover);
+	--color-popover-foreground: var(--popover-foreground);
+	--color-primary: var(--primary);
+	--color-primary-foreground: var(--primary-foreground);
+	--color-secondary: var(--secondary);
+	--color-secondary-foreground: var(--secondary-foreground);
+	--color-muted: var(--muted);
+	--color-muted-foreground: var(--muted-foreground);
+	--color-accent: var(--accent);
+	--color-accent-foreground: var(--accent-foreground);
+	--color-destructive: var(--destructive);
+	--color-border: var(--border);
+	--color-input: var(--input);
+	--color-ring: var(--ring);
+	--color-chart-1: var(--chart-1);
+	--color-chart-2: var(--chart-2);
+	--color-chart-3: var(--chart-3);
+	--color-chart-4: var(--chart-4);
+	--color-chart-5: var(--chart-5);
+	--color-sidebar: var(--sidebar);
+	--color-sidebar-foreground: var(--sidebar-foreground);
+	--color-sidebar-primary: var(--sidebar-primary);
+	--color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+	--color-sidebar-accent: var(--sidebar-accent);
+	--color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+	--color-sidebar-border: var(--sidebar-border);
+	--color-sidebar-ring: var(--sidebar-ring);
+
+	/* Brand + agent accents, usable as ordinary Tailwind colors. */
+	--color-paper: var(--paper);
+	--color-paper-raised: var(--paper-raised);
+	--color-paper-card: var(--paper-card);
+	--color-ink: var(--ink);
+	--color-ink-secondary: var(--ink-secondary);
+	--color-ink-tertiary: var(--ink-tertiary);
+	--color-line: var(--line);
+	--color-line-strong: var(--line-strong);
+	--color-olive: var(--olive);
+	--color-sage: var(--sage);
+	--color-terra: var(--terra);
+	--color-taupe: var(--taupe);
+
+	--color-assistant: var(--accent-assistant);
+	--color-thinking: var(--accent-thinking);
+	--color-tool: var(--accent-tool);
+	--color-system: var(--accent-system);
+	--color-success: var(--accent-success);
+	--color-error: var(--accent-error);
+	--color-plan: var(--accent-plan);
+	--color-verify: var(--accent-verify);
+	--color-running: var(--accent-running);
+
+	--color-thread: var(--thread);
+	--color-thread-rule: var(--thread-rule);
+	--color-user-bubble: var(--user-bubble);
+	--color-user-bubble-foreground: var(--user-bubble-foreground);
+	--color-code-surface: var(--code-surface);
+}
+
+@layer base {
+	* {
+		@apply border-border outline-ring/50;
+	}
+
+	html {
+		color-scheme: light;
+	}
+
+	html.dark {
+		color-scheme: dark;
+	}
+
+	body {
+		@apply bg-background text-foreground;
+		font-family: var(--font-sans);
+		font-feature-settings:
+			'cv01' 1,
+			'cv11' 1;
+		-webkit-font-smoothing: antialiased;
+		text-rendering: optimizeLegibility;
+	}
+
+	::selection {
+		background: color-mix(in srgb, var(--olive) 28%, transparent);
+	}
+}
+
+@layer components {
+	/* A raised, softly ruled surface for panels that should read as "well"
+	   against the paper background — the inspector, composer, and sidebar. */
+	.surface {
+		background: var(--paper-raised);
+		border: 1px solid var(--line);
+	}
+
+	/* Hairline rules that match the landing site's inset borders. */
+	.rule-b {
+		box-shadow: inset 0 -1px 0 var(--line);
+	}
+
+	.rule-t {
+		box-shadow: inset 0 1px 0 var(--line);
+	}
+
+	.rule-r {
+		box-shadow: inset -1px 0 0 var(--line);
+	}
+
+	.rule-l {
+		box-shadow: inset 1px 0 0 var(--line);
+	}
+}
+
+@layer utilities {
+	/* The dotted working surface behind an empty thread. */
+	.bg-grid {
+		background-image: radial-gradient(var(--line-strong) 1px, transparent 1px);
+		background-size: 22px 22px;
+		background-position: -1px -1px;
+	}
+
+	.tabular {
+		font-variant-numeric: tabular-nums;
+	}
+}
