@@ -20,7 +20,10 @@
 		bind:ref
 		data-slot="dialog-content"
 		class={cn(
-			'fixed top-1/2 left-1/2 z-50 flex w-full max-w-[calc(100%-2rem)] -translate-x-1/2 -translate-y-1/2 flex-col gap-0 rounded-xl border border-line bg-popover shadow-2xl outline-none sm:max-w-lg',
+			// No `sm:max-w-*` here: a responsive variant and an unprefixed
+			// `max-w-*` are different keys to tailwind-merge, so both would
+			// apply and the breakpoint would win. Callers own the max width.
+			'fixed top-1/2 left-1/2 z-50 flex max-h-[calc(100dvh-2rem)] w-full max-w-[calc(100vw-2rem)] -translate-x-1/2 -translate-y-1/2 flex-col gap-0 overflow-hidden rounded-xl border border-line bg-popover shadow-2xl outline-none',
 			className
 		)}
 		{...restProps}

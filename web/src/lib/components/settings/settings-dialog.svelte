@@ -55,24 +55,28 @@
 </script>
 
 <Dialog.Root bind:open>
-	<Dialog.Content class="h-[min(38rem,85vh)] max-w-[min(56rem,92vw)] gap-0 overflow-hidden p-0">
-		<header class="flex items-center justify-between gap-3 border-b border-line px-4 py-3">
-			<div class="flex flex-col gap-0.5">
+	<Dialog.Content class="w-[min(64rem,94vw)] max-w-[min(64rem,94vw)]">
+		<header class="flex items-start justify-between gap-3 border-b border-line px-4 py-3">
+			<div class="flex min-w-0 flex-col gap-1">
 				<Dialog.Title>Settings</Dialog.Title>
-				<Dialog.Description>
+				<Dialog.Description class="max-w-[42rem]">
 					Changes apply to this session; anything marked restart takes effect on the next one.
 				</Dialog.Description>
 			</div>
-			<Button variant="ghost" size="sm" class="mr-6 gap-1.5 text-[11.5px]" onclick={reset}>
+			<Button variant="ghost" size="sm" class="mr-6 shrink-0 gap-1.5 text-[11.5px]" onclick={reset}>
 				<RotateCcwIcon class="size-3" />
 				Reset
 			</Button>
 		</header>
 
-		<div class="flex min-h-0 flex-1">
-			<!-- Rail: the registry's own categories, in its render order. -->
+		<!-- The body grows with the section but never past the viewport: the
+		     list scrolls instead, so a long section cannot push the header off. -->
+		<div class="flex max-h-[min(38rem,78dvh)] min-h-0 flex-1">
+			<!-- Rail: the registry's own categories, in its render order. It
+			     narrows on small screens and the label truncates rather than
+			     wrapping, so the pane never squeezes the settings text. -->
 			<nav
-				class="flex w-48 shrink-0 flex-col gap-0.5 border-r border-line bg-paper-raised p-2"
+				class="flex w-36 shrink-0 flex-col gap-0.5 border-r border-line bg-paper-raised p-2 sm:w-48"
 				aria-label="Setting categories"
 			>
 				{#each CATEGORIES as entry (entry.id)}
@@ -130,7 +134,10 @@
 							{#each visible as setting (setting.key)}
 								{@const value = settings[setting.key]}
 								<li class="rounded-lg px-2 py-2 transition-colors hover:bg-paper-card/40">
-									<div class="flex items-start gap-4">
+									<!-- On a narrow dialog the control drops below its text
+									     instead of squeezing it; at `sm` and up it sits in
+									     a fixed column on the right. -->
+									<div class="flex flex-col gap-2 sm:flex-row sm:items-start sm:gap-4">
 										<div class="flex min-w-0 flex-1 flex-col gap-0.5">
 											<div class="flex items-baseline gap-1.5">
 												<span class="text-[12.5px] font-medium whitespace-nowrap text-ink">
@@ -157,9 +164,10 @@
 											</p>
 										</div>
 
-										<!-- A fixed control column, wide enough for a select
-										     label but never so wide that it squeezes the text. -->
-										<div class="flex w-32 shrink-0 items-center justify-end pt-0.5">
+										<!-- A fixed control column. The slider is sized to fit
+										     inside it (input + readout + gap), so it cannot
+										     push past the dialog edge. -->
+										<div class="flex w-full shrink-0 items-center justify-end pt-0.5 sm:w-44">
 											{#if setting.kind.kind === 'bool'}
 												<Switch
 													checked={value === true}
@@ -192,7 +200,7 @@
 													</Select.Content>
 												</Select.Root>
 											{:else if setting.kind.kind === 'int'}
-												<div class="flex items-center gap-2">
+												<div class="flex w-full items-center gap-2">
 													<input
 														type="range"
 														min={setting.kind.min}
@@ -200,12 +208,12 @@
 														step={setting.kind.step ?? 1}
 														value={Number(value ?? setting.kind.min)}
 														aria-label={setting.label}
-														class="w-24 accent-olive"
+														class="min-w-0 flex-1 accent-olive"
 														oninput={(event) =>
 															onchange(setting.key, Number(event.currentTarget.value))}
 													/>
 													<span
-														class="tabular w-8 text-right font-mono text-[11px] text-ink-secondary"
+														class="tabular w-8 shrink-0 text-right font-mono text-[11px] text-ink-secondary"
 													>
 														{value}%
 													</span>
@@ -216,7 +224,7 @@
 													value={String(value ?? '')}
 													placeholder={setting.kind.placeholder}
 													aria-label={setting.label}
-													class="h-7 w-40 max-w-full rounded-md border border-line bg-paper px-2 font-mono text-[11.5px] text-ink outline-none focus-visible:border-olive/60"
+													class="h-7 w-full rounded-md border border-line bg-paper px-2 font-mono text-[11.5px] text-ink outline-none focus-visible:border-olive/60"
 													oninput={(event) => onchange(setting.key, event.currentTarget.value)}
 												/>
 											{/if}
