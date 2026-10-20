@@ -8,6 +8,9 @@ pub mod keys;
 pub mod pty;
 pub mod server;
 pub mod session;
-pub mod styled;
-pub mod term;
 pub mod wait;
+
+// The screen emulator lives in `alnair-terminal-screen` so the pager can render
+// PTY output without depending on the PTY controller. Re-exported here so every
+// existing `ptyctl::term` / `ptyctl::styled` path keeps working unchanged.
+pub use alnair_terminal_screen::{styled, term};

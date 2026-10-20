@@ -60,6 +60,7 @@ members = [
     "crates/codegen/alnair-ratatui-textarea",
     "crates/codegen/alnair-sqlite-journal",
     "crates/codegen/alnair-system-power",
+    "crates/codegen/alnair-terminal-screen",
     "crates/codegen/alnair-token-estimation",
     "crates/codegen/alnair-tracing-macros",
     "crates/codegen/alnair-tty-utils",
@@ -288,6 +289,7 @@ alnair-ratatui-inline = { path = "crates/codegen/alnair-ratatui-inline" }
 alnair-ratatui-textarea = { path = "crates/codegen/alnair-ratatui-textarea" }
 alnair-sqlite-journal = { path = "crates/codegen/alnair-sqlite-journal" }
 alnair-system-power = { path = "crates/codegen/alnair-system-power" }
+alnair-terminal-screen = { path = "crates/codegen/alnair-terminal-screen" }
 alnair-test-utils = { path = "crates/common/alnair-test-utils" }
 alnair-token-estimation = { path = "crates/codegen/alnair-token-estimation" }
 alnair-tool-protocol = { path = "crates/common/alnair-tool-protocol" }

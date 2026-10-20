@@ -1,0 +1,12 @@
+[package]
+license = "Apache-2.0"
+name = "alnair-terminal-screen"
+version.workspace = true
+edition.workspace = true
+description = "Headless VTE screen emulator (alacritty_terminal) with plain/styled/HTML readback"
+publish = false
+
+[dependencies]
+alacritty_terminal = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+tokio = { workspace = true, features = ["sync"] }

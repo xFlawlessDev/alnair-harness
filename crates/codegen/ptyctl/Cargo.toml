@@ -7,7 +7,7 @@ description = "Headless PTY controller built on alacritty_terminal"
 publish = false
 
 [dependencies]
-alacritty_terminal = { workspace = true }
+alnair-terminal-screen = { workspace = true }
 portable-pty = { workspace = true }
 terminput = { workspace = true }
 tokio = { workspace = true, features = ["full"] }

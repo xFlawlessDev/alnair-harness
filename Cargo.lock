@@ -1125,6 +1125,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "alnair-terminal-screen"
+version = "0.1.21"
+dependencies = [
+ "alacritty_terminal",
+ "serde",
+ "tokio",
+]
+
+[[package]]
 name = "alnair-test-support"
 version = "0.1.21"
 dependencies = [
@@ -8846,7 +8855,7 @@ dependencies = [
 name = "ptyctl"
 version = "0.1.21"
 dependencies = [
- "alacritty_terminal",
+ "alnair-terminal-screen",
  "anyhow",
  "axum",
  "futures-util",
