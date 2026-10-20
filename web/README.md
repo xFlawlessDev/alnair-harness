@@ -93,26 +93,28 @@ interface SessionStore {
 Every field below is produced by something the agent actually sends. Nothing is
 invented; where the wire carries less, the UI shows less.
 
-| View model       | Wire source                                                           |
-| ---------------- | --------------------------------------------------------------------- |
-| `Turn`           | one `session/prompt` exchange, closed by its response                 |
-| `TurnStatus`     | `StopReason` (`cancelled`, `refusal`, …)                              |
-| `TextPart`       | `agent_message_chunk`                                                 |
-| `ReasoningPart`  | `agent_thought_chunk`                                                 |
-| `FileReadPart`   | `tool_call` kind `read` + a text block                                |
-| `ImageReadPart`  | `tool_call` kind `read` + an image block                              |
-| `FileEditPart`   | `tool_call` + a `diff` with `oldText`                                 |
-| `FileWritePart`  | `tool_call` + a `diff` without `oldText` (a new file)                 |
-| `TerminalPart`   | `tool_call` kind `execute`, or `task_backgrounded` / `task_completed` |
-| `SubagentPart`   | `subagent_spawned` → `subagent_progress` → `subagent_finished`        |
-| `PermissionPart` | `pending_interaction` with `kind: permission`                         |
-| `QuestionPart`   | the `alnair/ask_user_question` reverse request                        |
-| `NoticePart`     | `retry_state`, `auto_compact_*`, `model_*`, `session_recap`           |
-| `TodoItem`       | the ACP `plan` update (which `todo_write` produces)                   |
-| `PlanArtifact`   | the `alnair/exit_plan_mode` reverse request                           |
-| `GraphState`     | `graph_updated` — counts, not a DAG                                   |
-| `ContextUsage`   | `auto_compact_*` and `model_changed`                                  |
-| `Session`        | an `alnair/session/list` row                                          |
+| View model        | Wire source                                                           |
+| ----------------- | --------------------------------------------------------------------- |
+| `Turn`            | one `session/prompt` exchange, closed by its response                 |
+| `TurnStatus`      | `StopReason` (`cancelled`, `refusal`, …)                              |
+| `TextPart`        | `agent_message_chunk`                                                 |
+| `ReasoningPart`   | `agent_thought_chunk`                                                 |
+| `FileReadPart`    | `tool_call` kind `read` + a text block                                |
+| `ImageReadPart`   | `tool_call` kind `read` + an image block                              |
+| `FileEditPart`    | `tool_call` + a `diff` with `oldText`                                 |
+| `FileWritePart`   | `tool_call` + a `diff` without `oldText` (a new file)                 |
+| `TerminalPart`    | `tool_call` kind `execute`, or `task_backgrounded` / `task_completed` |
+| `SubagentPart`    | `subagent_spawned` → `subagent_progress` → `subagent_finished`        |
+| `PermissionPart`  | `pending_interaction` with `kind: permission`                         |
+| `QuestionPart`    | the `alnair/ask_user_question` reverse request                        |
+| `NoticePart`      | `retry_state`, `auto_compact_*`, `model_*`, `session_recap`           |
+| `TodoItem`        | the ACP `plan` update (which `todo_write` produces)                   |
+| `PlanArtifact`    | the `alnair/exit_plan_mode` reverse request                           |
+| `GraphState`      | `graph_updated` — counts, not a DAG                                   |
+| `ContextUsage`    | `auto_compact_*` and `model_changed`                                  |
+| `Session`         | an `alnair/session/list` row                                          |
+| `WorkspaceGroup`  | those rows regrouped by `repoName`                                    |
+| `ComposerContext` | the active session's checkout and the agent's access mode             |
 
 ### What the UI deliberately does not show
 
@@ -162,13 +164,14 @@ src/
       types/ext.ts        Alnair's extension updates
       types.ts            the view model
       reducer.ts          wire → view model, pure
+      workspaces.ts       flat session rows → workspace groups
       fixtures.ts         scripted transcripts
       session-store.svelte.ts  the store and the fixture transport
       mock.ts             session rows, catalog, initial transcript
     components/
       chrome/             sidebar, thread header, plan + todo popovers, graph chip
       thread/             thread, turn, markdown, one row per part kind
-      composer/           input group, model picker, context meter
+      composer/           prompt card, access picker, model picker, checkout row
       inspector/          graph panel, files panel, activity stats
       ui/                 shadcn-svelte components (vendored)
     highlighter.ts        Shiki, loaded per language
@@ -229,6 +232,18 @@ self-hosted in `static/fonts/`; nothing loads from a CDN.
 
 ## Component notes
 
+- **The sidebar nests.** `alnair/session/list` returns one flat row per
+  conversation, each naming its repo (`repoName`, which the agent derives from
+  the cwd). `workspaces.ts` regroups those rows so the sidebar shows the shape
+  the runtime actually has: a workspace, with its conversations underneath.
+  Groups open when they hold the active session or live work, and the current
+  workspace is pinned first — the same rule the TUI picker uses. Neither the
+  sidebar nor the header repeats the branch; that belongs to the composer's
+  checkout row.
+- **The composer is one card.** The field sits on top, a control row under it
+  (`+`, access, then model · effort · context · send), and a checkout row
+  attached below. The access menu offers the runtime's three
+  `PermissionMode`s — Ask first, Auto, Full access — not a UI invention.
 - **Trace** is the backbone. Every step is a `Trace.Root` line, so they share one
   shape and one status vocabulary. `groupParts()` batches consecutive steps into
   one `Trace.Root` and breaks the run at text, notices, and permission cards.

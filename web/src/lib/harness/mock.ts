@@ -125,6 +125,39 @@ export const sessionRows: AlnairSessionRow[] = [
 		repoName: 'alnair-cli',
 		sessionKind: 'build',
 		_meta: { 'alnair/session': { kind: 'build', facets: {} } }
+	},
+	{
+		// A second repo, so the sidebar has more than one workspace to nest.
+		sessionId: 's-site',
+		summary: 'Landing page hero copy',
+		firstPrompt: 'Tighten the hero copy on the landing page.',
+		createdAt: t(11_520),
+		updatedAt: t(240),
+		cwd: '~/dev/alnair-site',
+		source: 'local',
+		modelId: 'claude-pro-max/claude-sonnet-4-5',
+		numMessages: 12,
+		branch: 'main',
+		repoName: 'alnair-site',
+		gitRootDir: '~/dev/alnair-site',
+		sessionKind: 'build',
+		_meta: { 'alnair/session': { kind: 'build', facets: {} } }
+	},
+	{
+		// The same repo as the first four: one group, several conversations.
+		sessionId: 's-ci',
+		summary: 'Release workflow tag gate',
+		firstPrompt: 'Why does the v* tag gate fail on a dirty tree?',
+		createdAt: t(14_400),
+		updatedAt: t(600),
+		cwd: '~/dev/alnair-cli',
+		source: 'both',
+		modelId: 'kimi-code/kimi-k2-turbo-preview',
+		numMessages: 9,
+		branch: 'ci/tag-gate',
+		repoName: 'alnair-cli',
+		sessionKind: 'build',
+		_meta: { 'alnair/session': { kind: 'build', facets: {} } }
 	}
 ];
 
@@ -141,9 +174,18 @@ export function toSession(row: AlnairSessionRow, status: Session['status'] = 'id
 		createdAt: row.createdAt,
 		updatedAt: row.updatedAt,
 		kind: row._meta?.['alnair/session']?.kind ?? row.sessionKind,
+		// `repoName` is what the agent derives from the cwd; the group key.
+		workspace: row.repoName ?? lastSegment(row.cwd),
+		gitRootDir: row.gitRootDir,
 		status
 	};
 }
+
+const lastSegment = (path: string): string => {
+	const trimmed = path.replace(/[\\/]+$/, '');
+	const index = Math.max(trimmed.lastIndexOf('/'), trimmed.lastIndexOf('\\'));
+	return index === -1 ? trimmed : trimmed.slice(index + 1);
+};
 
 export const sessions: Session[] = sessionRows.map((row) =>
 	toSession(row, row.sessionId === 's-graph' ? 'attention' : 'idle')

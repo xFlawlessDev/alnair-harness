@@ -1,24 +1,21 @@
 <script lang="ts">
-	import GitBranchIcon from '@lucide/svelte/icons/git-branch';
 	import PanelRightIcon from '@lucide/svelte/icons/panel-right';
 	import { Button } from '#lib/components/ui/button/index.js';
 	import * as Tooltip from '#lib/components/ui/tooltip/index.js';
-	import type {
-		GraphState,
-		PlanArtifact,
-		Session,
-		TodoItem,
-		WorkspaceInfo
-	} from '#lib/harness/types.js';
+	import type { GraphState, PlanArtifact, Session, TodoItem } from '#lib/harness/types.js';
 	import GraphChip from './graph-chip.svelte';
 	import PlanPopover from './plan-popover.svelte';
 	import StatusDot from './status-dot.svelte';
 	import ThemeToggle from './theme-toggle.svelte';
 	import TodoPopover from './todo-popover.svelte';
 
+	/**
+	 * The thread header names the session and its state. It deliberately does
+	 * not repeat the workspace or the branch: the sidebar owns the workspace,
+	 * and the composer's checkout row owns the branch.
+	 */
 	let {
 		session,
-		workspace,
 		graph,
 		todos,
 		plan,
@@ -26,7 +23,6 @@
 		oninspector
 	}: {
 		session: Session;
-		workspace: WorkspaceInfo;
 		/** Absent when the agent has no graph running. */
 		graph: GraphState | undefined;
 		todos: TodoItem[];
@@ -64,21 +60,6 @@
 
 		{#if todos.length > 0}
 			<TodoPopover {todos} />
-		{/if}
-
-		{#if workspace.branch}
-			<span
-				class="ml-1 hidden items-center gap-1 font-mono text-[10.5px] whitespace-nowrap text-ink-tertiary lg:flex"
-			>
-				<GitBranchIcon class="size-3" />
-				{workspace.branch}
-				{#if workspace.ahead > 0}
-					<span class="text-olive">↑{workspace.ahead}</span>
-				{/if}
-				{#if workspace.behind > 0}
-					<span class="text-terra">↓{workspace.behind}</span>
-				{/if}
-			</span>
 		{/if}
 
 		{#if graph}

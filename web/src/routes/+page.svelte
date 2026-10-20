@@ -32,9 +32,8 @@
 	<div class="flex h-dvh w-full overflow-hidden bg-paper text-ink">
 		<div class="hidden md:flex">
 			<SessionSidebar
-				sessions={store.sessions}
+				groups={store.groups}
 				activeId={store.activeSessionId}
-				workspace={store.workspace}
 				onselect={(id) => store.selectSession(id)}
 			/>
 		</div>
@@ -42,7 +41,6 @@
 		<main class="flex min-w-0 flex-1 flex-col bg-thread">
 			<ThreadHeader
 				session={store.activeSession}
-				workspace={store.workspace}
 				graph={store.graph}
 				todos={store.todos}
 				plan={store.plan ?? null}
@@ -104,11 +102,20 @@
 				model={store.model}
 				effort={store.effort}
 				usage={store.context}
+				context={{
+					workspace: store.currentWorkspace,
+					branch: store.activeSession.branch,
+					// The fixture sessions all work on a branch; a worktree or a
+					// detached HEAD would come from the session's checkout state.
+					checkout: 'branch',
+					access: store.access
+				}}
 				busy={store.busy}
 				onsend={(text) => store.send(text)}
 				oncancel={() => store.cancel()}
 				onmodel={(id) => store.setModel(id)}
 				oneffort={(effort) => store.setEffort(effort)}
+				onaccess={(mode) => store.setAccess(mode)}
 			/>
 		</main>
 

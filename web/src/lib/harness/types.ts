@@ -288,8 +288,33 @@ export interface Session {
 	updatedAt: string;
 	/** `alnair/session.kind` from the row envelope. */
 	kind?: string;
+	/**
+	 * The workspace this session belongs to: `repoName` from the wire, which
+	 * the agent derives from the cwd (`repo_name_from_cwd`). Sessions with the
+	 * same value are one group in the sidebar.
+	 */
+	workspace: string;
+	/** The repo root, when the agent reported one. */
+	gitRootDir?: string;
 	/** Derived: a live turn, a parked request, or neither. */
 	status: SessionStatus;
+}
+
+/**
+ * A workspace and the conversations inside it. This is the shape the session
+ * list has on the wire — flat rows that name their repo — regrouped for the
+ * sidebar, which nests conversations under their workspace.
+ */
+export interface WorkspaceGroup {
+	/** `repoName`, or the cwd's last segment when the agent sent none. */
+	name: string;
+	/** Absolute path of the workspace root, when known. */
+	path?: string;
+	sessions: Session[];
+	/** Newest `updatedAt` in the group; drives group ordering. */
+	updatedAt: string;
+	/** `true` when one of its sessions has a live turn or a parked request. */
+	active: boolean;
 }
 
 /* ------------------------------------------------------- plan and todos */
@@ -365,6 +390,23 @@ export interface ContextUsage {
 	limit: number;
 	/** 0–100. */
 	percent: number;
+}
+
+/**
+ * How much the agent may do without asking. These are the three modes the
+ * runtime actually has (`PermissionMode` in `alnair-config-types`), not a UI
+ * invention.
+ */
+export type AccessMode = 'ask' | 'auto' | 'always-approve';
+
+/** The composer's view of the workspace and the agent's access. */
+export interface ComposerContext {
+	/** `repoName`, or the cwd's last segment. */
+	workspace: string;
+	branch?: string;
+	/** Branch, checkout, or worktree — the source of the code being edited. */
+	checkout: 'branch' | 'worktree' | 'detached';
+	access: AccessMode;
 }
 
 export interface WorkspaceInfo {

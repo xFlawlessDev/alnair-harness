@@ -4,17 +4,25 @@
 	import * as HoverCard from '#lib/components/ui/hover-card/index.js';
 
 	/**
-	 * The wire reports how much of the window is used, not what is in it, so
-	 * the meter is a single bar. A per-category breakdown would be invented.
+	 * The compact form of the context meter: a percentage and a ring, as in the
+	 * reference. The wire reports how much of the window is used, not what is
+	 * in it, so there is no per-category breakdown to draw.
 	 */
-	let { usage, class: className }: { usage: ContextUsage; class?: string } = $props();
+	let { usage }: { usage: ContextUsage } = $props();
 
 	const percent = $derived(usage.limit === 0 ? 0 : (usage.used / usage.limit) * 100);
 	const tone = $derived(
 		percent > 90 ? 'text-error' : percent > 70 ? 'text-plan' : 'text-ink-secondary'
 	);
-	const fill = $derived(percent > 90 ? 'bg-error' : percent > 70 ? 'bg-plan' : 'bg-running');
+	const stroke = $derived(
+		percent > 90 ? 'stroke-error' : percent > 70 ? 'stroke-plan' : 'stroke-running'
+	);
 	const remaining = $derived(Math.max(0, usage.limit - usage.used));
+
+	// A 12-unit circle: 2πr with r = 5.5, so the dash array is exact.
+	const RADIUS = 5.5;
+	const CIRCUMFERENCE = 2 * Math.PI * RADIUS;
+	const filled = $derived(Math.min(1, percent / 100) * CIRCUMFERENCE);
 </script>
 
 <HoverCard.Root>
@@ -23,16 +31,31 @@
 			<button
 				{...props}
 				type="button"
-				class={[
-					'flex items-center gap-2 rounded-md px-1.5 py-1 text-[11px] transition-colors hover:bg-paper-card',
-					className
-				]}
-				aria-label={`Context ${formatPercent(usage.used / usage.limit)} used`}
+				class="flex h-7 items-center gap-1.5 rounded-md px-1.5 transition-colors hover:bg-paper-card"
+				aria-label={`Context ${formatPercent(percent / 100)} used`}
 			>
-				<span class="flex h-1.5 w-16 overflow-hidden rounded-full bg-line" aria-hidden="true">
-					<span class={fill} style="width: {Math.min(100, percent)}%"></span>
-				</span>
-				<span class={['tabular', tone]}>{formatPercent(usage.used / usage.limit)}</span>
+				<span class={['tabular font-mono text-[11.5px]', tone]}>{formatPercent(percent / 100)}</span
+				>
+				<svg viewBox="0 0 14 14" class="size-3.5 -rotate-90" aria-hidden="true">
+					<circle
+						cx="7"
+						cy="7"
+						r={RADIUS}
+						fill="none"
+						stroke-width="1.6"
+						class="stroke-line-strong"
+					/>
+					<circle
+						cx="7"
+						cy="7"
+						r={RADIUS}
+						fill="none"
+						stroke-width="1.6"
+						stroke-linecap="round"
+						class={stroke}
+						stroke-dasharray="{filled} {CIRCUMFERENCE}"
+					/>
+				</svg>
 			</button>
 		{/snippet}
 	</HoverCard.Trigger>
@@ -44,7 +67,10 @@
 			</p>
 		</div>
 		<span class="mt-2 flex h-1.5 overflow-hidden rounded-full bg-line">
-			<span class={fill} style="width: {Math.min(100, percent)}%"></span>
+			<span
+				class={percent > 90 ? 'bg-error' : percent > 70 ? 'bg-plan' : 'bg-running'}
+				style="width: {Math.min(100, percent)}%"
+			></span>
 		</span>
 		<p class="mt-3 border-t border-line pt-2 text-[11px] text-ink-tertiary">
 			{formatTokens(remaining)} tokens left before compaction

@@ -1,35 +1,52 @@
 <script lang="ts">
 	import ArrowUpIcon from '@lucide/svelte/icons/arrow-up';
-	import PaperclipIcon from '@lucide/svelte/icons/paperclip';
+	import PlusIcon from '@lucide/svelte/icons/plus';
 	import SquareIcon from '@lucide/svelte/icons/square';
 	import { tick } from 'svelte';
-	import * as InputGroup from '#lib/components/ui/input-group/index.js';
-	import { Kbd } from '#lib/components/ui/kbd/index.js';
 	import * as Tooltip from '#lib/components/ui/tooltip/index.js';
-	import type { ContextUsage, ModelOption } from '#lib/harness/types.js';
+	import type {
+		AccessMode,
+		ComposerContext,
+		ContextUsage,
+		ModelOption
+	} from '#lib/harness/types.js';
+	import AccessPicker from './access-picker.svelte';
+	import CheckoutBar from './checkout-bar.svelte';
 	import ContextMeter from './context-meter.svelte';
 	import ModelPicker from './model-picker.svelte';
 
+	/**
+	 * The prompt input, laid out as one card: the field on top, a control row
+	 * under it, and the checkout row attached below.
+	 *
+	 * The field is a bare textarea rather than the input-group primitive,
+	 * because the reference puts the controls in a row of their own across the
+	 * full width instead of hugging the field.
+	 */
 	let {
 		models,
 		model,
 		effort,
 		usage,
+		context,
 		busy,
 		onsend,
 		oncancel,
 		onmodel,
-		oneffort
+		oneffort,
+		onaccess
 	}: {
 		models: ModelOption[];
 		model: string;
 		effort: string;
 		usage: ContextUsage;
+		context: ComposerContext;
 		busy: boolean;
 		onsend: (text: string) => void;
 		oncancel: () => void;
 		onmodel: (id: string) => void;
 		oneffort: (effort: string) => void;
+		onaccess: (mode: AccessMode) => void;
 	} = $props();
 
 	let draft = $state('');
@@ -52,96 +69,92 @@
 			form?.requestSubmit();
 		}
 	}
+
+	/** Grow with the text, up to a ceiling, then scroll. */
+	function autosize(node: HTMLTextAreaElement) {
+		const resize = () => {
+			node.style.height = 'auto';
+			node.style.height = `${Math.min(node.scrollHeight, 208)}px`;
+		};
+		resize();
+		node.addEventListener('input', resize);
+		return {
+			destroy: () => node.removeEventListener('input', resize)
+		};
+	}
 </script>
 
 <div class="mx-auto w-full max-w-3xl px-6 pb-5">
 	<form bind:this={form} onsubmit={submit}>
-		<InputGroup.Root
-			class="h-auto flex-col items-stretch rounded-xl border-line-strong bg-paper-raised shadow-[0_1px_0_rgba(0,0,0,0.04)] has-[[data-slot=input-group-control]:focus-visible]:border-olive/60"
+		<div
+			class="rounded-xl border border-line-strong bg-paper-raised shadow-[0_1px_0_rgba(0,0,0,0.04)] transition-colors focus-within:border-olive/60"
 		>
-			<InputGroup.Textarea
-				bind:ref={textarea}
+			<textarea
+				bind:this={textarea}
+				use:autosize
 				bind:value={draft}
-				placeholder="Ask for a change, a review, or a plan…"
-				aria-label="Message"
-				class="max-h-52 min-h-11 px-3.5 pt-3 pb-1 text-[13.5px] leading-relaxed"
 				{onkeydown}
-			/>
+				rows="1"
+				placeholder="Ask anything · @ to mention anything · / to use a skill"
+				aria-label="Message"
+				class="block max-h-52 w-full resize-none bg-transparent px-3.5 pt-3 pb-1 text-[13.5px] leading-relaxed text-ink outline-none placeholder:text-ink-tertiary/80"
+			></textarea>
 
-			<InputGroup.Addon align="block-end" class="gap-1 px-2 pb-2">
+			<div class="flex items-center gap-1 px-2 pt-1 pb-2">
 				<Tooltip.Root>
 					<Tooltip.Trigger>
 						{#snippet child({ props })}
-							<InputGroup.Button
+							<button
 								{...props}
 								type="button"
-								size="icon-xs"
-								variant="ghost"
-								aria-label="Attach files"
-								class="text-ink-tertiary hover:text-ink"
+								class="flex size-7 shrink-0 items-center justify-center rounded-md text-ink-secondary transition-colors hover:bg-paper-card hover:text-ink"
+								aria-label="Attach"
 							>
-								<PaperclipIcon />
-							</InputGroup.Button>
+								<PlusIcon class="size-4" />
+							</button>
 						{/snippet}
 					</Tooltip.Trigger>
-					<Tooltip.Content><p>Attach files (mock)</p></Tooltip.Content>
+					<Tooltip.Content><p>Attach (mock)</p></Tooltip.Content>
 				</Tooltip.Root>
 
-				<ModelPicker {models} {model} {effort} {onmodel} {oneffort} />
+				<AccessPicker access={context.access} onchange={onaccess} />
 
-				<div class="ml-auto flex items-center gap-2">
-					<ContextMeter {usage} class="hidden sm:flex" />
+				<div class="ml-auto flex items-center gap-1.5">
+					<ModelPicker {models} {model} {effort} {onmodel} {oneffort} />
+
+					<ContextMeter {usage} />
 
 					{#if busy}
 						<Tooltip.Root>
 							<Tooltip.Trigger>
 								{#snippet child({ props })}
-									<InputGroup.Button
+									<button
 										{...props}
 										type="button"
-										size="icon-sm"
-										variant="outline"
+										class="flex size-8 shrink-0 items-center justify-center rounded-full border border-line-strong bg-paper text-ink transition-colors hover:bg-paper-card"
 										aria-label="Stop"
-										class="border-line-strong text-ink"
 										onclick={oncancel}
 									>
-										<SquareIcon class="fill-current" />
-									</InputGroup.Button>
+										<SquareIcon class="size-3 fill-current" />
+									</button>
 								{/snippet}
 							</Tooltip.Trigger>
 							<Tooltip.Content><p>Stop</p></Tooltip.Content>
 						</Tooltip.Root>
 					{:else}
-						<InputGroup.Button
+						<button
 							type="submit"
-							size="icon-sm"
-							variant="default"
 							disabled={!canSend}
-							class="hover:bg-ink-hover bg-ink text-paper disabled:bg-ink/40 disabled:text-paper/70"
+							class="hover:bg-ink-hover flex size-8 shrink-0 items-center justify-center rounded-full bg-ink text-paper transition-colors disabled:cursor-not-allowed disabled:bg-ink/15 disabled:text-paper/60"
 							aria-label="Send"
 						>
-							<ArrowUpIcon />
-						</InputGroup.Button>
+							<ArrowUpIcon class="size-4" />
+						</button>
 					{/if}
 				</div>
-			</InputGroup.Addon>
-		</InputGroup.Root>
-	</form>
+			</div>
+		</div>
 
-	<p
-		class="mt-2 flex flex-wrap items-center justify-center gap-x-1.5 gap-y-1 text-[10.5px] whitespace-nowrap text-ink-tertiary/80"
-	>
-		<span class="inline-flex items-center gap-1">
-			<Kbd class="h-4 min-w-4 bg-paper-card/70 px-1 text-[10px]">Enter</Kbd>
-			<span>to send</span>
-		</span>
-		<span class="text-ink-tertiary/40">·</span>
-		<span class="inline-flex items-center gap-1">
-			<Kbd class="h-4 bg-paper-card/70 px-1 text-[10px]">Shift</Kbd>
-			<Kbd class="h-4 bg-paper-card/70 px-1 text-[10px]">Enter</Kbd>
-			<span>for a new line</span>
-		</span>
-		<span class="hidden text-ink-tertiary/40 sm:inline">·</span>
-		<span class="hidden sm:inline">mocked session</span>
-	</p>
+		<CheckoutBar {context} />
+	</form>
 </div>

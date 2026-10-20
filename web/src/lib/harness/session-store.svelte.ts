@@ -42,6 +42,7 @@ import type { ExtSessionUpdate } from './types/ext.js';
 import type { AskUserQuestionRequest, AskUserQuestionResponse } from './types/ext.js';
 import type { SessionUpdate } from './types/acp.js';
 import type {
+	AccessMode,
 	AvailableCommand,
 	ContextUsage,
 	GraphState,
@@ -53,8 +54,10 @@ import type {
 	Session,
 	TodoItem,
 	Turn,
+	WorkspaceGroup,
 	WorkspaceInfo
 } from './types.js';
+import { groupByWorkspace } from './workspaces.js';
 
 /** A frame the agent sent, plus the prompt it answers (if any). */
 export interface IncomingFrame {
@@ -79,6 +82,10 @@ export interface Transport {
 export interface SessionStore {
 	readonly workspace: WorkspaceInfo;
 	readonly sessions: Session[];
+	/** Conversations nested under their workspace; what the sidebar renders. */
+	readonly groups: WorkspaceGroup[];
+	/** The workspace of the active session, pinned first in `groups`. */
+	readonly currentWorkspace: string;
 	readonly turns: Turn[];
 	readonly models: ModelOption[];
 	/** Absent when the agent has no graph running. */
@@ -88,6 +95,8 @@ export interface SessionStore {
 	readonly activeSession: Session;
 	readonly model: string;
 	readonly effort: string;
+	/** How much the agent may do without asking. */
+	readonly access: AccessMode;
 	readonly busy: boolean;
 	/** A parked permission request, if the agent is waiting on the user. */
 	readonly permission: PermissionRequest | undefined;
@@ -103,6 +112,7 @@ export interface SessionStore {
 	selectSession(id: string): void;
 	setModel(id: string): void;
 	setEffort(effort: string): void;
+	setAccess(mode: AccessMode): void;
 	send(text: string): void;
 	cancel(): void;
 	clear(): void;
@@ -184,7 +194,18 @@ export class HarnessStore implements SessionStore {
 	activeSessionId = $state(sessions[0].id);
 	model = $state(models[0].id);
 	effort = $state('high');
+	/** The mock starts in `auto`: the mode a fresh interactive session gets. */
+	access = $state<AccessMode>('auto');
 	busy = $state(false);
+
+	get groups(): WorkspaceGroup[] {
+		return groupByWorkspace(this.sessions, this.currentWorkspace);
+	}
+
+	get currentWorkspace(): string {
+		const session = this.sessions.find((candidate) => candidate.id === this.activeSessionId);
+		return session?.workspace ?? this.sessions[0]?.workspace ?? '';
+	}
 
 	/** The folded transcript per session; only the first three are scripted. */
 	private accs = $state<Record<string, Acc>>({
@@ -269,6 +290,10 @@ export class HarnessStore implements SessionStore {
 
 	setEffort(effort: string) {
 		this.effort = effort;
+	}
+
+	setAccess(mode: AccessMode) {
+		this.access = mode;
 	}
 
 	send(text: string) {
