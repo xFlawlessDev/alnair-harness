@@ -234,10 +234,29 @@ export const models: ModelOption[] = [
 	}
 ];
 
+/**
+ * The context snapshot as `alnair/session/info` returns it: exact totals, the
+ * system prompt and tool-definition figures, an estimate for the conversation,
+ * and the resolved auto-compact threshold.
+ */
 export const contextUsage: ContextUsage = {
 	used: 61_440,
 	limit: 262_144,
-	percent: 23
+	percent: 23,
+	systemPromptTokens: 4_200,
+	toolDefinitionsTokens: 12_800,
+	toolDefinitionsCount: 18,
+	messageTokens: 40_300,
+	messageCount: 96,
+	turnCount: 7,
+	toolCallCount: 34,
+	compactionCount: 0,
+	freeTokens: 200_704,
+	autoCompactThresholdPercent: 85,
+	categories: [
+		{ label: 'Skills', tokens: 2_900, detail: '12 skills' },
+		{ label: 'MCP servers', tokens: 1_240, detail: '2 servers' }
+	]
 };
 
 /* ------------------------------------------------------------ transcripts */

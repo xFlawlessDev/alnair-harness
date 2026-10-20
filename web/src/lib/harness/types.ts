@@ -382,14 +382,47 @@ export interface ModelOption {
 }
 
 /**
- * Context usage. The wire sends a total and the window, not a per-category
- * breakdown, so there is no `segments` here.
+ * One itemized context row the agent reports: the skills listing, the MCP
+ * server announcement, and anything else it chooses to itemize.
+ * Source: `TokenUsageCategory` (`label`, `tokens`, optional `detail`).
+ */
+export interface ContextCategory {
+	/** Display label, e.g. `Skills`. */
+	label: string;
+	tokens: number;
+	/** Short supporting detail, by convention a count and a noun. */
+	detail?: string;
+}
+
+/**
+ * Context usage as the agent reports it in `alnair/session/info`.
+ *
+ * Source: `ContextInfo`. The wire gives an exact `used` / `total`, a system
+ * prompt figure, a tool-definition figure, an estimate for all non-system
+ * conversation items, the free remainder, and the resolved auto-compact
+ * threshold. Everything here is one of those fields — nothing is inferred,
+ * which is why there is no per-file or per-memory breakdown: the agent does
+ * not measure them.
  */
 export interface ContextUsage {
 	used: number;
 	limit: number;
-	/** 0–100. */
+	/** 0–100, as the agent computed it. */
 	percent: number;
+	systemPromptTokens: number;
+	toolDefinitionsTokens: number;
+	toolDefinitionsCount: number;
+	/** Bytes/4 estimate of all non-system conversation items. */
+	messageTokens: number;
+	messageCount: number;
+	turnCount: number;
+	toolCallCount: number;
+	compactionCount: number;
+	freeTokens: number;
+	/** The percent at which auto-compact fires for this model. */
+	autoCompactThresholdPercent: number;
+	/** Itemized rows (skills, MCP servers); may be empty. */
+	categories: ContextCategory[];
 }
 
 /**
