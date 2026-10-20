@@ -5,6 +5,7 @@
 	import QuestionPanel from '#lib/components/composer/question-panel.svelte';
 	import Inspector from '#lib/components/inspector/inspector.svelte';
 	import SessionSidebar from '#lib/components/chrome/session-sidebar.svelte';
+	import SubagentDialog from '#lib/components/chrome/subagent-dialog.svelte';
 	import ThreadHeader from '#lib/components/chrome/thread-header.svelte';
 	import Thread from '#lib/components/thread/thread.svelte';
 	import SettingsDialog from '#lib/components/settings/settings-dialog.svelte';
@@ -12,6 +13,7 @@
 	import * as Tooltip from '#lib/components/ui/tooltip/index.js';
 	import { useSessionStore } from '#lib/harness/context.js';
 	import { commands, filesByDirectory, suggestions, workspaceFiles } from '#lib/harness/mock.js';
+	import type { SubagentSummary } from '#lib/harness/types.js';
 
 	const store = useSessionStore();
 
@@ -20,6 +22,15 @@
 	const WIDE = '(min-width: 1280px)';
 	let inspectorOpen = $state(false);
 	let settingsOpen = $state(false);
+	/** The subagent whose detail dialog is open, if any. */
+	let picked = $state<SubagentSummary | undefined>(undefined);
+	let subagentOpen = $state(false);
+
+	function openSubagent(subagent: SubagentSummary) {
+		store.openSubagent(subagent);
+		picked = subagent;
+		subagentOpen = true;
+	}
 
 	onMount(() => {
 		const query = window.matchMedia(WIDE);
@@ -47,6 +58,8 @@
 				graph={store.graph}
 				todos={store.todos}
 				plan={store.plan ?? null}
+				subagents={store.subagents}
+				onsubagent={openSubagent}
 				{inspectorOpen}
 				oninspector={() => (inspectorOpen = !inspectorOpen)}
 			/>
@@ -138,6 +151,17 @@
 			bind:open={settingsOpen}
 			settings={store.settings}
 			onchange={(key, value) => store.setSetting(key, value)}
+		/>
+
+		<SubagentDialog
+			bind:open={subagentOpen}
+			subagent={picked}
+			turns={store.subagentTurns}
+			session={{
+				...store.activeSession,
+				id: picked?.childSessionId ?? '',
+				title: picked?.description ?? ''
+			}}
 		/>
 	</div>
 </Tooltip.Provider>

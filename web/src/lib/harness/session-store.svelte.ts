@@ -15,11 +15,13 @@ import { planQuestionTurn } from './fixtures.js';
 import {
 	initialPlan,
 	initialQuestionTranscript,
+	initialSubagentTranscript,
 	initialTranscript,
 	models,
 	parkedPlanQuestionRequest,
 	parkedQuestionRequest,
 	sessions,
+	subagents,
 	workspace,
 	contextUsage
 } from './mock.js';
@@ -33,6 +35,7 @@ import {
 	questionFromRequest,
 	reduceAcpUpdate,
 	reduceExtUpdate,
+	replay,
 	resolveCardById,
 	sessionStatus
 } from './reducer.js';
@@ -55,12 +58,14 @@ import type {
 	QuestionAnswer,
 	QuestionRequest,
 	Session,
+	SubagentSummary,
 	TodoItem,
 	Turn,
 	WorkspaceGroup,
 	WorkspaceInfo
 } from './types.js';
 import { groupByWorkspace } from './workspaces.js';
+import { sortSubagents } from './subagents.js';
 
 /** A frame the agent sent, plus the prompt it answers (if any). */
 export interface IncomingFrame {
@@ -102,6 +107,12 @@ export interface SessionStore {
 	readonly access: AccessMode;
 	/** Every tunable setting, keyed by the registry's key. */
 	readonly settings: SettingsState;
+	/** Subagents this session spawned, running ones first. */
+	readonly subagents: SubagentSummary[];
+	/** The transcript of one subagent, or empty when none is open. */
+	readonly subagentTurns: Turn[];
+	/** Open a subagent's child session and load its transcript. */
+	openSubagent(subagent: SubagentSummary): void;
 	readonly busy: boolean;
 	/** A parked permission request, if the agent is waiting on the user. */
 	readonly permission: PermissionRequest | undefined;
@@ -214,6 +225,13 @@ export class HarnessStore implements SessionStore {
 	/** The mock starts in `auto`: the mode a fresh interactive session gets. */
 	access = $state<AccessMode>('auto');
 	settings = $state<SettingsState>({ ...DEFAULT_SETTINGS });
+	subagents = $state<SubagentSummary[]>(sortSubagents(subagents));
+	/**
+	 * The open subagent's transcript. A subagent is a session, so this is the
+	 * same folded view the main thread renders — the child's `updates.jsonl`
+	 * read through `alnair/session/updates`, not a separate agent view.
+	 */
+	subagentTurns = $state<Turn[]>([]);
 	busy = $state(false);
 
 	get groups(): WorkspaceGroup[] {
@@ -325,6 +343,19 @@ export class HarnessStore implements SessionStore {
 			this.access = value as AccessMode;
 		}
 		if (key === 'theme') applyTheme(String(value));
+	}
+
+	/**
+	 * Load a subagent's conversation.
+	 *
+	 * The child session stores its own `updates.jsonl`, and
+	 * `alnair/session/updates` reads any session by id — including one whose
+	 * cwd differs from the parent's, which is exactly the subagent case. The
+	 * replay is folded by the same reducer the main thread uses, so the agent
+	 * view here is a normal conversation, not a summary.
+	 */
+	openSubagent(subagent: SubagentSummary) {
+		this.subagentTurns = replay(initialSubagentTranscript(subagent), subagent.childSessionId).turns;
 	}
 
 	send(text: string) {

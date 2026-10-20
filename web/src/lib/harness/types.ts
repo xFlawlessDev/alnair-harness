@@ -451,6 +451,44 @@ export interface WorkspaceInfo {
 	dirty: boolean;
 }
 
+/* ------------------------------------------------------------- subagents */
+
+/**
+ * A subagent as the header's list shows it.
+ *
+ * Source: `alnair/subagent/list_running` for live work, and
+ * `alnair/subagent/get` for the detail dialog. Both carry the same identity
+ * fields; the detail adds the status-dependent ones.
+ */
+export interface SubagentSummary {
+	id: string;
+	/** `general-purpose`, `explore`, `plan`, or a custom type. */
+	agent: string;
+	description: string;
+	/** The child session's id; its transcript is a normal session transcript. */
+	childSessionId: string;
+	/** The prompt the parent handed this subagent. */
+	prompt?: string;
+	/** `running`, `completed`, `failed`, or `cancelled`. */
+	status: 'running' | 'completed' | 'failed' | 'cancelled';
+	startedAt: number;
+	durationMs: number;
+	turnCount: number;
+	toolCallCount: number;
+	tokensUsed: number;
+	contextWindowTokens: number;
+	contextUsagePct: number;
+	toolsUsed: string[];
+	errorCount: number;
+	/** Present once the subagent finished. */
+	output?: string;
+	failureError?: string;
+	cancelReason?: string;
+	worktreePath?: string;
+	/** Set when this subagent resumed an earlier one. */
+	resumedFrom?: string;
+}
+
 /* ------------------------------------------------------------------ store */
 
 /** A parked permission request, surfaced above the composer. */

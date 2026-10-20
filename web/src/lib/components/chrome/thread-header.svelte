@@ -2,10 +2,17 @@
 	import PanelRightIcon from '@lucide/svelte/icons/panel-right';
 	import { Button } from '#lib/components/ui/button/index.js';
 	import * as Tooltip from '#lib/components/ui/tooltip/index.js';
-	import type { GraphState, PlanArtifact, Session, TodoItem } from '#lib/harness/types.js';
+	import type {
+		GraphState,
+		PlanArtifact,
+		Session,
+		SubagentSummary,
+		TodoItem
+	} from '#lib/harness/types.js';
 	import GraphChip from './graph-chip.svelte';
 	import PlanPopover from './plan-popover.svelte';
 	import StatusDot from './status-dot.svelte';
+	import SubagentPopover from './subagent-popover.svelte';
 	import TodoPopover from './todo-popover.svelte';
 
 	/**
@@ -18,6 +25,8 @@
 		graph,
 		todos,
 		plan,
+		subagents,
+		onsubagent,
 		inspectorOpen,
 		oninspector
 	}: {
@@ -27,6 +36,9 @@
 		todos: TodoItem[];
 		/** The artifact awaiting approval, if the agent asked for one. */
 		plan: PlanArtifact | null;
+		/** Subagents this session spawned; the list opens beside the title. */
+		subagents: SubagentSummary[];
+		onsubagent: (subagent: SubagentSummary) => void;
 		inspectorOpen: boolean;
 		oninspector: () => void;
 	} = $props();
@@ -35,6 +47,9 @@
 <header class="rule-b flex h-12 shrink-0 items-center gap-3 bg-paper px-4">
 	<div class="flex min-w-0 flex-1 items-center gap-2">
 		<h1 class="min-w-0 truncate text-[13px] font-medium">{session.title}</h1>
+		{#if subagents.length > 0}
+			<SubagentPopover {subagents} onselect={onsubagent} />
+		{/if}
 		{#if session.status === 'running'}
 			<span
 				class="flex shrink-0 items-center gap-1 rounded-full bg-running/10 px-1.5 py-0.5 whitespace-nowrap"

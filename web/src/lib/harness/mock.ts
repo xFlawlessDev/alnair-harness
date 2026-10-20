@@ -13,9 +13,17 @@ import {
 	permissionTurn,
 	planQuestionTurn,
 	questionTurn,
-	PLAN_MARKDOWN
+	PLAN_MARKDOWN,
+	agentChunk,
+	extUpdate,
+	textResult,
+	thoughtChunk,
+	toolCall,
+	toolDone,
+	userChunk
 } from './fixtures.js';
 import type { ScriptedTurn, WireStep } from './fixtures.js';
+import type { TranscriptEnvelope } from './types/acp.js';
 import {
 	closeTurn,
 	emptyAcc,
@@ -36,6 +44,7 @@ import type {
 	PlanArtifact,
 	Session,
 	SlashCommand,
+	SubagentSummary,
 	WorkspaceInfo
 } from './types.js';
 
@@ -416,6 +425,216 @@ export const workspaceFiles: FileEntry[] = [
 	{ name: 'README.md', path: 'README.md', type: 'file', size: 4_920 },
 	{ name: 'plan.md', path: 'plan.md', type: 'file', size: 2_110 }
 ];
+
+/**
+ * Subagents the header's list shows.
+ *
+ * Two sources in the real client: `alnair/subagent/list_running` while they
+ * work, and `alnair/subagent/get` for the detail dialog. The fixture holds the
+ * finished shape, which carries both, so the list and the dialog agree.
+ */
+export const subagents: SubagentSummary[] = [
+	{
+		id: 'sub-thread',
+		agent: 'general-purpose',
+		description: 'Build the turn thread',
+		childSessionId: 's-graph-sub-thread',
+		prompt: 'Build the turn thread for the web harness.',
+		status: 'running',
+		startedAt: MOCK_NOW.getTime() - 6 * 60_000,
+		durationMs: 6 * 60_000,
+		turnCount: 4,
+		toolCallCount: 11,
+		tokensUsed: 42_800,
+		contextWindowTokens: 262_144,
+		contextUsagePct: 16,
+		toolsUsed: ['read_file', 'search_replace', 'grep', 'bash'],
+		errorCount: 1,
+		worktreePath: '.alnair/worktrees/gn-thread'
+	},
+	{
+		id: 'sub-palette',
+		agent: 'explore',
+		description: 'Audit the TUI palette for web-safe accents',
+		childSessionId: 's-graph-sub-palette',
+		prompt: 'Audit the TUI palette for web-safe accents.',
+		status: 'completed',
+		startedAt: MOCK_NOW.getTime() - 42 * 60_000,
+		durationMs: 6_100,
+		turnCount: 2,
+		toolCallCount: 3,
+		tokensUsed: 21_900,
+		contextWindowTokens: 262_144,
+		contextUsagePct: 8,
+		toolsUsed: ['read_file', 'grep'],
+		errorCount: 0,
+		output:
+			'Night accents are TokyoNight Night; day accents are the same hues deepened. Keep the theme accents for turn semantics and the site palette for chrome.'
+	},
+	{
+		id: 'sub-tests',
+		agent: 'general-purpose',
+		description: 'Run the workspace test suite',
+		childSessionId: 's-graph-sub-tests',
+		prompt: 'Run the workspace test suite and report what fails.',
+		status: 'failed',
+		startedAt: MOCK_NOW.getTime() - 58 * 60_000,
+		durationMs: 94_000,
+		turnCount: 1,
+		toolCallCount: 2,
+		tokensUsed: 8_400,
+		contextWindowTokens: 262_144,
+		contextUsagePct: 3,
+		toolsUsed: ['bash'],
+		errorCount: 2,
+		failureError: 'cargo test exited 101: two doctests in alnair-pager-render failed.'
+	}
+];
+
+/**
+ * The transcript of a subagent's child session.
+ *
+ * A subagent is a session, so its history is the same `{ method, params }`
+ * envelope a parent's is: `alnair/session/updates` reads the child's
+ * `updates.jsonl` by id and the reducer folds it exactly as it folds the main
+ * thread. Nothing here is a summary of the subagent — it is its conversation.
+ */
+export function initialSubagentTranscript(subagent: SubagentSummary): TranscriptEnvelope[] {
+	const at = (offsetMs: number) => new Date(subagent.startedAt + offsetMs).toISOString();
+
+	if (subagent.status === 'failed') {
+		return [
+			envelope(
+				subagent.childSessionId,
+				at(0),
+				userChunk(subagent.childSessionId, subagent.prompt ?? subagent.description)
+			),
+			envelope(
+				subagent.childSessionId,
+				at(400),
+				thoughtChunk(
+					subagent.childSessionId,
+					'Running the workspace suite; it is the only way to know what broke.'
+				)
+			),
+			envelope(
+				subagent.childSessionId,
+				at(900),
+				toolCall(subagent.childSessionId, {
+					toolCallId: 'sub-tests-call',
+					title: 'Execute `cargo test --workspace`',
+					kind: 'execute',
+					status: 'in_progress',
+					rawInput: { command: 'cargo test --workspace' }
+				})
+			),
+			envelope(
+				subagent.childSessionId,
+				at(94_000),
+				toolDone(
+					subagent.childSessionId,
+					'sub-tests-call',
+					[
+						textResult(
+							'error[E0308]: mismatched types\n  --> alnair-pager-render/src/lib.rs:88:9\n\ntest result: FAILED. 2 passed; 2 failed'
+						)
+					],
+					'failed'
+				)
+			),
+			envelope(
+				subagent.childSessionId,
+				at(94_500),
+				extUpdate(subagent.childSessionId, {
+					sessionUpdate: 'retry_state',
+					type: 'failed',
+					error_type: 'test',
+					message: 'cargo test exited 101'
+				})
+			)
+		];
+	}
+
+	return [
+		envelope(
+			subagent.childSessionId,
+			at(0),
+			userChunk(subagent.childSessionId, subagent.prompt ?? subagent.description)
+		),
+		envelope(
+			subagent.childSessionId,
+			at(600),
+			thoughtChunk(
+				subagent.childSessionId,
+				'The palette lives in two theme modules. Read both, then compare the accent slots against the web tokens.'
+			)
+		),
+		envelope(
+			subagent.childSessionId,
+			at(1_200),
+			toolCall(subagent.childSessionId, {
+				toolCallId: 'sub-palette-read',
+				title: 'Read `alnair-pager-render/src/theme/alnairnight.rs`',
+				kind: 'read',
+				status: 'in_progress',
+				locations: [
+					{ path: 'crates/codegen/alnair-pager-render/src/theme/alnairnight.rs', line: 1 }
+				],
+				rawInput: { path: 'crates/codegen/alnair-pager-render/src/theme/alnairnight.rs' }
+			})
+		),
+		envelope(
+			subagent.childSessionId,
+			at(1_900),
+			toolDone(
+				subagent.childSessionId,
+				'sub-palette-read',
+				[
+					textResult(`pub const ACCENT_ASSISTANT: Rgb = Rgb(0xbb, 0x9a, 0xf7);
+pub const ACCENT_TOOL: Rgb = Rgb(0xa3, 0xa3, 0xa3);
+pub const ACCENT_SUCCESS: Rgb = Rgb(0x9e, 0xce, 0x6a);`)
+				],
+				'completed'
+			)
+		),
+		envelope(
+			subagent.childSessionId,
+			at(2_400),
+			toolCall(subagent.childSessionId, {
+				toolCallId: 'sub-palette-grep',
+				title: 'grep "accent_" in alnair-pager-render',
+				kind: 'search',
+				status: 'in_progress',
+				rawInput: { pattern: 'accent_' }
+			})
+		),
+		envelope(
+			subagent.childSessionId,
+			at(3_100),
+			toolDone(
+				subagent.childSessionId,
+				'sub-palette-grep',
+				[textResult('theme/alnairnight.rs: 11 matches\ntheme/alnairday.rs: 11 matches')],
+				'completed'
+			)
+		),
+		envelope(
+			subagent.childSessionId,
+			at(6_100),
+			agentChunk(
+				subagent.childSessionId,
+				subagent.output ??
+					'Night accents are TokyoNight Night; day accents are the same hues deepened.'
+			)
+		)
+	];
+}
+
+const envelope = (sessionId: string, timestamp: string, step: WireStep): TranscriptEnvelope => ({
+	timestamp,
+	method: step.method,
+	params: step.params
+});
 
 /** A nested listing, so drilling into a directory shows something. */
 export const filesByDirectory: Record<string, FileEntry[]> = {

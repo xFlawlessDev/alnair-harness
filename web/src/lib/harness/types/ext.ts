@@ -119,6 +119,55 @@ export interface MonitorEvent {
 
 /* --------------------------------------------------------------- subagents */
 
+/**
+ * A running subagent, as `alnair/subagent/list_running` returns it.
+ * Source: `SubagentLiveSnapshotDto` (camelCase).
+ */
+export interface SubagentLiveSnapshot {
+	subagentId: string;
+	parentSessionId: string;
+	childSessionId: string;
+	/** `general-purpose`, `explore`, `plan`, or a custom type. */
+	subagentType: string;
+	description: string;
+	startedAtEpochMs: number;
+	durationMs: number;
+	turnCount: number;
+	toolCallCount: number;
+	tokensUsed: number;
+	contextWindowTokens: number;
+	contextUsagePct: number;
+	toolsUsed: string[];
+	errorCount: number;
+}
+
+/**
+ * One subagent in any state, as `alnair/subagent/get` returns it.
+ * Source: `SubagentSnapshotDto`; the status-dependent fields are optional
+ * because the agent only sends the ones that apply.
+ */
+export interface SubagentSnapshot extends SubagentLiveSnapshot {
+	/** `running`, `completed`, `failed`, or `cancelled`. */
+	status: string;
+	output?: string;
+	toolCalls?: number;
+	turns?: number;
+	worktreePath?: string;
+	failureError?: string;
+	cancelReason?: string;
+	forkContextSource?: string;
+	forkParentPromptId?: string;
+	resumedFrom?: string;
+}
+
+export interface ListRunningSubagentsResponse {
+	subagents: SubagentLiveSnapshot[];
+}
+
+export interface GetSubagentResponse {
+	snapshot?: SubagentSnapshot;
+}
+
 export interface SubagentSpawned {
 	sessionUpdate: 'subagent_spawned';
 	subagent_id: string;
