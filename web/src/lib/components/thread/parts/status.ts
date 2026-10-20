@@ -40,6 +40,7 @@ export function accentFor(kind: string): string {
 		case 'error':
 			return 'text-error';
 		case 'permission':
+		case 'question':
 			return 'text-terra';
 		default:
 			return 'text-ink-secondary';

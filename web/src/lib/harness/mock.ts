@@ -7,11 +7,26 @@
  * catalog mirrors the registry keys the picker receives.
  */
 
-import { cancelledTurn, foundationTurn, permissionTurn, PLAN_MARKDOWN } from './fixtures.js';
-import type { WireStep } from './fixtures.js';
-import { closeTurn, emptyAcc, openUserTurn, reduceAcpUpdate, reduceExtUpdate } from './reducer.js';
+import {
+	cancelledTurn,
+	foundationTurn,
+	permissionTurn,
+	planQuestionTurn,
+	questionTurn,
+	PLAN_MARKDOWN
+} from './fixtures.js';
+import type { ScriptedTurn, WireStep } from './fixtures.js';
+import {
+	closeTurn,
+	emptyAcc,
+	openUserTurn,
+	questionFromRequest,
+	reduceAcpUpdate,
+	reduceExtUpdate
+} from './reducer.js';
 import type { Acc } from './reducer.js';
 import type { ExtSessionUpdate } from './types/ext.js';
+import type { AskUserQuestionRequest } from './types/ext.js';
 import type { SessionUpdate } from './types/acp.js';
 import type { AlnairSessionRow } from './types/ext.js';
 import type { ContextUsage, ModelOption, PlanArtifact, Session, WorkspaceInfo } from './types.js';
@@ -53,16 +68,16 @@ export const sessionRows: AlnairSessionRow[] = [
 	},
 	{
 		sessionId: 's-auth',
-		summary: 'Refresh OAuth tokens on 401',
-		firstPrompt: 'Why does the Claude Pro session die after an hour?',
+		summary: 'Terminal setup guide',
+		firstPrompt: 'Which terminals should the setup guide cover?',
 		createdAt: t(2_880),
-		updatedAt: t(96),
-		cwd: '~/dev/alnair-cli',
+		updatedAt: t(32),
+		cwd: '~/dev/alnair-docs',
 		source: 'local',
-		modelId: 'claude-pro-max/claude-sonnet-4-5',
-		numMessages: 24,
-		branch: 'fix/oauth-refresh',
-		repoName: 'alnair-cli',
+		modelId: 'kimi-code/kimi-k2-turbo-preview',
+		numMessages: 4,
+		branch: 'docs/terminal-setup',
+		repoName: 'alnair-docs',
 		sessionKind: 'build',
 		_meta: { 'alnair/session': { kind: 'build', facets: {} } }
 	},
@@ -83,16 +98,16 @@ export const sessionRows: AlnairSessionRow[] = [
 	},
 	{
 		sessionId: 's-docs',
-		summary: 'Rewrite terminal setup guide',
-		firstPrompt: 'Cover Windows Terminal and VTE.',
+		summary: 'Restyle scope interview',
+		firstPrompt: 'Ask me what the restyle should cover.',
 		createdAt: t(5_760),
-		updatedAt: t(2_880),
-		cwd: '~/dev/alnair-docs',
+		updatedAt: t(48),
+		cwd: '~/dev/alnair-cli',
 		source: 'local',
 		modelId: 'kimi-code/kimi-k2-turbo-preview',
-		numMessages: 6,
-		branch: 'main',
-		repoName: 'alnair-docs',
+		numMessages: 2,
+		branch: 'feat/web-harness',
+		repoName: 'alnair-cli',
 		sessionKind: 'build',
 		_meta: { 'alnair/session': { kind: 'build', facets: {} } }
 	},
@@ -236,6 +251,58 @@ export const initialPlan: PlanArtifact = {
 	updatedAt: t(3),
 	markdown: PLAN_MARKDOWN
 };
+
+/** The frames up to and including a parked question, for a given turn. */
+export function parkedSteps(turn: ScriptedTurn): WireStep[] {
+	return turn.steps.slice(
+		0,
+		turn.steps.findIndex((step) => step.method === 'alnair/ask_user_question') + 1
+	);
+}
+
+export const parkedQuestionSteps = parkedSteps(questionTurn);
+export const parkedPlanQuestionSteps = parkedSteps(planQuestionTurn);
+
+/** The `alnair/ask_user_question` payload, as the transport would deliver it. */
+export const parkedQuestionRequest = parkedQuestionSteps.at(-1)!
+	.params as unknown as AskUserQuestionRequest;
+export const parkedPlanQuestionRequest = parkedPlanQuestionSteps.at(-1)!
+	.params as unknown as AskUserQuestionRequest;
+
+/**
+ * A session parked on a questionnaire: the transcript up to the request, with
+ * the question card already in place. The store reads the reverse request from
+ * this session's frames on selection, exactly as it would from a live socket.
+ */
+export function initialQuestionTranscript(
+	turn: ScriptedTurn = questionTurn,
+	sessionId = 's-auth'
+): Acc {
+	let acc = openUserTurn(
+		emptyAcc(),
+		turn.prompt,
+		Date.parse(t(32)),
+		'kimi-code/kimi-k2-turbo-preview',
+		'high'
+	);
+	let clock = Date.parse(t(32));
+	for (const step of parkedSteps(turn)) {
+		clock += step.delay;
+		if (step.method === 'alnair/ask_user_question') {
+			// A reverse request, not an update: the card is built from it directly.
+			acc = questionFromRequest(acc, step.params as unknown as AskUserQuestionRequest, clock);
+			continue;
+		}
+		const update = (step.params as { update?: Record<string, unknown> }).update;
+		if (!update) continue;
+		const ctx = { now: clock, sessionId };
+		acc =
+			step.method === '_alnair/session/update'
+				? reduceExtUpdate(acc, update as ExtSessionUpdate, ctx)
+				: reduceAcpUpdate(acc, update as SessionUpdate, ctx);
+	}
+	return acc;
+}
 
 export const suggestions = [
 	'Explain the graph planner contract',

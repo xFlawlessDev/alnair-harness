@@ -206,6 +206,36 @@ export interface PermissionPart {
 	resolved: boolean;
 }
 
+/** One selectable choice in a questionnaire. */
+export interface QuestionChoice {
+	label: string;
+	description: string;
+	/** A longer explanation shown while the choice is focused. */
+	preview?: string;
+}
+
+export interface QuestionPrompt {
+	/** The question text; also the key the agent reads answers back under. */
+	question: string;
+	choices: QuestionChoice[];
+	/** Zero or more choices may be picked. */
+	multiSelect: boolean;
+}
+
+/**
+ * A parked `alnair/ask_user_question`. The agent blocks until every question
+ * it sent is answered or the questionnaire is dismissed.
+ */
+export interface QuestionPart {
+	kind: 'question';
+	id: string;
+	toolCallId: string;
+	questions: QuestionPrompt[];
+	/** `default` offers accept/cancel; `plan` adds the two interview exits. */
+	mode: 'default' | 'plan';
+	resolved: boolean;
+}
+
 export type TurnPart =
 	| TextPart
 	| ReasoningPart
@@ -216,6 +246,7 @@ export type TurnPart =
 	| ErrorPart
 	| NoticePart
 	| PermissionPart
+	| QuestionPart
 	| FileReadPart
 	| FileWritePart
 	| FileEditPart
@@ -352,6 +383,21 @@ export interface PermissionRequest {
 	toolCallId: string;
 	title: string;
 	options: { optionId: string; name: string; kind: string }[];
+}
+
+/** A parked questionnaire, surfaced above the composer. */
+export interface QuestionRequest {
+	toolCallId: string;
+	questions: QuestionPrompt[];
+	mode: 'default' | 'plan';
+}
+
+/** One question's answer, in the shape the agent reads back. */
+export interface QuestionAnswer {
+	/** Labels in the order the user picked them. */
+	labels: string[];
+	/** Free text typed into the freeform input, when it was used. */
+	notes?: string;
 }
 
 export interface AvailableCommand {

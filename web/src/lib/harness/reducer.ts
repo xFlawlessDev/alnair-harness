@@ -26,9 +26,12 @@ import type {
 	ToolCallUpdateFields
 } from './types/acp.js';
 import type {
+	AskUserQuestionRequest,
+	AskUserQuestionResponse,
 	ExtSessionUpdate,
 	GraphUpdated,
 	PendingKind,
+	QuestionAnnotation,
 	RetryState,
 	TaskSnapshot
 } from './types/ext.js';
@@ -45,6 +48,10 @@ import type {
 	PartStatus,
 	PermissionPart,
 	PermissionRequest,
+	QuestionAnswer,
+	QuestionPart,
+	QuestionPrompt,
+	QuestionRequest,
 	ReasoningPart,
 	Session,
 	SubagentPart,
@@ -873,37 +880,48 @@ export function reduceExtUpdate(acc: Acc, update: ExtSessionUpdate, ctx: ReduceC
 
 		case 'pending_interaction': {
 			const event = update as unknown as { tool_call_id: string; kind: PendingKind };
-			if (event.kind !== 'permission') {
-				// Questions and plan approval need their own cards; until then the
-				// header still shows "needs input" via the parked map.
+			const tool = acc.tools[event.tool_call_id];
+
+			if (event.kind === 'plan_approval') {
+				// The artifact itself arrives as an `exit_plan_mode` reverse request;
+				// this update only marks the session as blocked.
 				return { ...acc, parked: { ...acc.parked, [event.tool_call_id]: event.kind } };
 			}
+
 			/**
 			 * The card belongs at the tail of the thread, not next to the tool it
 			 * gates: the tool call may have been announced long before, and a card
 			 * buried mid-transcript is a card the user never answers.
 			 */
-			const tool = acc.tools[event.tool_call_id];
-			const options = tool?.pendingPermission?.options ?? defaultPermissionOptions();
-			const request: PermissionRequest = {
-				toolCallId: event.tool_call_id,
-				title: tool?.title ?? 'Tool call',
-				options
-			};
-			const next = { ...acc, permissions: { ...acc.permissions, [event.tool_call_id]: request } };
-			return pushPart(
-				next,
-				{
-					kind: 'permission',
-					id: `perm-${event.tool_call_id}`,
+			if (event.kind === 'permission') {
+				const options = tool?.pendingPermission?.options ?? defaultPermissionOptions();
+				const request: PermissionRequest = {
 					toolCallId: event.tool_call_id,
-					title: request.title,
-					toolKind: tool?.kind ?? 'other',
-					options,
-					resolved: false
-				},
-				now
-			);
+					title: tool?.title ?? 'Tool call',
+					options
+				};
+				const next = {
+					...acc,
+					permissions: { ...acc.permissions, [event.tool_call_id]: request }
+				};
+				return pushPart(
+					next,
+					{
+						kind: 'permission',
+						id: `perm-${event.tool_call_id}`,
+						toolCallId: event.tool_call_id,
+						title: request.title,
+						toolKind: tool?.kind ?? 'other',
+						options,
+						resolved: false
+					},
+					now
+				);
+			}
+
+			// `question`: the questionnaire itself arrives as the reverse request,
+			// so the card is built there; this update only marks the block.
+			return { ...acc, parked: { ...acc.parked, [event.tool_call_id]: event.kind } };
 		}
 
 		case 'interaction_resolved': {
@@ -911,12 +929,7 @@ export function reduceExtUpdate(acc: Acc, update: ExtSessionUpdate, ctx: ReduceC
 			const { [event.tool_call_id]: _resolved, ...permissions } = acc.permissions;
 			const { [event.tool_call_id]: _parked, ...parked } = acc.parked;
 			const next = { ...acc, permissions, parked };
-			const turn = turnById(acc.turns, acc.openTurnId);
-			const card = turn?.parts.find((part) => part.id === `perm-${event.tool_call_id}`);
-			if (!turn || !card) return next;
-			return patchPart(next, turn.id, card.id, (part) =>
-				part.kind === 'permission' ? { ...part, resolved: true } : part
-			);
+			return resolveCardById(next, `perm-${event.tool_call_id}`);
 		}
 
 		case 'turn_completed': {
@@ -978,6 +991,104 @@ export function reduceExtUpdate(acc: Acc, update: ExtSessionUpdate, ctx: ReduceC
 		default:
 			return acc;
 	}
+}
+
+/**
+ * Mark a card resolved wherever it sits, by part id. Returns the accumulator
+ * unchanged when the part is not in the transcript.
+ */
+export function resolveCardById(acc: Acc, partId: string): Acc {
+	const turn = acc.turns.find((candidate) => candidate.parts.some((part) => part.id === partId));
+	if (!turn) return acc;
+	return patchPart(acc, turn.id, partId, (part) =>
+		part.kind === 'permission' || part.kind === 'question' ? { ...part, resolved: true } : part
+	);
+}
+
+/* ------------------------------------------------------------- questions */
+
+/** Project an `alnair/ask_user_question` payload onto the parked request. */
+export function questionFromPayload(request: AskUserQuestionRequest): QuestionRequest {
+	return {
+		toolCallId: request.toolCallId,
+		mode: request.mode ?? 'default',
+		questions: request.questions.map((question) => ({
+			question: question.question,
+			multiSelect: question.multiSelect === true,
+			choices: question.options.map((option) => ({
+				label: option.label,
+				description: option.description,
+				preview: option.preview
+			}))
+		}))
+	};
+}
+
+/**
+ * Build the questionnaire card from an `alnair/ask_user_question` request.
+ *
+ * The card is pushed to the tail of the open turn, like the permission card,
+ * because the question is the thing the user has to act on.
+ */
+export function questionFromRequest(acc: Acc, request: AskUserQuestionRequest, now: number): Acc {
+	const projected = questionFromPayload(request);
+	const part: QuestionPart = {
+		kind: 'question',
+		id: `ask-${request.toolCallId}`,
+		toolCallId: request.toolCallId,
+		mode: projected.mode,
+		resolved: false,
+		questions: projected.questions
+	};
+	return pushPart(acc, part, now);
+}
+
+/**
+ * Turn the UI's answers into the response the agent parses.
+ *
+ * The rules come from the Rust side (`question_view::build_accepted_response`):
+ * unanswered questions are omitted, a multi-select answer is one element per
+ * label, a freeform-only answer is `["Other"]` with the text in `annotations`,
+ * and `preview` is echoed back for single-select answers only.
+ */
+export function acceptedResponse(
+	questions: QuestionPrompt[],
+	answers: Record<string, QuestionAnswer>
+): AskUserQuestionResponse {
+	const payload: Record<string, string[]> = {};
+	const annotations: Record<string, QuestionAnnotation> = {};
+
+	for (const question of questions) {
+		const answer = answers[question.question];
+		if (!answer) continue;
+
+		const notes = answer.notes?.trim();
+		const hasNotes = notes !== undefined && notes.length > 0;
+		const labels = answer.labels;
+
+		if (labels.length === 0 && !hasNotes) continue;
+
+		// A freeform-only answer is the literal label `Other`.
+		payload[question.question] = labels.length === 0 ? ['Other'] : labels;
+
+		const preview =
+			question.multiSelect || labels.length !== 1
+				? undefined
+				: question.choices.find((choice) => choice.label === labels[0])?.preview;
+
+		if (preview !== undefined || hasNotes) {
+			annotations[question.question] = {
+				...(preview !== undefined ? { preview } : {}),
+				...(hasNotes ? { notes } : {})
+			};
+		}
+	}
+
+	return {
+		outcome: 'accepted',
+		answers: payload,
+		...(Object.keys(annotations).length > 0 ? { annotations } : {})
+	};
 }
 
 /** Project the wire's snake_case badge onto the view model's names. */

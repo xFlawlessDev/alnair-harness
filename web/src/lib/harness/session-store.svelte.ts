@@ -10,27 +10,36 @@
  * frames come from.
  */
 
+import { planQuestionTurn } from './fixtures.js';
 import {
 	initialPlan,
+	initialQuestionTranscript,
 	initialTranscript,
 	models,
+	parkedPlanQuestionRequest,
+	parkedQuestionRequest,
 	sessions,
 	workspace,
 	contextUsage
 } from './mock.js';
 import {
+	acceptedResponse,
 	closeTurn,
 	emptyAcc,
 	graphToState,
 	openUserTurn,
+	questionFromPayload,
+	questionFromRequest,
 	reduceAcpUpdate,
 	reduceExtUpdate,
+	resolveCardById,
 	sessionStatus
 } from './reducer.js';
 import type { Acc } from './reducer.js';
 import { turnForPrompt } from './fixtures.js';
 import type { ScriptedTurn } from './fixtures.js';
 import type { ExtSessionUpdate } from './types/ext.js';
+import type { AskUserQuestionRequest, AskUserQuestionResponse } from './types/ext.js';
 import type { SessionUpdate } from './types/acp.js';
 import type {
 	AvailableCommand,
@@ -39,6 +48,8 @@ import type {
 	ModelOption,
 	PermissionRequest,
 	PlanArtifact,
+	QuestionAnswer,
+	QuestionRequest,
 	Session,
 	TodoItem,
 	Turn,
@@ -61,6 +72,8 @@ export interface Transport {
 	stop(): void;
 	/** Answer a parked permission request. */
 	respond(toolCallId: string, optionId: string): void;
+	/** Answer a parked questionnaire. */
+	respondQuestions(toolCallId: string, response: AskUserQuestionResponse): void;
 }
 
 export interface SessionStore {
@@ -78,6 +91,8 @@ export interface SessionStore {
 	readonly busy: boolean;
 	/** A parked permission request, if the agent is waiting on the user. */
 	readonly permission: PermissionRequest | undefined;
+	/** A parked questionnaire, if the agent is waiting on the user. */
+	readonly question: QuestionRequest | undefined;
 	/** The plan artifact awaiting approval, if the agent asked for one. */
 	readonly plan: PlanArtifact | undefined;
 	/** The agent's plan, from the ACP `plan` update. */
@@ -93,6 +108,14 @@ export interface SessionStore {
 	clear(): void;
 	/** Answer the parked permission request. */
 	answerPermission(optionId: string): void;
+	/** Answer the parked questionnaire. */
+	answerQuestions(answers: Record<string, QuestionAnswer>): void;
+	/** Dismiss the questionnaire; the agent treats this as a non-error. */
+	cancelQuestions(): void;
+	/** Plan mode only: leave the interview and discuss instead. */
+	chatAboutQuestion(): void;
+	/** Plan mode only: accept what is answered and end the interview. */
+	skipQuestions(): void;
 }
 
 const STREAM_TICK_MS = 24;
@@ -146,6 +169,10 @@ export class FixtureTransport implements Transport {
 		// The scripted turn resumes on its own timer; a real transport would
 		// answer the JSON-RPC request here.
 	}
+
+	respondQuestions() {
+		// Same: the fixture script already carries the follow-up frames.
+	}
 }
 
 export class HarnessStore implements SessionStore {
@@ -159,8 +186,12 @@ export class HarnessStore implements SessionStore {
 	effort = $state('high');
 	busy = $state(false);
 
-	/** The folded transcript per session; only the first one is scripted. */
-	private accs = $state<Record<string, Acc>>({ [sessions[0].id]: initialTranscript() });
+	/** The folded transcript per session; only the first three are scripted. */
+	private accs = $state<Record<string, Acc>>({
+		[sessions[0].id]: initialTranscript(),
+		[sessions[1].id]: initialQuestionTranscript(),
+		[sessions[3].id]: initialQuestionTranscript(planQuestionTurn, sessions[3].id)
+	});
 
 	constructor(private transport: Transport = new FixtureTransport()) {}
 
@@ -190,6 +221,13 @@ export class HarnessStore implements SessionStore {
 		return Object.values(this.acc.permissions)[0];
 	}
 
+	get question(): QuestionRequest | undefined {
+		return this.questionRequest;
+	}
+
+	/** The `alnair/ask_user_question` request the agent is waiting on. */
+	private questionRequest = $state<QuestionRequest | undefined>(undefined);
+
 	get plan(): PlanArtifact | undefined {
 		return this.planArtifact;
 	}
@@ -210,6 +248,14 @@ export class HarnessStore implements SessionStore {
 		if (session?.modelId) this.model = session.modelId;
 		// Only the scripted session has a plan awaiting approval.
 		this.planArtifact = id === sessions[0].id ? initialPlan : undefined;
+		// The question sessions arrive already parked on a questionnaire, the
+		// same way a reattached viewer would learn it from the live stream.
+		this.questionRequest =
+			id === sessions[1].id
+				? questionFromPayload(parkedQuestionRequest)
+				: id === sessions[3].id
+					? questionFromPayload(parkedPlanQuestionRequest)
+					: undefined;
 	}
 
 	setModel(id: string) {
@@ -265,23 +311,48 @@ export class HarnessStore implements SessionStore {
 
 	/** Mark the in-thread card answered, so it stops offering buttons. */
 	private resolvePermissionCard(toolCallId: string) {
-		const id = `perm-${toolCallId}`;
-		const acc = this.acc;
-		const turn = acc.turns.find((candidate) => candidate.parts.some((part) => part.id === id));
-		if (!turn) return;
-		this.write({
-			...acc,
-			turns: acc.turns.map((candidate) =>
-				candidate.id === turn.id
-					? {
-							...candidate,
-							parts: candidate.parts.map((part) =>
-								part.id === id && part.kind === 'permission' ? { ...part, resolved: true } : part
-							)
-						}
-					: candidate
-			)
+		this.write(resolveCardById(this.acc, `perm-${toolCallId}`));
+	}
+
+	answerQuestions(answers: Record<string, QuestionAnswer>) {
+		const request = this.questionRequest;
+		if (!request) return;
+		const response = acceptedResponse(request.questions, answers);
+		this.transport.respondQuestions(request.toolCallId, response);
+		this.finishQuestion(request.toolCallId);
+	}
+
+	cancelQuestions() {
+		const request = this.questionRequest;
+		if (!request) return;
+		this.transport.respondQuestions(request.toolCallId, { outcome: 'cancelled' });
+		this.finishQuestion(request.toolCallId);
+	}
+
+	chatAboutQuestion() {
+		const request = this.questionRequest;
+		if (!request) return;
+		this.transport.respondQuestions(request.toolCallId, {
+			outcome: 'chat_about_this',
+			partialAnswers: {}
 		});
+		this.finishQuestion(request.toolCallId);
+	}
+
+	skipQuestions() {
+		const request = this.questionRequest;
+		if (!request) return;
+		this.transport.respondQuestions(request.toolCallId, {
+			outcome: 'skip_interview',
+			partialAnswers: {}
+		});
+		this.finishQuestion(request.toolCallId);
+	}
+
+	/** Clear the parked request and mark its card answered. */
+	private finishQuestion(toolCallId: string) {
+		this.questionRequest = undefined;
+		this.write(resolveCardById(this.acc, `ask-${toolCallId}`));
 	}
 
 	private receive(sessionId: string, frame: IncomingFrame) {
@@ -306,6 +377,13 @@ export class HarnessStore implements SessionStore {
 				title: 'Plan for approval',
 				markdown: String(frame.params.planContent ?? '')
 			};
+			return;
+		}
+
+		if (frame.method === 'alnair/ask_user_question') {
+			const request = frame.params as unknown as AskUserQuestionRequest;
+			this.questionRequest = questionFromPayload(request);
+			this.write(questionFromRequest(this.acc, request, Date.now()));
 			return;
 		}
 

@@ -8,6 +8,7 @@
 	import NoticeRow from './parts/notice-row.svelte';
 	import PartView from './parts/part-view.svelte';
 	import PermissionRow from './parts/permission-row.svelte';
+	import QuestionRow from './parts/question-row.svelte';
 	import { groupParts } from './segments.js';
 	import TurnMeta from './turn-meta.svelte';
 
@@ -65,6 +66,8 @@
 					<NoticeRow part={segment.part} />
 				{:else if segment.kind === 'permission'}
 					<PermissionRow part={segment.part} />
+				{:else if segment.kind === 'question'}
+					<QuestionRow part={segment.part} />
 				{:else if segment.part.text}
 					<Markdown content={segment.part.text} {streaming} />
 				{:else if streaming}

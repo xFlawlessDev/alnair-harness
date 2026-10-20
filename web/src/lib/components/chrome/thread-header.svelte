@@ -62,7 +62,9 @@
 			<PlanPopover {plan} />
 		{/if}
 
-		<TodoPopover {todos} />
+		{#if todos.length > 0}
+			<TodoPopover {todos} />
+		{/if}
 
 		{#if workspace.branch}
 			<span

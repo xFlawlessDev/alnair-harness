@@ -106,6 +106,7 @@ invented; where the wire carries less, the UI shows less.
 | `TerminalPart`   | `tool_call` kind `execute`, or `task_backgrounded` / `task_completed` |
 | `SubagentPart`   | `subagent_spawned` → `subagent_progress` → `subagent_finished`        |
 | `PermissionPart` | `pending_interaction` with `kind: permission`                         |
+| `QuestionPart`   | the `alnair/ask_user_question` reverse request                        |
 | `NoticePart`     | `retry_state`, `auto_compact_*`, `model_*`, `session_recap`           |
 | `TodoItem`       | the ACP `plan` update (which `todo_write` produces)                   |
 | `PlanArtifact`   | the `alnair/exit_plan_mode` reverse request                           |
@@ -132,17 +133,20 @@ one.
 delays. `FixtureTransport` replays them on a timer, so the UI exercises
 streaming rather than a single state flip.
 
-| Turn         | Covers                                                                                          |
-| ------------ | ----------------------------------------------------------------------------------------------- |
-| `foundation` | reasoning, plan, bash, text read, image read, edit, write, subagent, graph badge, plan approval |
-| `permission` | a parked `request_permission` mid-turn                                                          |
-| `cancelled`  | a backgrounded task, a monitor line, `StopReason::Cancelled`                                    |
-| `failed`     | `retry_state` retrying → failed                                                                 |
-| `compaction` | `auto_compact_started` → `auto_compact_completed`                                               |
+| Turn           | Covers                                                                                          |
+| -------------- | ----------------------------------------------------------------------------------------------- |
+| `foundation`   | reasoning, plan, bash, text read, image read, edit, write, subagent, graph badge, plan approval |
+| `permission`   | a parked `request_permission` mid-turn                                                          |
+| `question`     | a parked `ask_user_question` with two questions, one of them multi-select                       |
+| `planQuestion` | the same request in plan mode, with the two interview exits                                     |
+| `cancelled`    | a backgrounded task, a monitor line, `StopReason::Cancelled`                                    |
+| `failed`       | `retry_state` retrying → failed                                                                 |
+| `compaction`   | `auto_compact_started` → `auto_compact_completed`                                               |
 
-The initial transcript folds three of them so the first paint shows a completed
-turn, a cancelled one, and one parked on a permission request — the three states
-the header has to distinguish.
+The initial transcripts fold several of them so the first paint shows a
+completed turn, a cancelled one, one parked on a permission request, and two
+parked on questionnaires (one in plan mode) — the states the header and the
+composer have to distinguish.
 
 ## Layout
 
@@ -240,6 +244,13 @@ self-hosted in `static/fonts/`; nothing loads from a CDN.
 - **Permission** has exactly one set of buttons, in the banner above the
   composer. The in-thread card is a marker, not a control: two sets for one
   request invites answering it twice.
+- **Questions** follow the same rule. The panel above the composer collects the
+  answers; each question is a list of choices plus a freeform line, and its
+  buttons follow the request's `mode` (`default`: Accept/Cancel; `plan`: also
+  Chat about this and Skip interview). The answers are shaped exactly as the
+  agent parses them: unanswered questions omitted, multi-select as one element
+  per label, a freeform-only answer as the literal `Other` with the text in
+  `annotations`, and `preview` echoed only for single-select picks.
 - **Bubble** has one extra variant, `paper`, for the person's turn, because the
   component paints its child through variant selectors.
 - **Markdown** renders through `svelte-streamdown` with a theme re-pointed at our
@@ -251,9 +262,9 @@ self-hosted in `static/fonts/`; nothing loads from a CDN.
 - **The socket.** `FixtureTransport` is the only transport. The next step is a
   `WebSocketTransport` against `alnair agent serve` (`ws://127.0.0.1:2419/ws`),
   implementing the same interface.
-- **A `plan_approval` and `question` card.** `pending_interaction` can carry
-  those kinds; today the header shows "needs input" but only the permission kind
-  has a card.
+- **A `plan_approval` card.** `pending_interaction` can carry that kind; today
+  the header shows "needs input" and the plan popover shows the artifact, but
+  there is no in-thread card for it.
 - **The prompt queue** (`alnair/queue/*`) and **slash commands** beyond the
   advertised list.
 - **Session replay.** `alnair/session/updates` returns a stored transcript, and

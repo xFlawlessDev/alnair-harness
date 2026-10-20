@@ -345,21 +345,72 @@ export interface ExitPlanModeRequest {
 export type ExitPlanModeResponse =
 	{ outcome: 'approved' } | { outcome: 'cancelled'; feedback?: string } | { outcome: 'abandoned' };
 
-/** `alnair/ask_user_question` — a reverse request, answered with the choice. */
+/**
+ * `alnair/ask_user_question` — a reverse request carrying the questionnaire.
+ *
+ * Source: `alnair-tools/src/implementations/alnair/ask_user_question/types.rs`
+ * (`#[serde(rename_all = "camelCase")]`, so this one *is* camelCase) and
+ * `mod.rs` for `Question` / `QuestionOption`.
+ */
+export interface QuestionOption {
+	/** Option text shown to the user. A few words at most. */
+	label: string;
+	/** What picking this option means or implies. Required on the wire. */
+	description: string;
+	/** Verbatim preview, echoed back for single-select answers. */
+	preview?: string;
+	/** Opaque id, hidden from the model; Alnair leaves it unset. */
+	id?: string;
+}
+
+export interface Question {
+	question: string;
+	options: QuestionOption[];
+	/** Let the user pick more than one option (default false). */
+	multiSelect?: boolean;
+	id?: string;
+}
+
+/**
+ * `default` offers Accept and Cancel; `plan` adds Chat about this and
+ * Skip interview.
+ */
+export type AskUserQuestionMode = 'default' | 'plan';
+
 export interface AskUserQuestionRequest {
 	sessionId: string;
 	toolCallId: string;
-	questions: {
-		question: string;
-		header?: string;
-		multiSelect?: boolean;
-		options: { label: string; description?: string }[];
-	}[];
+	questions: Question[];
+	mode: AskUserQuestionMode;
 }
 
-export interface AskUserQuestionResponse {
-	answers: { question: string; choices: string[] }[];
+/** Extra context carried alongside a selected label. */
+export interface QuestionAnnotation {
+	/** The selected option's `preview`, single-select only. */
+	preview?: string;
+	/** Free text the user typed into the freeform input. */
+	notes?: string;
 }
+
+/**
+ * The answer, internally tagged on `outcome`.
+ *
+ * Rules the agent relies on:
+ * - Only answered questions appear; unanswered ones are omitted.
+ * - A multi-select answer carries one element per label.
+ * - A freeform-only answer is `["Other"]` with the text in `annotations[q].notes`.
+ * - `ChatAboutThis` and `SkipInterview` are plan mode only.
+ */
+export type AskUserQuestionResponse =
+	| {
+			outcome: 'accepted';
+			/** Keyed by the question's exact text. */
+			answers: Record<string, string[]>;
+			annotations?: Record<string, QuestionAnnotation>;
+	  }
+	| { outcome: 'chat_about_this'; partialAnswers?: Record<string, string> }
+	| { outcome: 'skip_interview'; partialAnswers?: Record<string, string> }
+	| { outcome: 'cancelled' };
 
 /** `alnair/queue/*` — the prompt queue the TUI shows above the input. */
 export interface QueuedPrompt {

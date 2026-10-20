@@ -4,7 +4,8 @@ export type TurnSegment =
 	| { kind: 'trace'; parts: TurnPart[] }
 	| { kind: 'text'; part: Extract<TurnPart, { kind: 'text' }> }
 	| { kind: 'notice'; part: Extract<TurnPart, { kind: 'notice' }> }
-	| { kind: 'permission'; part: Extract<TurnPart, { kind: 'permission' }> };
+	| { kind: 'permission'; part: Extract<TurnPart, { kind: 'permission' }> }
+	| { kind: 'question'; part: Extract<TurnPart, { kind: 'question' }> };
 
 const TRACE_KINDS = new Set<TurnPart['kind']>([
 	'reasoning',
@@ -48,6 +49,7 @@ export function groupParts(parts: TurnPart[]): TurnSegment[] {
 		if (part.kind === 'text') segments.push({ kind: 'text', part });
 		else if (part.kind === 'notice') segments.push({ kind: 'notice', part });
 		else if (part.kind === 'permission') segments.push({ kind: 'permission', part });
+		else if (part.kind === 'question') segments.push({ kind: 'question', part });
 	}
 
 	flush();

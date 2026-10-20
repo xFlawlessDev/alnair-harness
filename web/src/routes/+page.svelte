@@ -2,6 +2,7 @@
 	import { onMount } from 'svelte';
 	import ShieldQuestionIcon from '@lucide/svelte/icons/shield-question';
 	import Composer from '#lib/components/composer/composer.svelte';
+	import QuestionPanel from '#lib/components/composer/question-panel.svelte';
 	import Inspector from '#lib/components/inspector/inspector.svelte';
 	import SessionSidebar from '#lib/components/chrome/session-sidebar.svelte';
 	import ThreadHeader from '#lib/components/chrome/thread-header.svelte';
@@ -59,7 +60,20 @@
 				/>
 			</div>
 
-			{#if store.permission}
+			{#if store.question}
+				{@const request = store.question}
+				<div class="mx-auto w-full max-w-3xl px-6 pb-2">
+					{#key request.toolCallId}
+						<QuestionPanel
+							{request}
+							onanswer={(answers) => store.answerQuestions(answers)}
+							oncancel={() => store.cancelQuestions()}
+							onchat={() => store.chatAboutQuestion()}
+							onskip={() => store.skipQuestions()}
+						/>
+					{/key}
+				</div>
+			{:else if store.permission}
 				{@const request = store.permission}
 				<div class="mx-auto w-full max-w-3xl px-6">
 					<div

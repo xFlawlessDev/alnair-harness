@@ -636,6 +636,139 @@ export const cancelledTurn: ScriptedTurn = {
 };
 
 /**
+ * A questionnaire: the agent asks before committing to an approach. The
+ * reverse request is not a transcript update, so the store renders it from the
+ * live frame while the script waits for the answer.
+ */
+export const questionTurn: ScriptedTurn = {
+	prompt: 'Which terminals should the setup guide cover?',
+	stopReason: 'end_turn',
+	steps: [
+		userChunk(S, 'Which terminals should the setup guide cover?'),
+		thoughtChunk(
+			S,
+			'The answer changes the shape of the guide, so ask before writing rather than guessing.',
+			320
+		),
+		toolCall(
+			S,
+			{
+				toolCallId: 'call_ask',
+				title: 'Ask the user which terminals to cover',
+				kind: 'think',
+				status: 'pending'
+			},
+			240
+		),
+		{
+			delay: 220,
+			method: 'alnair/ask_user_question',
+			params: {
+				sessionId: S,
+				toolCallId: 'call_ask',
+				mode: 'default',
+				questions: [
+					{
+						question: 'Which terminals should the guide cover first?',
+						multiSelect: true,
+						options: [
+							{
+								label: 'Windows Terminal',
+								description: 'Ships Shift+Enter natively through the console key record.'
+							},
+							{
+								label: 'VTE',
+								description: 'GNOME Terminal, Tilix, and friends. No modifier on the wire.'
+							},
+							{
+								label: 'xterm.js',
+								description: 'The browser embed; reports the modifier over the protocol.'
+							},
+							{
+								label: 'Apple Terminal',
+								description: 'Needs the CoreGraphics poll to recover Shift+Enter.'
+							}
+						]
+					},
+					{
+						question: 'Should the guide include a per-terminal troubleshooting table?',
+						multiSelect: false,
+						options: [
+							{
+								label: 'Yes, include it',
+								description: 'One row per terminal with the chord that actually arrives.',
+								preview: '| Terminal | Shift+Enter |\n| --- | --- |\n| Windows Terminal | yes |'
+							},
+							{
+								label: 'No, keep it short',
+								description: 'A paragraph and the setup steps only.'
+							}
+						]
+					}
+				]
+			}
+		},
+		extUpdate(S, { sessionUpdate: 'interaction_resolved', tool_call_id: 'call_ask' }, 900),
+		toolUpdate(S, 'call_ask', { status: 'completed' }, 200),
+		agentChunk(S, 'Covered Windows Terminal, VTE, and xterm.js, with the table.', 360),
+		extUpdate(
+			S,
+			{ sessionUpdate: 'turn_completed', prompt_id: 'p-3', stop_reason: 'end_turn' },
+			120
+		)
+	]
+};
+
+/**
+ * A plan-mode questionnaire: the same request, plus the two interview exits.
+ */
+export const planQuestionTurn: ScriptedTurn = {
+	prompt: 'Ask me what the restyle should cover.',
+	stopReason: 'end_turn',
+	steps: [
+		userChunk(S, 'Ask me what the restyle should cover.'),
+		thoughtChunk(S, 'Plan mode: ask what to include before writing the plan file.', 300),
+		toolCall(
+			S,
+			{
+				toolCallId: 'call_ask_plan',
+				title: 'Ask what the restyle should cover',
+				kind: 'think',
+				status: 'pending'
+			},
+			220
+		),
+		{
+			delay: 200,
+			method: 'alnair/ask_user_question',
+			params: {
+				sessionId: S,
+				toolCallId: 'call_ask_plan',
+				mode: 'plan',
+				questions: [
+					{
+						question: 'Which surfaces should the restyle touch?',
+						multiSelect: true,
+						options: [
+							{ label: 'Tool rows', description: 'Accent and spacing on the trace lines.' },
+							{ label: 'Composer', description: 'Input group, model picker, send button.' },
+							{ label: 'Inspector', description: 'Graph panel and file list.' }
+						]
+					}
+				]
+			}
+		},
+		extUpdate(S, { sessionUpdate: 'interaction_resolved', tool_call_id: 'call_ask_plan' }, 800),
+		toolUpdate(S, 'call_ask_plan', { status: 'completed' }, 200),
+		extUpdate(
+			S,
+			{ sessionUpdate: 'turn_completed', prompt_id: 'p-6', stop_reason: 'end_turn' },
+			120
+		)
+	]
+};
+
+/**
  * A provider failure: retries, then a terminal error. The agent never sends
  * `turn_completed`, so the UI must close the turn from the prompt response.
  */
@@ -722,6 +855,8 @@ export const compactionTurn: ScriptedTurn = {
 export const scriptedTurns: ScriptedTurn[] = [
 	foundationTurn,
 	permissionTurn,
+	questionTurn,
+	planQuestionTurn,
 	cancelledTurn,
 	failedTurn,
 	compactionTurn
