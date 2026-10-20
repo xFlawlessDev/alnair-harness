@@ -38,21 +38,22 @@
 			</Trace.Line>
 		</Trace.CollapsibleTrigger>
 		<Trace.CollapsibleContent class="border-line/80">
-			<ol class="flex flex-col gap-2.5 pl-1">
-				{#each part.questions as question (question.question)}
-					<li class="flex flex-col gap-1">
-						<p class="text-[12px] leading-snug text-ink-secondary">{question.question}</p>
-						<ul class="flex flex-wrap gap-1">
-							{#each question.choices as choice (choice.label)}
-								<li
-									class="rounded-sm border border-line bg-paper-card px-1.5 py-0.5 text-[11px] text-ink-tertiary"
-								>
-									{choice.label}
-								</li>
-							{/each}
-						</ul>
+			<!-- One line per question, not the whole questionnaire: the choices
+			     belong in the panel above the composer, which shows them one at
+			     a time. -->
+			<ol class="flex flex-col gap-1 pl-1">
+				{#each part.questions as question, position (question.question)}
+					<li class="flex items-baseline gap-1.5 text-[11.5px] leading-snug">
+						<span class="tabular shrink-0 font-mono text-[9.5px] text-ink-tertiary">
+							{position + 1}.
+						</span>
+						<span class="min-w-0 text-ink-secondary">{question.question}</span>
 						{#if question.multiSelect}
-							<p class="font-mono text-[9.5px] text-ink-tertiary/70">multi-select</p>
+							<span
+								class="shrink-0 rounded-sm bg-paper-card px-1 font-mono text-[9px] text-ink-tertiary"
+							>
+								multi
+							</span>
 						{/if}
 					</li>
 				{/each}

@@ -62,6 +62,17 @@ describe('question draft', () => {
 		const typed = setNotes(emptyDraft([single]), single, 'typed');
 		expect(isComplete(typed, [single])).toBe(true);
 	});
+
+	it('keeps a later answer intact when an earlier one is revised', () => {
+		// The panel shows one question at a time; moving between them must not
+		// disturb a draft the reader already filled in.
+		let draft = emptyDraft([single, multi]);
+		draft = toggleChoice(draft, single, 'A');
+		draft = toggleChoice(draft, multi, 'B');
+		draft = toggleChoice(draft, single, 'B');
+		expect(draft[single.question].labels).toEqual(['B']);
+		expect(draft[multi.question].labels).toEqual(['B']);
+	});
 });
 
 describe('acceptedResponse', () => {

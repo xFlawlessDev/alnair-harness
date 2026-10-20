@@ -244,8 +244,10 @@ self-hosted in `static/fonts/`; nothing loads from a CDN.
 - **Permission** has exactly one set of buttons, in the banner above the
   composer. The in-thread card is a marker, not a control: two sets for one
   request invites answering it twice.
-- **Questions** follow the same rule. The panel above the composer collects the
-  answers; each question is a list of choices plus a freeform line, and its
+- **Questions** follow the same rule. The panel above the composer shows one
+  question at a time, with Back and Next between them and a tick per question;
+  the draft survives the move, so an earlier answer can be revised after seeing
+  a later one. Each question is a list of choices plus a freeform line, and the
   buttons follow the request's `mode` (`default`: Accept/Cancel; `plan`: also
   Chat about this and Skip interview). The answers are shaped exactly as the
   agent parses them: unanswered questions omitted, multi-select as one element
