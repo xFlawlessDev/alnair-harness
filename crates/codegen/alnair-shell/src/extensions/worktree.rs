@@ -393,7 +393,10 @@ pub async fn handle(
         }
         "alnair/git/worktree/db/stats" => {
             let result = ops
-                .dispatch(&alnair_workspace::workspace_ops::WorktreeDbStatsReq {}, None)
+                .dispatch(
+                    &alnair_workspace::workspace_ops::WorktreeDbStatsReq {},
+                    None,
+                )
                 .await
                 .map_err(|e| acp::Error::internal_error().data(e.to_string()))?;
             to_response(Ok(result))

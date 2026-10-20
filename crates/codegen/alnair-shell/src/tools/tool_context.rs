@@ -126,8 +126,8 @@ impl ToolContext {
             is_turn_active: None,
             monitor_event_buffer: None,
             auto_wake_delivered: None,
-            task_output_tool_name: alnair_tools::reminders::task_completion::DEFAULT_TASK_OUTPUT_TOOL
-                .to_string(),
+            task_output_tool_name:
+                alnair_tools::reminders::task_completion::DEFAULT_TASK_OUTPUT_TOOL.to_string(),
             auto_wake_enabled: true,
             goal_loop_active_gate: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             blocking_wait_depth: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
@@ -160,8 +160,8 @@ impl ToolContext {
             is_turn_active: None,
             monitor_event_buffer: None,
             auto_wake_delivered: None,
-            task_output_tool_name: alnair_tools::reminders::task_completion::DEFAULT_TASK_OUTPUT_TOOL
-                .to_string(),
+            task_output_tool_name:
+                alnair_tools::reminders::task_completion::DEFAULT_TASK_OUTPUT_TOOL.to_string(),
             auto_wake_enabled: true,
             goal_loop_active_gate: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             blocking_wait_depth: Arc::new(std::sync::atomic::AtomicUsize::new(0)),

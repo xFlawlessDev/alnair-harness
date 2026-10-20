@@ -2,12 +2,6 @@ use std::collections::VecDeque;
 use std::io::{self, stdout};
 use std::time::{Duration, Instant};
 
-use crossterm::ExecutableCommand;
-use crossterm::event::{
-    self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEvent, KeyModifiers,
-    MouseButton, MouseEventKind,
-};
-use crossterm::terminal::{self, EnterAlternateScreen, LeaveAlternateScreen};
 use alnair_tui::scrollback::text_selection::{
     PersistentTextSelection, RangeHit, ResolvedSelectionModel, SelectionEndpoint, SelectionOrigin,
     configured_word_separators, render_persistent_selection_overlay, url_range_at_col,
@@ -15,6 +9,12 @@ use alnair_tui::scrollback::text_selection::{
 };
 use alnair_tui::scrollback::types::slice_display_cols;
 use alnair_tui::scrollback::{RenderBlock, ScratchBuffer, ScrollbackPane, ScrollbackState};
+use crossterm::ExecutableCommand;
+use crossterm::event::{
+    self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEvent, KeyModifiers,
+    MouseButton, MouseEventKind,
+};
+use crossterm::terminal::{self, EnterAlternateScreen, LeaveAlternateScreen};
 use ratatui::Terminal;
 use ratatui::backend::CrosstermBackend;
 use ratatui::buffer::Buffer;

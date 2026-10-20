@@ -188,7 +188,9 @@ struct MockCoordinator {
     /// configured role pair commits; tests override it to exercise the
     /// describe-driven fail-open branches.
     describe_outcome: StdArc<
-        parking_lot::Mutex<alnair_tools::implementations::alnair::task::types::SubagentDescribeOutcome>,
+        parking_lot::Mutex<
+            alnair_tools::implementations::alnair::task::types::SubagentDescribeOutcome,
+        >,
     >,
     describe_calls: DescribeCallLog,
 }
@@ -410,7 +412,9 @@ fn seed_channel_with_acks(
     actor: &SessionActor,
     cmds: Vec<UpdateGoalInput>,
 ) -> Vec<
-    tokio::sync::oneshot::Receiver<alnair_tools::implementations::alnair::update_goal::UpdateGoalAck>,
+    tokio::sync::oneshot::Receiver<
+        alnair_tools::implementations::alnair::update_goal::UpdateGoalAck,
+    >,
 > {
     let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
     *actor.goal_update_rx.borrow_mut() = Some(rx);
@@ -2451,7 +2455,9 @@ async fn pending_queue_overflow_acks_all_as_deferred_and_caps_at_pending_queue_c
 }
 #[test]
 fn render_ack_classifier_achieved_is_success() {
-    use alnair_tools::implementations::alnair::update_goal::{UpdateGoalAck, render_ack_into_output};
+    use alnair_tools::implementations::alnair::update_goal::{
+        UpdateGoalAck, render_ack_into_output,
+    };
     let out = render_ack_into_output(UpdateGoalAck::ClassifierAchieved {
         details_path: "/tmp/details.md".to_string(),
     })
@@ -2462,7 +2468,9 @@ fn render_ack_classifier_achieved_is_success() {
 }
 #[test]
 fn render_ack_classifier_fail_open_achieved_clarifies_no_verdict() {
-    use alnair_tools::implementations::alnair::update_goal::{UpdateGoalAck, render_ack_into_output};
+    use alnair_tools::implementations::alnair::update_goal::{
+        UpdateGoalAck, render_ack_into_output,
+    };
     let out =
         render_ack_into_output(UpdateGoalAck::ClassifierFailOpenAchieved { reason: "timeout" })
             .expect("FailOpen must be Ok (treated as achieved)");
@@ -2473,7 +2481,9 @@ fn render_ack_classifier_fail_open_achieved_clarifies_no_verdict() {
 }
 #[test]
 fn render_ack_not_achieved_is_tool_error_with_correct_code() {
-    use alnair_tools::implementations::alnair::update_goal::{UpdateGoalAck, render_ack_into_output};
+    use alnair_tools::implementations::alnair::update_goal::{
+        UpdateGoalAck, render_ack_into_output,
+    };
     let err = render_ack_into_output(UpdateGoalAck::ClassifierNotAchieved {
         details_path: "/tmp/details.md".to_string(),
         attempt: 2,
@@ -2484,7 +2494,9 @@ fn render_ack_not_achieved_is_tool_error_with_correct_code() {
 }
 #[test]
 fn render_ack_cap_reached_is_tool_error_with_cap_code() {
-    use alnair_tools::implementations::alnair::update_goal::{UpdateGoalAck, render_ack_into_output};
+    use alnair_tools::implementations::alnair::update_goal::{
+        UpdateGoalAck, render_ack_into_output,
+    };
     let err = render_ack_into_output(UpdateGoalAck::ClassifierCapReached {
         details_path: "/tmp/details.md".to_string(),
         attempt: 3,
@@ -2505,7 +2517,9 @@ fn tool_error_code(err: &alnair_tool_runtime::ToolError) -> &str {
 }
 #[test]
 fn render_ack_rejected_uses_reason_error_code() {
-    use alnair_tools::implementations::alnair::update_goal::{UpdateGoalAck, render_ack_into_output};
+    use alnair_tools::implementations::alnair::update_goal::{
+        UpdateGoalAck, render_ack_into_output,
+    };
     for (reason, want_code) in all_reject_reasons() {
         let err = render_ack_into_output(UpdateGoalAck::Rejected {
             reason: *reason,
@@ -2803,13 +2817,15 @@ async fn resolve_role_override_toolset_incapable_fails_open() {
     let local = tokio::task::LocalSet::new();
     local
         .run_until(async {
-            let mut summary = alnair_tools::implementations::alnair::task::types::SubagentTypeSummary {
-                can_read: true,
-                ..Default::default()
-            };
-            summary
-                .tool_names
-                .insert(alnair_tools::types::tool::ToolKind::Read, "read_file".into());
+            let mut summary =
+                alnair_tools::implementations::alnair::task::types::SubagentTypeSummary {
+                    can_read: true,
+                    ..Default::default()
+                };
+            summary.tool_names.insert(
+                alnair_tools::types::tool::ToolKind::Read,
+                "read_file".into(),
+            );
             let (ov, log) = run_resolve(
                 &role_pair("good-model", "general-purpose"),
                 RoleCapability::Skeptic,

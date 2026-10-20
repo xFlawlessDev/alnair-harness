@@ -135,7 +135,10 @@ impl LeaderStdioClient {
             // sibling `.lock` (leader.sock -> leader.lock), and the spawned
             // leader subprocess inherits/forwards this env var, so every
             // (re-)elected leader binds the same sandboxed path.
-            .env("ALNAIR_LEADER_SOCKET", home.join(".alnair").join("leader.sock"))
+            .env(
+                "ALNAIR_LEADER_SOCKET",
+                home.join(".alnair").join("leader.sock"),
+            )
             .env("ALNAIR_CODE_BASE_URL", server.url())
             .env("ALNAIR_API_BASE_URL", server.url())
             .env("ALNAIR_API_KEY", "test-key-for-ci")
@@ -345,5 +348,6 @@ pub async fn wait_for_replay_notifications(
 }
 
 pub fn leader_log(home: &Path) -> String {
-    std::fs::read_to_string(home.join(".alnair").join("logs").join("leader.log")).unwrap_or_default()
+    std::fs::read_to_string(home.join(".alnair").join("logs").join("leader.log"))
+        .unwrap_or_default()
 }

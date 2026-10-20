@@ -5,9 +5,9 @@
 //! discovered item, toggle which to import, and confirm. Only checked items
 //! are written to `.alnair/config.toml`.
 
-use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use alnair_shell::claude_import::{ImportPlan, ImportableItem, PathKind, find_project_root};
 use alnair_workspace::permission::types::RuleAction;
+use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};

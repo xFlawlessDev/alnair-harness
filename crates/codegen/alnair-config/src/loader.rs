@@ -123,7 +123,10 @@ pub struct ManagedConfigLayer {
 /// Absent layers are skipped; unparsable layers are skipped with a warning.
 /// One bad layer never drops the others.
 pub fn managed_config_layers() -> Vec<ManagedConfigLayer> {
-    managed_config_layers_at(system_config_dir().as_deref(), user_alnair_home().as_deref())
+    managed_config_layers_at(
+        system_config_dir().as_deref(),
+        user_alnair_home().as_deref(),
+    )
 }
 
 /// [`managed_config_layers`] with explicit directories.

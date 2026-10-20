@@ -17,9 +17,9 @@ use crate::scrollback::render::ScratchBuffer;
 use crate::views::prompt_widget::PromptWidget;
 use crate::views::welcome::WelcomePromptFocus;
 use agent_client_protocol as acp;
+use alnair_acp_lib::AcpAgentTx;
 use crossterm::event::{Event, KeyCode, KeyEventKind, MouseButton, MouseEventKind};
 use indexmap::IndexMap;
-use alnair_acp_lib::AcpAgentTx;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -292,7 +292,7 @@ impl PlatformLogin {
         self.0.vendor()
     }
     /// Console host shown in the paste-box copy. Every API-key registry row
-    /// carries one (pinned by a alnair-models registry test); the fallback is
+    /// carries one (pinned by an alnair-models registry test); the fallback is
     /// unreachable copy, not control flow.
     pub fn console_host(self) -> &'static str {
         self.0.console_host().unwrap_or("the provider console")
@@ -377,7 +377,8 @@ pub fn pending_menu_items(
     use alnair_shell::agent::auth_method::AuthMethodKind;
     let mut items: Vec<PendingMenuItem> = Vec::new();
     for method in auth_methods {
-        if let Some(api) = alnair_shell::agent::custom_providers::picker_api(method.id().0.as_ref()) {
+        if let Some(api) = alnair_shell::agent::custom_providers::picker_api(method.id().0.as_ref())
+        {
             items.push(PendingMenuItem::CustomProvider {
                 api,
                 label: method.name().to_string(),
@@ -7364,7 +7365,9 @@ pub(crate) mod tests {
     #[test]
     fn login_picker_has_choice_only_with_multiple_login_rows() {
         assert!(login_picker_has_choice(&fresh_user_auth_methods()));
-        let kimi_only = vec![alnair_shell::agent::auth_method::kimi_code_auth_method(None)];
+        let kimi_only = vec![alnair_shell::agent::auth_method::kimi_code_auth_method(
+            None,
+        )];
         assert!(!login_picker_has_choice(&kimi_only));
         assert!(!login_picker_has_choice(&[]));
     }
@@ -7438,7 +7441,9 @@ pub(crate) mod tests {
             request_seq: 1,
             handle: None,
             auth_url: None,
-            mode: AuthMode::ApiKeyEntry(PlatformLogin(alnair_shell::models::PlatformId::MoonshotCn)),
+            mode: AuthMode::ApiKeyEntry(PlatformLogin(
+                alnair_shell::models::PlatformId::MoonshotCn,
+            )),
         };
         let outcome = app.handle_input(&key_event(KeyCode::Esc, KeyModifiers::NONE));
         assert!(
@@ -7456,7 +7461,9 @@ pub(crate) mod tests {
             request_seq: 1,
             handle: None,
             auth_url: None,
-            mode: AuthMode::ApiKeyEntry(PlatformLogin(alnair_shell::models::PlatformId::MoonshotAi)),
+            mode: AuthMode::ApiKeyEntry(PlatformLogin(
+                alnair_shell::models::PlatformId::MoonshotAi,
+            )),
         };
         // Empty input: Enter is a no-op.
         let outcome = app.handle_input(&key_event(KeyCode::Enter, KeyModifiers::NONE));

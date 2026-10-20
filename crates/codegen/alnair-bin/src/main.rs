@@ -25,7 +25,6 @@ mod jemalloc_malloc_conf {
     #[unsafe(export_name = "_rjem_malloc_conf")]
     static MALLOC_CONF: MallocConfPtr = MallocConfPtr(CONF.as_ptr());
 }
-use anyhow::Result;
 use alnair_shell::agent::app::{run_leader, run_stdio_agent};
 use alnair_shell::agent::config::Config as AgentConfig;
 use alnair_shell::leader::{
@@ -39,6 +38,7 @@ use alnair_tui::app::{
 };
 use alnair_tui::client_identity::PAGER_CLIENT_VERSION;
 use alnair_update::{UpdateConfig, auto_update, enforce_minimum_version_or_exit};
+use anyhow::Result;
 use std::env;
 use std::net::SocketAddr;
 use tokio_util::sync::CancellationToken;
@@ -238,7 +238,7 @@ async fn kill_leaders() -> Result<()> {
         if !alnair_shell::util::is_alnair_process(pid) {
             if let Some(ref lock) = d.lock_path {
                 alnair_tui::best_effort_stderr::eprint_line(&format!(
-                    "  PID {pid} is not a alnair process, removing stale lock"
+                    "  PID {pid} is not an alnair process, removing stale lock"
                 ));
                 let _ = std::fs::remove_file(lock);
                 cleaned += 1;
@@ -258,7 +258,9 @@ async fn kill_leaders() -> Result<()> {
         killed += 1;
     }
     if killed > 0 {
-        alnair_tui::best_effort_stderr::eprint_line(&format!("Killed {killed} leader process(es)."));
+        alnair_tui::best_effort_stderr::eprint_line(&format!(
+            "Killed {killed} leader process(es)."
+        ));
     } else if cleaned > 0 {
         alnair_tui::best_effort_stderr::eprint_line(&format!(
             "No live leader processes found (cleaned up {cleaned} stale lock(s))."
@@ -1194,7 +1196,9 @@ fn main() {
     if let Some(code) = alnair_tui::app::mermaid_worker::maybe_run_render_subprocess() {
         std::process::exit(code);
     }
-    alnair_tui::memory_trace::start(alnair_shell::util::alnair_home::alnair_home().join("memtrace"));
+    alnair_tui::memory_trace::start(
+        alnair_shell::util::alnair_home::alnair_home().join("memtrace"),
+    );
     raise_fd_limit();
     if let Err(e) = alnair_config::validate_requirements() {
         eprintln!("Couldn't start Alnair: {e}");

@@ -78,7 +78,7 @@ pub struct UiConfig {
     /// `hold`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub voice_capture_mode: Option<String>,
-    /// Speech-to-text language preference for voice dictation. A Alnair STT
+    /// Speech-to-text language preference for voice dictation. An Alnair STT
     /// catalog code (`en`, `es`, `ja`, … — see xAI STT supported languages) or
     /// `auto` (system locale, resolved at connect). Unset leaves
     /// `[voice].language` / default `en`; when set it overrides

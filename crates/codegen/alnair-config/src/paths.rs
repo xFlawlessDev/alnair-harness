@@ -53,13 +53,18 @@ pub fn alnair_home() -> PathBuf {
 /// mistake a project's `.alnair` tree for the user-global one when no home resolves.
 pub fn user_alnair_home() -> Option<PathBuf> {
     #[allow(deprecated)]
-    let resolvable = std::env::var_os("ALNAIR_SHARE_DIR").is_some() || std::env::home_dir().is_some();
+    let resolvable =
+        std::env::var_os("ALNAIR_SHARE_DIR").is_some() || std::env::home_dir().is_some();
     resolvable.then(alnair_home)
 }
 
 /// Canonical alnair application path: `$ALNAIR_SHARE_DIR/bin/alnair` (Unix) or `alnair.exe` (Windows).
 pub fn alnair_application() -> PathBuf {
-    let name = if cfg!(windows) { "alnair.exe" } else { "alnair" };
+    let name = if cfg!(windows) {
+        "alnair.exe"
+    } else {
+        "alnair"
+    };
     alnair_home().join("bin").join(name)
 }
 

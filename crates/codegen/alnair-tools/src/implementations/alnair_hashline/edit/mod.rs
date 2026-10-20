@@ -480,9 +480,10 @@ mod tests {
             }],
         };
 
-        let result = alnair_tool_runtime::Tool::run(&tool, test_ctx(resources.into_shared()), input)
-            .await
-            .unwrap();
+        let result =
+            alnair_tool_runtime::Tool::run(&tool, test_ctx(resources.into_shared()), input)
+                .await
+                .unwrap();
 
         match result {
             SearchReplaceOutput::FileNotFound(msg) => {
@@ -517,9 +518,10 @@ mod tests {
             ],
         };
 
-        let result = alnair_tool_runtime::Tool::run(&tool, test_ctx(resources.into_shared()), input)
-            .await
-            .unwrap();
+        let result =
+            alnair_tool_runtime::Tool::run(&tool, test_ctx(resources.into_shared()), input)
+                .await
+                .unwrap();
 
         assert!(
             matches!(
@@ -555,9 +557,10 @@ mod tests {
             }],
         };
 
-        let result = alnair_tool_runtime::Tool::run(&tool, test_ctx(resources.into_shared()), input)
-            .await
-            .unwrap();
+        let result =
+            alnair_tool_runtime::Tool::run(&tool, test_ctx(resources.into_shared()), input)
+                .await
+                .unwrap();
 
         assert!(
             matches!(

@@ -798,10 +798,10 @@ impl QuestionViewState {
     pub fn build_accepted_response(
         &self,
     ) -> alnair_tools::implementations::alnair::ask_user_question::AskUserQuestionExtResponse {
-        use indexmap::IndexMap;
         use alnair_tools::implementations::alnair::ask_user_question::{
             AskUserQuestionExtResponse, QuestionAnnotation,
         };
+        use indexmap::IndexMap;
         use std::collections::HashMap;
 
         let mut answers = IndexMap::new();

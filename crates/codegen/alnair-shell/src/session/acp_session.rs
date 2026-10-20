@@ -795,7 +795,8 @@ pub(crate) struct SessionActor {
     /// `None` when no plugin registry was supplied at spawn time.
     /// Wrapped in `RefCell` for mid-session reload from `&self` methods.
     /// Safe: session actor is single-threaded (LocalSet), no concurrent access.
-    pub(crate) hook_registry: std::cell::RefCell<Option<Arc<alnair_hooks::discovery::HookRegistry>>>,
+    pub(crate) hook_registry:
+        std::cell::RefCell<Option<Arc<alnair_hooks::discovery::HookRegistry>>>,
     /// Client hooks from `session/new` `_meta["alnair/hooks"]`; gated in
     /// [`crate::session::acp_session::hooks`]. `RefCell` so `load_session` reconnect can
     /// replace the set on the live actor (see `SessionCommand::SetClientHooks`).
@@ -1022,7 +1023,9 @@ impl SessionActor {
         &self,
         tool_names: &[String],
     ) -> slash_commands::CommandAvailability {
-        use alnair_tools::implementations::memory::{MEMORY_GET_TOOL_NAME, MEMORY_SEARCH_TOOL_NAME};
+        use alnair_tools::implementations::memory::{
+            MEMORY_GET_TOOL_NAME, MEMORY_SEARCH_TOOL_NAME,
+        };
         let memory_read_registered = tool_names
             .iter()
             .any(|n| n == MEMORY_SEARCH_TOOL_NAME || n == MEMORY_GET_TOOL_NAME);
@@ -1193,7 +1196,9 @@ fn load_system_prompt_from_dir(session_dir: &std::path::Path) -> Option<String> 
 ///
 /// Returns `None` for sessions without a persisted context.
 #[expect(dead_code, reason = "API for future viewers/debug tools")]
-pub(crate) fn load_prompt_context(session_info: &SessionInfo) -> Option<alnair_agent::PromptContext> {
+pub(crate) fn load_prompt_context(
+    session_info: &SessionInfo,
+) -> Option<alnair_agent::PromptContext> {
     let dir = crate::session::persistence::session_dir(session_info);
     load_prompt_context_from_dir(&dir)
 }
@@ -1331,8 +1336,10 @@ mod tool_meta_stamp_tests {
             .run_until(async {
                 let mut fixture = make_replay_send_update_fixture().await;
                 fixture.actor.agent = std::cell::RefCell::new(
-                    test_agent_with_tools(vec![ToolConfig::from_id("Alnair:read_file".to_string())])
-                        .await,
+                    test_agent_with_tools(vec![ToolConfig::from_id(
+                        "Alnair:read_file".to_string(),
+                    )])
+                    .await,
                 );
                 let prepared = fixture
                     .actor
@@ -1373,8 +1380,10 @@ mod tool_meta_stamp_tests {
             .run_until(async {
                 let mut fixture = make_replay_send_update_fixture().await;
                 fixture.actor.agent = std::cell::RefCell::new(
-                    test_agent_with_tools(vec![ToolConfig::from_id("Alnair:read_file".to_string())])
-                        .await,
+                    test_agent_with_tools(vec![ToolConfig::from_id(
+                        "Alnair:read_file".to_string(),
+                    )])
+                    .await,
                 );
                 let (perm_tx, mut perm_rx) = mpsc::unbounded_channel();
                 fixture.actor.permissions = PermissionHandle::Actor {

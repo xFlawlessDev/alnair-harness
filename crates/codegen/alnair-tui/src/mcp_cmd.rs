@@ -3,9 +3,9 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
+use alnair_shell::util::config::{McpServerConfig, McpServerTransportConfig};
 use anyhow::{Result, bail};
 use clap::{Subcommand, ValueEnum};
-use alnair_shell::util::config::{McpServerConfig, McpServerTransportConfig};
 
 use crate::util::display_user_alnair_path;
 
@@ -502,7 +502,9 @@ fn current_dir_or_exit() -> PathBuf {
 fn scope_target(scope: McpScope) -> PathBuf {
     match scope {
         McpScope::User => alnair_shell::util::config::user_config_path(),
-        McpScope::Project => alnair_shell::util::config::project_config_path(&current_dir_or_exit()),
+        McpScope::Project => {
+            alnair_shell::util::config::project_config_path(&current_dir_or_exit())
+        }
     }
 }
 
@@ -557,7 +559,12 @@ fn surviving_definition(
     project_site
         .map(|path| (McpScope::Project, path))
         .or_else(|| {
-            user_defined.then(|| (McpScope::User, alnair_shell::util::config::user_config_path()))
+            user_defined.then(|| {
+                (
+                    McpScope::User,
+                    alnair_shell::util::config::user_config_path(),
+                )
+            })
         })
 }
 
@@ -589,7 +596,9 @@ async fn run_remove(name: &str, requested_scope: Option<McpScope>) -> Result<()>
             eprintln!("MCP server '{name}' exists in multiple scopes:");
             eprintln!("  user: {}", display_user_alnair_path("config.toml"));
             eprintln!("  project: {}", project_path.display());
-            eprintln!("Specify which one to remove, e.g.: alnair mcp remove {name} --scope project");
+            eprintln!(
+                "Specify which one to remove, e.g.: alnair mcp remove {name} --scope project"
+            );
             std::process::exit(1);
         }
     };
@@ -925,7 +934,7 @@ mod tests {
         let err = PagerArgs::try_parse_from([
             "alnair", "mcp", "add", "-s", "local", "fs", "--", "npx", "pkg",
         ])
-        .expect_err("local is not a alnair scope");
+        .expect_err("local is not an alnair scope");
         assert_eq!(err.kind(), clap::error::ErrorKind::InvalidValue);
     }
 
@@ -1052,7 +1061,16 @@ mod tests {
 
     #[test]
     fn add_validates_name_env_and_headers() {
-        let add = parse_add(&["alnair", "mcp", "add", "fs", "-e", "NOT_A_PAIR", "--", "npx"]);
+        let add = parse_add(&[
+            "alnair",
+            "mcp",
+            "add",
+            "fs",
+            "-e",
+            "NOT_A_PAIR",
+            "--",
+            "npx",
+        ]);
         let err = resolve_add(&add).expect_err("malformed env must fail");
         assert!(
             err.to_string()

@@ -124,7 +124,8 @@ async fn campaign_leader_mode_remote_dismiss_on_model_pick() {
     // no-re-nudge reboot in-process). A fresh same-leader-socket client is
     // deliberately not asserted on-screen here: reattach paint timing is the
     // one flaky piece and adds no coverage over the disk + sibling asserts.
-    let config = std::fs::read_to_string(alnair_home.join("config.toml")).expect("read config.toml");
+    let config =
+        std::fs::read_to_string(alnair_home.join("config.toml")).expect("read config.toml");
     assert!(
         config.contains(&format!("default = \"{CONFIG_MODEL}\"")),
         "the user's pick must be persisted to config.toml:\n{config}"

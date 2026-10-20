@@ -42,7 +42,10 @@ pub(super) fn todo_panel_visible(
 /// overlay host uses this to size the idle viewport to exactly its content so
 /// the prompt sits right after the committed conversation (no bottom-pin, no
 /// gap).
-pub(super) fn todo_panel_height(agent: &alnair_tui::app::agent_view::AgentView, force: bool) -> u16 {
+pub(super) fn todo_panel_height(
+    agent: &alnair_tui::app::agent_view::AgentView,
+    force: bool,
+) -> u16 {
     if !todo_panel_visible(agent, force) {
         return 0;
     }

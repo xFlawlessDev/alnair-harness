@@ -3827,31 +3827,32 @@ async fn subagent_progress_advances_goal_tokens_live_without_double_count() {
             // Count (and drain) goal_updated notifications delivered to the
             // gateway. Progress-tick emits are gateway-only, so coalescing
             // is observed here rather than on the persistence channel.
-            let count_gateway_goal_updated =
-                |rx: &mut tokio::sync::mpsc::UnboundedReceiver<alnair_acp_lib::AcpClientMessage>| {
-                    let mut n = 0usize;
-                    while let Ok(msg) = rx.try_recv() {
-                        let alnair_acp_lib::AcpClientMessage::ExtNotification(args) = msg else {
-                            continue;
-                        };
-                        if args.request.method.as_ref() != "alnair/session_notification" {
-                            continue;
-                        }
-                        let Ok(v) =
-                            serde_json::from_str::<serde_json::Value>(args.request.params.get())
-                        else {
-                            continue;
-                        };
-                        if v.get("update")
-                            .and_then(|u| u.get("sessionUpdate"))
-                            .and_then(|s| s.as_str())
-                            == Some("goal_updated")
-                        {
-                            n += 1;
-                        }
+            let count_gateway_goal_updated = |rx: &mut tokio::sync::mpsc::UnboundedReceiver<
+                alnair_acp_lib::AcpClientMessage,
+            >| {
+                let mut n = 0usize;
+                while let Ok(msg) = rx.try_recv() {
+                    let alnair_acp_lib::AcpClientMessage::ExtNotification(args) = msg else {
+                        continue;
+                    };
+                    if args.request.method.as_ref() != "alnair/session_notification" {
+                        continue;
                     }
-                    n
-                };
+                    let Ok(v) =
+                        serde_json::from_str::<serde_json::Value>(args.request.params.get())
+                    else {
+                        continue;
+                    };
+                    if v.get("update")
+                        .and_then(|u| u.get("sessionUpdate"))
+                        .and_then(|s| s.as_str())
+                        == Some("goal_updated")
+                    {
+                        n += 1;
+                    }
+                }
+                n
+            };
             // Drop the spawn-transition emit + persisted entries so the
             // measurements below isolate the progress ticks.
             let _ = count_gateway_goal_updated(&mut gateway_rx);

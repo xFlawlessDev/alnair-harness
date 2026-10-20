@@ -18,8 +18,8 @@
 //! SECURITY: the github token and the copilot token are NEVER logged (only
 //! non-secret events: poll succeeded, copilot token minted/re-minted).
 
-use chrono::{DateTime, Utc};
 use alnair_models::OAuthConfig;
+use chrono::{DateTime, Utc};
 use serde::Deserialize;
 
 use super::kimi_oauth::{DevicePollResult, RefreshError};
@@ -300,8 +300,8 @@ pub(crate) async fn remint_copilot_token(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use chrono::Duration;
     use alnair_models::COPILOT_OAUTH_CONFIG;
+    use chrono::Duration;
     use wiremock::matchers::{body_string_contains, header, method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 

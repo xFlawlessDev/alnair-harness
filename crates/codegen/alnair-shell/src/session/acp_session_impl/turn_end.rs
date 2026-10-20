@@ -137,7 +137,9 @@ impl SessionActor {
     /// Report-level incomplete (error-path attach, tests). Same OR as
     /// [`super::turn::UsageDrainOutcome::report_incomplete`].
     pub(super) fn usage_incomplete_from_reply(
-        reply: Option<&alnair_tools::implementations::alnair::task::types::SubagentOutstandingReply>,
+        reply: Option<
+            &alnair_tools::implementations::alnair::task::types::SubagentOutstandingReply,
+        >,
     ) -> bool {
         super::turn::UsageDrainOutcome::from_outstanding_reply(reply).report_incomplete()
     }

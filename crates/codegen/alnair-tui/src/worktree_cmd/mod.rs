@@ -1,8 +1,8 @@
 mod display;
 
+use alnair_fast_worktree::WorktreeRecord;
 use anyhow::{Result, bail};
 use clap::Subcommand;
-use alnair_fast_worktree::WorktreeRecord;
 use tokio_util::sync::CancellationToken;
 
 use agent_client_protocol as acp;
@@ -95,7 +95,8 @@ enum WorktreeDbCommand {
 
 pub async fn run(args: WorktreeArgs, agent_config: &AgentConfig) -> Result<()> {
     let cancel = CancellationToken::new();
-    let spawned = crate::acp::spawn::spawn_alnair_shell(agent_config.clone(), &cancel, None).await?;
+    let spawned =
+        crate::acp::spawn::spawn_alnair_shell(agent_config.clone(), &cancel, None).await?;
 
     let _init: acp::InitializeResponse = acp_send(
         acp::InitializeRequest::new(acp::ProtocolVersion::V1)

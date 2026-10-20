@@ -20,10 +20,10 @@
 //! whole turn fails -- we never silently drop the images.
 use crate::sampling::{Client as OaiCompatClient, ConversationRequest};
 use agent_client_protocol::ImageContent;
-use base64::Engine as _;
 use alnair_chat_state::compaction_utils::{extract_real_user_queries, extract_user_query};
 use alnair_sampling_types::conversation::{ContentPart, ConversationItem, UserItem};
 use alnair_tools::util::truncate::truncate_middle;
+use base64::Engine as _;
 use parking_lot::Mutex;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};

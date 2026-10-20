@@ -24,9 +24,9 @@
 //! are NEVER logged (only non-secret events: authorize URL requested, callback
 //! received, token issued, token refreshed).
 
+use alnair_models::{OAuthConfig, OAuthTokenBody};
 use anyhow::Context;
 use base64::Engine;
-use alnair_models::{OAuthConfig, OAuthTokenBody};
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
 
@@ -472,7 +472,12 @@ async fn handle_loopback_conn(
             LoopbackOutcome::Code(code)
         }
         Err(e) => {
-            let _ = write_http(&mut stream, 400, "Login failed — return to alnair and retry.").await;
+            let _ = write_http(
+                &mut stream,
+                400,
+                "Login failed — return to alnair and retry.",
+            )
+            .await;
             let _ = stream.flush().await;
             LoopbackOutcome::Rejected(e)
         }

@@ -1,7 +1,7 @@
 //! End-to-end smoke test exercising the full active_sessions lifecycle.
 
-use chrono::Utc;
 use alnair_shell::active_sessions::*;
+use chrono::Utc;
 use tempfile::TempDir;
 
 fn session(id: &str, pid: u32) -> ActiveSession {

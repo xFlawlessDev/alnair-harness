@@ -12,7 +12,8 @@ use std::sync::Arc;
 use serde::Serialize;
 
 /// Where non-subscription users (no OAuth session) submit feedback instead.
-pub const FEEDBACK_ISSUES_URL: &str = "https://git.zacharyzhang.com/ZacharyZhang-NY/Alnair-CLI/issues";
+pub const FEEDBACK_ISSUES_URL: &str =
+    "https://git.zacharyzhang.com/ZacharyZhang-NY/Alnair-CLI/issues";
 
 /// HTTP error from the feedback endpoint with a preserved status code, so
 /// callers can distinguish auth failures (401) without string matching.

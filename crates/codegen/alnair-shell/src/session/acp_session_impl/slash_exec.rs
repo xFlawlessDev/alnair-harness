@@ -429,7 +429,8 @@ impl SessionActor {
                                 format!("remote git repo: {url}")
                             }
                             alnair_agent::plugins::git_install::InstallSource::Local {
-                                path, ..
+                                path,
+                                ..
                             } => {
                                 format!("local directory: {}", path.display())
                             }

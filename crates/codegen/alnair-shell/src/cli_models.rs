@@ -1,8 +1,8 @@
 //! Data APIs for `alnair models`. Clients own display.
 
 use agent_client_protocol as acp;
-use anyhow::Result;
 use alnair_acp_lib::{AcpAgentTx, acp_send};
+use anyhow::Result;
 
 use crate::agent::config::Config as AgentConfig;
 

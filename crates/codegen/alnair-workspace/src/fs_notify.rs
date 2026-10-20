@@ -256,9 +256,11 @@ pub(crate) async fn refresh_codebase_graph_after_head_change(
     }
 
     if let Some(count) = files_updated {
-        let _ = events_tx.send(alnair_workspace_types::WorkspaceEvent::CodebaseIndexUpdated {
-            files_indexed: count,
-        });
+        let _ = events_tx.send(
+            alnair_workspace_types::WorkspaceEvent::CodebaseIndexUpdated {
+                files_indexed: count,
+            },
+        );
     }
 }
 

@@ -11,8 +11,8 @@
 
 use std::path::Path;
 
-use anyhow::{Context, Result};
 use alnair_test_support::MockInferenceServer;
+use anyhow::{Context, Result};
 
 pub use alnair_test_support::mock_server::LogEntry;
 pub use alnair_test_support::mock_server::MockModelEntry as MockModel;

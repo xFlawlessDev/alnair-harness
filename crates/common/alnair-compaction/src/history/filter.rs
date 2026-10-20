@@ -513,8 +513,10 @@ mod tests {
 
     #[test]
     fn extract_prior_user_queries_concatenates_blocks() {
-        let inner = "<alnair_user_queries>\n<alnair_query>first</alnair_query>\n</alnair_user_queries>";
-        let inner2 = "<alnair_user_queries>\n<alnair_query>second</alnair_query>\n</alnair_user_queries>";
+        let inner =
+            "<alnair_user_queries>\n<alnair_query>first</alnair_query>\n</alnair_user_queries>";
+        let inner2 =
+            "<alnair_user_queries>\n<alnair_query>second</alnair_query>\n</alnair_user_queries>";
         let turns = vec![MockItem::summary(inner), MockItem::summary(inner2)];
         let out = extract_prior_user_queries(&turns).expect("found prior");
         assert!(out.contains("first"));
@@ -554,7 +556,8 @@ mod tests {
 
     #[test]
     fn separate_drops_summary_item_with_no_rest() {
-        let only_queries = "<alnair_user_queries>\n<alnair_query>Q</alnair_query>\n</alnair_user_queries>";
+        let only_queries =
+            "<alnair_user_queries>\n<alnair_query>Q</alnair_query>\n</alnair_user_queries>";
         let turns = vec![MockItem::summary(only_queries), MockItem::user("hello")];
 
         let sep = separate_prior_user_queries(&turns);

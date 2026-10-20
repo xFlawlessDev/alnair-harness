@@ -18,8 +18,8 @@
 
 use std::sync::Arc;
 
-use educe::Educe;
 use alnair_tool_types::{SubagentCapabilityMode, SubagentIsolationMode, WaitMode};
+use educe::Educe;
 use tokio::sync::{mpsc, oneshot};
 
 use crate::register_resource;
@@ -903,7 +903,10 @@ mod tests {
         SubagentCapabilityMode::ReadOnly.filter_tool_config(&mut config);
 
         let ids: Vec<&str> = config.tools.iter().map(|tc| tc.id.as_str()).collect();
-        assert_eq!(ids, vec!["Alnair:read_file", "Alnair:list_dir", "Alnair:grep",]);
+        assert_eq!(
+            ids,
+            vec!["Alnair:read_file", "Alnair:list_dir", "Alnair:grep",]
+        );
     }
 
     #[test]

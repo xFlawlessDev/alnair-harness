@@ -752,7 +752,9 @@ fn init_git_repo(dir: &std::path::Path) {
 /// proving genuine fan-out, not sequential dispatch).
 fn spawn_scripted_coordinator(
     repo: std::path::PathBuf,
-    mut script: impl FnMut(&alnair_tools::implementations::alnair::task::types::SubagentRequest) -> String
+    mut script: impl FnMut(
+        &alnair_tools::implementations::alnair::task::types::SubagentRequest,
+    ) -> String
     + 'static,
     require_two_workers: bool,
 ) -> (

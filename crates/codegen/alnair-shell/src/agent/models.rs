@@ -13,8 +13,8 @@ use crate::agent::config::{self, ModelEntry, resolve_credentials, sampling_confi
 use crate::agent::models_fetch::{FetchModelsResult, fetch_models_blocking};
 use crate::auth::{AuthManager, KimiAuth, KimiCodeConfig};
 use crate::sampling::SamplerConfig as SamplingConfig;
-use globset::{Glob, GlobSet, GlobSetBuilder};
 use alnair_sampling_types::{ReasoningEffort, ReasoningEffortOption};
+use globset::{Glob, GlobSet, GlobSetBuilder};
 
 /// The agent-wide baseline sampling config together with the registry platform
 /// of the catalog entry it was BUILT from.
@@ -2882,8 +2882,8 @@ mod tests {
 
     #[test]
     fn reasoning_effort_override_skips_models_that_do_not_offer_level() {
-        use indexmap::IndexMap;
         use alnair_sampling_types::ReasoningEffortOption;
+        use indexmap::IndexMap;
 
         let cfg = config::Config {
             reasoning_effort_override: Some(ReasoningEffort::None),
@@ -4167,7 +4167,10 @@ mod tests {
     #[test]
     fn resolve_catalog_key_maps_routing_slug_to_config_key() {
         let mut models = IndexMap::new();
-        models.insert("enterprise-alnair".to_string(), make_model_entry("alnair-4.5"));
+        models.insert(
+            "enterprise-alnair".to_string(),
+            make_model_entry("alnair-4.5"),
+        );
         models.insert("alnair-4.3".to_string(), make_model_entry("alnair-4.3"));
 
         let persisted = acp::ModelId::new("alnair-4.5");
@@ -4199,7 +4202,10 @@ mod tests {
     #[test]
     fn selectable_catalog_key_for_persisted_none_when_resolved_not_available() {
         let mut models = IndexMap::new();
-        models.insert("enterprise-alnair".to_string(), make_model_entry("alnair-4.5"));
+        models.insert(
+            "enterprise-alnair".to_string(),
+            make_model_entry("alnair-4.5"),
+        );
 
         let available: IndexMap<_, _> = IndexMap::new();
         let persisted = acp::ModelId::new("alnair-4.5");
@@ -4461,7 +4467,10 @@ mod tests {
         );
         assert_eq!(
             entry.env_key.as_ref().map(|k| k.names()),
-            Some(vec!["ALNAIR_MOONSHOT_CN_API_KEY", "ALNAIR_MOONSHOT_API_KEY"]),
+            Some(vec![
+                "ALNAIR_MOONSHOT_CN_API_KEY",
+                "ALNAIR_MOONSHOT_API_KEY"
+            ]),
             "entries carry the env-key NAMES for request-time resolution"
         );
         // kimi-k2 prefix rule.
@@ -4511,7 +4520,10 @@ mod tests {
             .await;
 
         let cache_dir = tempfile::TempDir::new().unwrap();
-        let _cache = EnvGuard::set("ALNAIR_MODELS_CACHE_DIR", cache_dir.path().to_str().unwrap());
+        let _cache = EnvGuard::set(
+            "ALNAIR_MODELS_CACHE_DIR",
+            cache_dir.path().to_str().unwrap(),
+        );
 
         struct SwapRefresher;
         #[async_trait::async_trait]
@@ -4576,7 +4588,10 @@ mod tests {
     #[serial]
     fn sync_failure_uses_last_cache_then_bundled_table() {
         let cache_dir = tempfile::TempDir::new().unwrap();
-        let _cache = EnvGuard::set("ALNAIR_MODELS_CACHE_DIR", cache_dir.path().to_str().unwrap());
+        let _cache = EnvGuard::set(
+            "ALNAIR_MODELS_CACHE_DIR",
+            cache_dir.path().to_str().unwrap(),
+        );
         // Unroutable server: every fetch fails fast with connection refused.
         let endpoints = proxied_endpoints("http://127.0.0.1:9");
         let keys = PlatformApiKeys::default();
@@ -4689,7 +4704,10 @@ mod tests {
     #[serial]
     fn stale_cache_from_other_fetch_plan_is_not_served() {
         let cache_dir = tempfile::TempDir::new().unwrap();
-        let _cache = EnvGuard::set("ALNAIR_MODELS_CACHE_DIR", cache_dir.path().to_str().unwrap());
+        let _cache = EnvGuard::set(
+            "ALNAIR_MODELS_CACHE_DIR",
+            cache_dir.path().to_str().unwrap(),
+        );
         let endpoints = proxied_endpoints("http://127.0.0.1:9");
         // Cache written when a moonshot key was ALSO configured...
         let with_key_origin = crate::agent::models_fetch::models_fetch_origin(

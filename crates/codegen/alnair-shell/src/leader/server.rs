@@ -3292,7 +3292,8 @@ mod tests {
             r#"{"jsonrpc":"2.0","method":"alnair/yolo_mode_changed","params":{"yolo_mode":true}}"#,
         );
         assert!(inject_client_identity_into_yolo_notification(
-            &mut json, "alnair-tui"
+            &mut json,
+            "alnair-tui"
         ));
         assert_eq!(json["params"]["clientIdentifier"], "alnair-tui");
         assert_eq!(json["params"]["yolo_mode"], true);
@@ -3302,7 +3303,8 @@ mod tests {
         let mut json = pv(r#"{"jsonrpc":"2.0","method":"alnair/other","params":{"data":1}}"#);
         let before = json.clone();
         assert!(!inject_client_identity_into_yolo_notification(
-            &mut json, "alnair-tui"
+            &mut json,
+            "alnair-tui"
         ));
         assert_eq!(json, before);
     }

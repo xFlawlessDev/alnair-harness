@@ -137,7 +137,10 @@ pub(super) async fn call_with_auth_retry<F, Fut>(
 where
     F: FnMut() -> Fut,
     Fut: std::future::Future<
-            Output = Result<alnair_tools::types::output::ToolRunResult, alnair_tool_runtime::ToolError>,
+            Output = Result<
+                alnair_tools::types::output::ToolRunResult,
+                alnair_tool_runtime::ToolError,
+            >,
         >,
 {
     let result = call().await;

@@ -2578,7 +2578,9 @@ mod tests {
     /// two-row shape (single login row + Quit) — and never a Moonshot row.
     #[test]
     fn pending_menu_without_moonshot_methods_keeps_two_rows() {
-        let methods = vec![alnair_shell::agent::auth_method::kimi_code_auth_method(None)];
+        let methods = vec![alnair_shell::agent::auth_method::kimi_code_auth_method(
+            None,
+        )];
         let auth = AuthState::Pending { error: None };
         let trust = TrustState::Done;
         let mut params = render_params(&auth, &trust, None);

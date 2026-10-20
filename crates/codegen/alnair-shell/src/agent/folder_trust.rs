@@ -489,7 +489,8 @@ pub fn filter_untrusted_project_lsp(
             alnair_tools::types::config_source::ConfigSource,
         ),
     >,
-) -> std::collections::BTreeMap<String, alnair_tools::implementations::lsp::config::LspServerConfig> {
+) -> std::collections::BTreeMap<String, alnair_tools::implementations::lsp::config::LspServerConfig>
+{
     alnair_tools::implementations::lsp::config::filter_project_lsp_when_untrusted(
         sourced,
         project_scope_allowed(cwd),
@@ -1193,7 +1194,11 @@ mod tests {
         let tmp = repo_tmp();
         let alnair = tmp.path().join(".alnair");
         std::fs::create_dir_all(&alnair).unwrap();
-        std::fs::write(alnair.join("lsp.json"), r#"{"projlsp": {"command": "true"}}"#).unwrap();
+        std::fs::write(
+            alnair.join("lsp.json"),
+            r#"{"projlsp": {"command": "true"}}"#,
+        )
+        .unwrap();
 
         let sourced = load_servers_with_plugins_sourced(tmp.path(), &[], &[], &[], &[]);
         let (_, source) = sourced.get("projlsp").expect("project server present");
@@ -1212,7 +1217,11 @@ mod tests {
         let tmp = repo_tmp();
         let alnair = tmp.path().join(".alnair");
         std::fs::create_dir_all(&alnair).unwrap();
-        std::fs::write(alnair.join("lsp.json"), r#"{"projlsp": {"command": "true"}}"#).unwrap();
+        std::fs::write(
+            alnair.join("lsp.json"),
+            r#"{"projlsp": {"command": "true"}}"#,
+        )
+        .unwrap();
 
         let sourced = load_servers_with_plugins_sourced(tmp.path(), &[], &[], &[], &[]);
         assert!(

@@ -1157,7 +1157,10 @@ mod tests {
 
     #[test]
     fn file_label_extracts_filename() {
-        assert_eq!(file_label("/home/user/.alnair/memory/MEMORY.md"), "MEMORY.md");
+        assert_eq!(
+            file_label("/home/user/.alnair/memory/MEMORY.md"),
+            "MEMORY.md"
+        );
         assert_eq!(
             file_label("/workspace/.alnair/memory/sessions/2026-01-15-fix-bug.md"),
             "2026-01-15-fix-bug.md"

@@ -149,7 +149,9 @@ fn ensure_plan_mode_tools(tool_config: &mut alnair_tools::registry::types::ToolS
         tool_config.tools.push((&alnair::ExitPlanModeTool).into());
     }
     if missing_ask {
-        tool_config.tools.push((&alnair::AskUserQuestionTool).into());
+        tool_config
+            .tools
+            .push((&alnair::AskUserQuestionTool).into());
     }
 }
 /// Merge a shell-resolved params map into every matching tool's
@@ -778,8 +780,9 @@ impl AgentBuilder {
                     .retain(|tc| !lifecycle.contains(&short_tool_name(&tc.id)));
             }
         }
-        if let alnair_tools::implementations::alnair::web_fetch::WebFetchConfig::Enabled { ref params } =
-            self.web_fetch_config
+        if let alnair_tools::implementations::alnair::web_fetch::WebFetchConfig::Enabled {
+            ref params,
+        } = self.web_fetch_config
             && let Ok(params_value) = serde_json::to_value(params)
             && let Some(obj) = params_value.as_object()
         {
@@ -1250,7 +1253,8 @@ pub(crate) fn build_task_description(
             }
         })
         .collect();
-    let mut description = alnair_tool_types::build_task_description(&descriptors, &TASK_TOOL_NAMING);
+    let mut description =
+        alnair_tool_types::build_task_description(&descriptors, &TASK_TOOL_NAMING);
     description.push_str(&task_model_guidance(model_slugs));
     description
 }

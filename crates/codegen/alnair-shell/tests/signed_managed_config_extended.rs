@@ -8,13 +8,13 @@
 #[path = "signed_managed_config/common.rs"]
 mod common;
 
+use alnair_config::signed_policy::{self, SignedPayload};
 #[cfg(unix)]
 use common::skip_as_root;
 use common::{
     MANAGED, REQUIREMENTS_FAIL_CLOSED, TEST_EXPIRES_AT, TEST_KEY_ID, dk_identity, forged_dk_body,
     install_test_key, reset, sign_envelope, signed_dk_body, spawn_mock, test_home, write_dk_config,
 };
-use alnair_config::signed_policy::{self, SignedPayload};
 use serial_test::serial;
 
 /// The healthy fail-closed starting state the tamper/heal scenarios mutate;

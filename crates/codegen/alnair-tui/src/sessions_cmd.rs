@@ -1,7 +1,7 @@
-use anyhow::Result;
-use clap::Subcommand;
 use alnair_shell::session::merge::MergedSession;
 use alnair_shell::util::alnair_home::alnair_home;
+use anyhow::Result;
+use clap::Subcommand;
 #[derive(Debug, clap::Args, Clone)]
 pub struct SessionsArgs {
     #[command(subcommand)]

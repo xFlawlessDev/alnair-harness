@@ -1,7 +1,7 @@
 pub mod agent_id;
+pub mod alnair_auth_credentials;
 pub mod config;
 pub mod hooks;
-pub mod alnair_auth_credentials;
 
 // The foundation utilities live in `alnair-shell-base` (upstream of this
 // crate so they build in parallel). Re-exported at the original paths so

@@ -2,9 +2,9 @@
 use crate::error::AgentBuildError;
 use crate::prompt::context::TemplateOverride;
 use crate::prompt::user_message::UserMessageTemplate;
-use alnair_tools::implementations::codex;
 use alnair_tools::implementations::alnair;
 use alnair_tools::implementations::alnair_concise;
+use alnair_tools::implementations::codex;
 use alnair_tools::implementations::memory;
 use alnair_tools::implementations::opencode;
 use alnair_tools::implementations::search_tool;
@@ -1730,7 +1730,13 @@ mod tests {
                     .as_str()
             )
         );
-        assert!(ids.contains(ToolConfig::from(&alnair::KillTerminalCommandTool).id.as_str()));
+        assert!(
+            ids.contains(
+                ToolConfig::from(&alnair::KillTerminalCommandTool)
+                    .id
+                    .as_str()
+            )
+        );
         assert!(!ids.contains(ToolConfig::from(&alnair::TaskOutputTool).id.as_str()));
         assert!(!ids.contains(ToolConfig::from(&alnair::KillTaskTool).id.as_str()));
         assert!(!ids.contains(ToolConfig::from(&alnair::TaskTool).id.as_str()));

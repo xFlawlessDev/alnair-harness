@@ -4,10 +4,10 @@
 //! `alnair_sampling_types::SamplingConfig`, which would drag shell-specific
 //! types (`alnair-tools`, etc.) into this crate's dependency graph.
 
-use indexmap::IndexMap;
 use alnair_sampling_types::{
     ApiBackend, CompactionAtTokens, CompactionsRemaining, DoomLoopRecoveryPolicy, ReasoningEffort,
 };
+use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
 
 use crate::attribution::SharedAttributionCallback;

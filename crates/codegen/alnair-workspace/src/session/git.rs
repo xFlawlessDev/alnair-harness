@@ -1,12 +1,12 @@
 //! Git operations: CLI for simple actions (stage, commit, push); git2 for structured data (status, diffs).
 #![allow(dead_code)]
-use anyhow::Result;
-use git2::{DiffOptions, Repository, StatusOptions};
 pub use alnair_workspace_types::rpc::git::{
     ChangeType, CommitData, CommitResult, DiscardScope, GitBranchEntry, GitBranchListData,
     GitDiffsData, GitError, GitFileChange, GitInfoData, GitReadFile, GitReadFilesData,
     GitStatusData, StageData, VcsKind,
 };
+use anyhow::Result;
+use git2::{DiffOptions, Repository, StatusOptions};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -1908,7 +1908,7 @@ pub async fn checkout_session_commit(
 /// The restore-code path runs `git fetch origin` + `git checkout <sha>`,
 /// which *detaches HEAD*. That is only acceptable in two situations:
 ///
-/// 1. `supplied_cwd` is a alnair-managed worktree (`~/.alnair/worktrees/...`).
+/// 1. `supplied_cwd` is an alnair-managed worktree (`~/.alnair/worktrees/...`).
 ///    These are disposable snapshots that exist precisely to carry a
 ///    detached session HEAD.
 /// 2. `supplied_cwd` is exactly the cwd the session was persisted with
@@ -2694,8 +2694,10 @@ mod tests {
     }
     #[test]
     fn test_effective_worktree_cwd_single_level_offset() {
-        let result =
-            effective_worktree_cwd("/home/user/.alnair/worktrees/repo/ab-123-a", Path::new("src"));
+        let result = effective_worktree_cwd(
+            "/home/user/.alnair/worktrees/repo/ab-123-a",
+            Path::new("src"),
+        );
         assert_eq!(result, "/home/user/.alnair/worktrees/repo/ab-123-a/src");
     }
     #[test]

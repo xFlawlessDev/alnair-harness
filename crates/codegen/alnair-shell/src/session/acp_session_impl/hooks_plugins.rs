@@ -4,10 +4,12 @@ impl SessionActor {
     /// Trust the current project via the unified folder-trust store, which also
     /// allows repo-local MCP/LSP for this folder (equivalent to `--trust`).
     pub(super) fn do_hooks_trust_project(cwd: &str) -> Result<std::path::PathBuf, String> {
-        let root = alnair_workspace::session::git::find_git_root_from_path(std::path::Path::new(cwd))
-            .map_err(|_| {
-                "Not in a git repository. Project hooks require a git worktree root.".to_string()
-            })?;
+        let root =
+            alnair_workspace::session::git::find_git_root_from_path(std::path::Path::new(cwd))
+                .map_err(|_| {
+                    "Not in a git repository. Project hooks require a git worktree root."
+                        .to_string()
+                })?;
         crate::agent::folder_trust::grant_folder_trust(&root);
         Ok(root)
     }
@@ -17,8 +19,9 @@ impl SessionActor {
     pub(super) fn do_hooks_untrust_project(
         cwd: &str,
     ) -> Result<(std::path::PathBuf, bool), String> {
-        let root = alnair_workspace::session::git::find_git_root_from_path(std::path::Path::new(cwd))
-            .map_err(|_| "Not in a git repository.".to_string())?;
+        let root =
+            alnair_workspace::session::git::find_git_root_from_path(std::path::Path::new(cwd))
+                .map_err(|_| "Not in a git repository.".to_string())?;
         // revoke_folder_trust persists set_untrusted AND downgrades the decision
         // cache so the untrust takes effect on the next reload, not just restart.
         let was_trusted = crate::agent::folder_trust::revoke_folder_trust(&root);
@@ -212,7 +215,8 @@ impl SessionActor {
                     },
                 }
             }
-            HooksAction::Enable { hook_name } => match alnair_hooks::trust::enable_hook(&hook_name) {
+            HooksAction::Enable { hook_name } => match alnair_hooks::trust::enable_hook(&hook_name)
+            {
                 Ok(true) => ActionOutcome {
                     status: OutcomeStatus::Success,
                     message: format!("Enabled hook: {hook_name}"),
@@ -606,9 +610,9 @@ impl SessionActor {
     /// (the parent module) can invoke it after an interactive folder-trust
     /// grant — same visibility as `apply_plugin_registry_snapshot` below.
     pub(super) async fn reload_hooks_impl(self: &std::sync::Arc<Self>) -> String {
-        let git_root = alnair_workspace::session::git::find_git_root_from_path(std::path::Path::new(
-            &self.session_info.cwd,
-        ))
+        let git_root = alnair_workspace::session::git::find_git_root_from_path(
+            std::path::Path::new(&self.session_info.cwd),
+        )
         .ok();
         // Reconcile folder-trust so a mid-session /hooks-trust (or --trust) grant
         // is honored on reload, then gate project hook sources on the verdict.
@@ -630,12 +634,13 @@ impl SessionActor {
         if let Some(ref pr) = plugin_registry_snapshot {
             for plugin in pr.active_plugins() {
                 if let Some(ref hooks_path) = plugin.hooks_path {
-                    let (specs, warnings) = alnair_agent::plugins::hooks_adapter::parse_plugin_hooks(
-                        hooks_path,
-                        &plugin.name,
-                        &plugin.root_str(),
-                        &plugin.data_dir_str(),
-                    );
+                    let (specs, warnings) =
+                        alnair_agent::plugins::hooks_adapter::parse_plugin_hooks(
+                            hooks_path,
+                            &plugin.name,
+                            &plugin.root_str(),
+                            &plugin.data_dir_str(),
+                        );
                     for w in &warnings {
                         tracing::warn!("{w}");
                     }
@@ -825,12 +830,13 @@ impl SessionActor {
             let mut new_specs = Vec::new();
             for plugin in new_registry.active_plugins() {
                 if let Some(ref hooks_path) = plugin.hooks_path {
-                    let (specs, warnings) = alnair_agent::plugins::hooks_adapter::parse_plugin_hooks(
-                        hooks_path,
-                        &plugin.name,
-                        &plugin.root_str(),
-                        &plugin.data_dir_str(),
-                    );
+                    let (specs, warnings) =
+                        alnair_agent::plugins::hooks_adapter::parse_plugin_hooks(
+                            hooks_path,
+                            &plugin.name,
+                            &plugin.root_str(),
+                            &plugin.data_dir_str(),
+                        );
                     for w in &warnings {
                         tracing::warn!("{w}");
                     }
@@ -858,7 +864,8 @@ impl SessionActor {
                     hook_reg.remove_by_prefix("plugin/");
                     hook_reg.append_specs(new_specs);
                 } else if !new_specs.is_empty() {
-                    let (mut new_reg, _) = alnair_hooks::discovery::load_hooks_from_sources(&[], &[]);
+                    let (mut new_reg, _) =
+                        alnair_hooks::discovery::load_hooks_from_sources(&[], &[]);
                     new_reg.append_specs(new_specs);
                     *reg = Some(Arc::new(new_reg));
                 }

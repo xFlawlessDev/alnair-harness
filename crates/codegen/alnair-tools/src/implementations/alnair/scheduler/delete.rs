@@ -115,7 +115,10 @@ impl alnair_tool_runtime::Tool for SchedulerDeleteTool {
             })?;
 
         let removed = reply_rx.await.map_err(|_| {
-            alnair_tool_runtime::ToolError::custom("process_manager", "Scheduler actor dropped reply")
+            alnair_tool_runtime::ToolError::custom(
+                "process_manager",
+                "Scheduler actor dropped reply",
+            )
         })?;
 
         if removed {

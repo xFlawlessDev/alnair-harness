@@ -679,7 +679,11 @@ async fn headless_json_schema_responses_uses_text_format() {
     )
     .await;
 
-    assert_headless_success(&result, "alnair -p --json-schema (responses)", Some(&server));
+    assert_headless_success(
+        &result,
+        "alnair -p --json-schema (responses)",
+        Some(&server),
+    );
     assert_no_crashes(&result.stderr);
 
     let output = parse_stdout_json(&result);
@@ -1617,7 +1621,11 @@ async fn test_headless_waits_for_short_background_task_and_exits_clean() {
     )
     .await;
 
-    assert_headless_success(&result, "alnair -p with short background task", Some(&server));
+    assert_headless_success(
+        &result,
+        "alnair -p with short background task",
+        Some(&server),
+    );
     assert_no_crashes(&result.stderr);
     assert!(
         marker.exists(),

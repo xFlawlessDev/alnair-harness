@@ -5,9 +5,9 @@ use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU32, AtomicU64, Ordering};
 use std::sync::{Arc, OnceLock};
 use std::time::Instant;
 
-use dashmap::DashMap;
 use alnair_file_utils::events::{Event, EventWriter, ToolOutcome};
 use alnair_tool_protocol::{ToolServerLifecycleStatus, ToolServerStatusPayload};
+use dashmap::DashMap;
 
 const LIFECYCLE_NONE: u8 = 0;
 const LIFECYCLE_DRAINING: u8 = 1;

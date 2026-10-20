@@ -273,8 +273,9 @@ pub enum SessionCommand {
     /// reports. Refused while a turn is in flight.
     RepairHistory {
         dry_run: bool,
-        respond_to:
-            oneshot::Sender<anyhow::Result<alnair_chat_state::compaction_utils::HistoryRepairReport>>,
+        respond_to: oneshot::Sender<
+            anyhow::Result<alnair_chat_state::compaction_utils::HistoryRepairReport>,
+        >,
     },
     GetRewindPoints {
         respond_to: oneshot::Sender<RewindPointsResponse>,

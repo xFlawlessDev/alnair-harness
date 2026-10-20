@@ -24,13 +24,13 @@ use std::sync::Mutex;
 use std::time::Duration;
 
 use agent_client_protocol as acp;
-use async_trait::async_trait;
 use alnair_compaction::{
     CompactionPrompt, CompactionSampleError, CompactionSampler, FullReplaceAttemptOutcome,
     FullReplaceObserver, LlmCompactionOutput,
 };
 use alnair_sampler::SamplerConfig as SamplingConfig;
 use alnair_sampling_types::{ConversationItem, HostedTool, ToolSpec};
+use async_trait::async_trait;
 
 use alnair_chat_state::compaction_utils::{
     CompactionAttempt, MAX_CAPTURED_SUMMARY_CHARS, bound_captured_output,

@@ -1,6 +1,6 @@
+pub mod alnair_home;
 pub mod event_id;
 pub mod fs;
-pub mod alnair_home;
 pub mod secure_file;
 pub mod tips;
 pub mod uname;
@@ -176,7 +176,7 @@ pub fn kill_process_by_pid(pid: u32) -> std::io::Result<()> {
         terminate.map_err(|e| std::io::Error::other(format!("TerminateProcess({pid}): {e}")))
     }
 }
-/// True if `pid` is a alnair process; pairs with [`kill_process_by_pid`] to avoid killing a recycled PID.
+/// True if `pid` is an alnair process; pairs with [`kill_process_by_pid`] to avoid killing a recycled PID.
 /// Best-effort on macOS/BSD (liveness-only via `kill -0`), exact on Linux (/proc cmdline) and Windows (image path).
 pub fn is_alnair_process(pid: u32) -> bool {
     #[cfg(target_os = "linux")]

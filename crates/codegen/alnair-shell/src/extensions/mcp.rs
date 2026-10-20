@@ -1093,7 +1093,9 @@ impl alnair_tools::types::resources::McpResourceProvider for McpStateResourcePro
                 name: None,
                 description: None,
                 mime_type,
-                content: Some(alnair_tools::types::resources::McpResourceContent::Text(text)),
+                content: Some(alnair_tools::types::resources::McpResourceContent::Text(
+                    text,
+                )),
             }),
             rmcp::model::ResourceContents::BlobResourceContents {
                 uri: content_uri,

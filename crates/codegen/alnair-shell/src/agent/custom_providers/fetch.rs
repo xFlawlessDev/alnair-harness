@@ -1,8 +1,8 @@
 //! Listing fetch and key stamping for custom providers.
 
-use indexmap::IndexMap;
 use alnair_models::WireModel;
 use alnair_models::custom::{CustomApi, CustomProvider};
+use indexmap::IndexMap;
 
 use super::CredentialedProvider;
 use crate::agent::config::{ModelEntry, ModelEntryConfig};
@@ -40,14 +40,17 @@ fn listing_body(provider: &CustomProvider, key: &str) -> Result<String, BackendE
             (CustomApi::OpenAi, _) => client
                 .get(&url)
                 .header("Authorization", format!("Bearer {key}")),
-            (CustomApi::Anthropic, false) => client
-                .get(&url)
-                .header("x-api-key", key)
-                .header("anthropic-version", alnair_sampling_types::ANTHROPIC_VERSION),
+            (CustomApi::Anthropic, false) => client.get(&url).header("x-api-key", key).header(
+                "anthropic-version",
+                alnair_sampling_types::ANTHROPIC_VERSION,
+            ),
             (CustomApi::Anthropic, true) => client
                 .get(&url)
                 .header("Authorization", format!("Bearer {key}"))
-                .header("anthropic-version", alnair_sampling_types::ANTHROPIC_VERSION),
+                .header(
+                    "anthropic-version",
+                    alnair_sampling_types::ANTHROPIC_VERSION,
+                ),
         };
         request.send()
     };

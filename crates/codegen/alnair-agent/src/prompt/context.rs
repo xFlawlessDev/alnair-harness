@@ -1229,7 +1229,7 @@ mod tests {
             ("plan", plan),
         ] {
             assert!(
-                !prompt.contains("You are a Alnair agent"),
+                !prompt.contains("You are an Alnair agent"),
                 "{name} prompt should not duplicate base template identity"
             );
         }

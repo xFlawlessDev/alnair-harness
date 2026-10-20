@@ -16,10 +16,10 @@ use std::io::BufReader;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use anyhow::{Context, Result, anyhow};
 use alnair_sampling_types::{
     ContentPart, ConversationItem, ConversationRequest, SystemItem, UserItem,
 };
+use anyhow::{Context, Result, anyhow};
 use serde::{Deserialize, Serialize};
 
 use crate::session::{
@@ -2289,7 +2289,8 @@ mod tests {
         // `with_no_env` returns sync; we re-implement the clearing
         // inline so we can `.await` the resolver.
         let key =
-            with_env_isolated(async { resolve_api_key(None, alnair_home).await.expect("ok") }).await;
+            with_env_isolated(async { resolve_api_key(None, alnair_home).await.expect("ok") })
+                .await;
         assert_eq!(key, "from-auth-json", "auth.json is the third source");
     }
 
@@ -2383,7 +2384,8 @@ mod tests {
         let alnair_home = tmp.path();
         write_fresh_oidc_auth_json(alnair_home, "fresh-oidc-key");
         let key =
-            with_env_isolated(async { resolve_api_key(None, alnair_home).await.expect("ok") }).await;
+            with_env_isolated(async { resolve_api_key(None, alnair_home).await.expect("ok") })
+                .await;
         assert_eq!(key, "fresh-oidc-key");
     }
 

@@ -33,7 +33,8 @@ pub(crate) fn ctx_with_toggle(toggle: HashMap<String, bool>) -> SubagentSpawnCon
     let (tx, _rx) = mpsc::unbounded_channel();
     SubagentSpawnContext {
         lsp: None,
-        spawn_limits: alnair_tools::implementations::alnair::task::admission::SubagentLimits::default(),
+        spawn_limits:
+            alnair_tools::implementations::alnair::task::admission::SubagentLimits::default(),
         spawn_permits: std::sync::Arc::new(tokio::sync::Semaphore::new(
             alnair_tools::implementations::alnair::task::admission::SubagentLimits::default()
                 .effective_max_concurrent(),

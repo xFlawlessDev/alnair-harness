@@ -268,7 +268,9 @@ impl WorkspaceHandle {
             if servers.is_empty() {
                 None
             } else {
-                use alnair_tools::implementations::lsp::{LspBackend, LspBackendAdapter, LspManager};
+                use alnair_tools::implementations::lsp::{
+                    LspBackend, LspBackendAdapter, LspManager,
+                };
                 let mgr = Arc::new(tokio::sync::Mutex::new(LspManager::new(
                     servers,
                     config.root_cwd.clone(),
@@ -1250,7 +1252,9 @@ fn events_enabled() -> bool {
 /// Single source of truth for mapping a turn-hook outcome to the `events.jsonl`
 /// [`TurnOutcomeLabel`]. Kept as one `match` so the two enums cannot drift and
 /// the mapping is never duplicated across call sites.
-fn turn_outcome_label(outcome: alnair_tool_protocol::turn_hook::TurnHookOutcome) -> TurnOutcomeLabel {
+fn turn_outcome_label(
+    outcome: alnair_tool_protocol::turn_hook::TurnHookOutcome,
+) -> TurnOutcomeLabel {
     use alnair_tool_protocol::turn_hook::TurnHookOutcome;
     match outcome {
         TurnHookOutcome::Completed => TurnOutcomeLabel::Completed,
@@ -1478,7 +1482,10 @@ pub(crate) mod tests {
             tools: vec![
                 tc("Alnair:read_file", Some(ToolKind::Read)),
                 tc("Alnair:run_terminal_cmd", Some(ToolKind::Execute)),
-                tc("Alnair:get_task_output", Some(ToolKind::BackgroundTaskAction)),
+                tc(
+                    "Alnair:get_task_output",
+                    Some(ToolKind::BackgroundTaskAction),
+                ),
                 tc("Alnair:kill_task", Some(ToolKind::KillTaskAction)),
             ],
             behavior_preset: None,
@@ -2031,7 +2038,9 @@ pub(crate) mod tests {
     #[tokio::test]
     async fn events_jsonl_captures_turn_tool_toggle_and_mcp_variants() {
         use alnair_file_utils::events::ToolOutcome;
-        use alnair_tool_protocol::turn_hook::{AfterTurnPayload, BeforeTurnPayload, TurnHookOutcome};
+        use alnair_tool_protocol::turn_hook::{
+            AfterTurnPayload, BeforeTurnPayload, TurnHookOutcome,
+        };
         let (handle, home) = make_handle_with_events();
         let sid = "sess-int";
         handle
@@ -2224,7 +2233,9 @@ pub(crate) mod tests {
     #[tokio::test]
     async fn events_disabled_keeps_noop_and_writes_nothing() {
         use alnair_file_utils::events::ToolOutcome;
-        use alnair_tool_protocol::turn_hook::{AfterTurnPayload, BeforeTurnPayload, TurnHookOutcome};
+        use alnair_tool_protocol::turn_hook::{
+            AfterTurnPayload, BeforeTurnPayload, TurnHookOutcome,
+        };
         let handle = make_handle();
         assert!(
             !handle.shared().events_enabled,
@@ -3581,7 +3592,9 @@ pub(crate) mod tests {
     /// and the context object passes through verbatim.
     #[tokio::test]
     async fn after_turn_decodes_cancellation_fields_into_events_jsonl() {
-        use alnair_tool_protocol::turn_hook::{AfterTurnPayload, BeforeTurnPayload, TurnHookOutcome};
+        use alnair_tool_protocol::turn_hook::{
+            AfterTurnPayload, BeforeTurnPayload, TurnHookOutcome,
+        };
         let (handle, home) = make_handle_with_events();
         let sid = "sess-cancel";
         handle

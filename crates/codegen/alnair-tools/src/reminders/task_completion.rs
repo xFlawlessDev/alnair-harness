@@ -640,14 +640,13 @@ impl Reminder for TaskCompletionReminder {
             let goal_loop_active = res
                 .get::<crate::implementations::alnair::task::types::GoalLoopActive>()
                 .is_some_and(|g| g.0);
-            let surface_reminders =
-                !goal_loop_active
-                    && res
-                        .get::<crate::types::resources::Params<
-                            crate::implementations::alnair::bash::BashParams,
-                        >>()
-                        .map(|p| p.0.surface_bg_completion_reminders)
-                        .unwrap_or(true);
+            let surface_reminders = !goal_loop_active
+                && res
+                    .get::<crate::types::resources::Params<
+                        crate::implementations::alnair::bash::BashParams,
+                    >>()
+                    .map(|p| p.0.surface_bg_completion_reminders)
+                    .unwrap_or(true);
             let renderer = res.get::<crate::types::template_renderer::TemplateRenderer>();
             let task_output_name: Option<String> = renderer.and_then(|r| {
                 r.tool_for_kind(crate::types::tool::ToolKind::BackgroundTaskAction)

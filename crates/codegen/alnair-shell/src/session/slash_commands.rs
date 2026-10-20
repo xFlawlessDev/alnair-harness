@@ -1951,7 +1951,9 @@ mod tests {
     #[test]
     fn loop_prompt_matches_pager_wording() {
         // The shell and pager must stay textually identical so they don't drift.
-        use alnair_tools::implementations::alnair::{loop_schedule_instruction, loop_usage_message};
+        use alnair_tools::implementations::alnair::{
+            loop_schedule_instruction, loop_usage_message,
+        };
         assert_eq!(loop_text(""), loop_usage_message());
         assert_eq!(
             loop_text("2h run tests"),

@@ -682,11 +682,11 @@ impl WorkspaceShared {
                         &sid,
                         SwapAction::Applied,
                     );
-                    let _ = self
-                        .events
-                        .send(alnair_workspace_types::WorkspaceEvent::ToolsChanged {
-                            session_id: sid,
-                        });
+                    let _ =
+                        self.events
+                            .send(alnair_workspace_types::WorkspaceEvent::ToolsChanged {
+                                session_id: sid,
+                            });
                     rebuilt += 1;
                 }
                 Err(e) => {
@@ -749,8 +749,8 @@ pub(crate) fn get_or_open_session_writer(
 #[cfg(test)]
 mod tests {
     use super::get_or_open_session_writer;
-    use dashmap::DashMap;
     use alnair_file_utils::events::{Event, EventWriter};
+    use dashmap::DashMap;
     fn count_lines(path: &std::path::Path) -> usize {
         std::fs::read_to_string(path)
             .unwrap()

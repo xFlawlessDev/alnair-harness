@@ -19,8 +19,8 @@
 
 use std::path::Path;
 
-use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use alnair_ratatui_textarea::{ElementId, ElementKind, TextArea, TextAreaState, TextElement};
+use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::buffer::Buffer;
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Modifier, Style};

@@ -513,7 +513,10 @@ mod tests {
         // Only the `cursor` cell on (`claude` off): `cursor` still appended last.
         let mut c2 = CompatConfig::default();
         c2.claude.skills = false;
-        assert_eq!(c2.skill_config_dirs(), vec![".alnair", ".agents", ".cursor"]);
+        assert_eq!(
+            c2.skill_config_dirs(),
+            vec![".alnair", ".agents", ".cursor"]
+        );
     }
 
     #[test]

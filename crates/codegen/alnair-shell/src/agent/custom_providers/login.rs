@@ -54,11 +54,17 @@ pub(crate) async fn validate_key(credentialed: &CredentialedProvider) -> Result<
             (CustomApi::Anthropic, false) => client
                 .get(&url)
                 .header("x-api-key", credentialed.key())
-                .header("anthropic-version", alnair_sampling_types::ANTHROPIC_VERSION),
+                .header(
+                    "anthropic-version",
+                    alnair_sampling_types::ANTHROPIC_VERSION,
+                ),
             (CustomApi::Anthropic, true) => client
                 .get(&url)
                 .header("Authorization", format!("Bearer {}", credentialed.key()))
-                .header("anthropic-version", alnair_sampling_types::ANTHROPIC_VERSION),
+                .header(
+                    "anthropic-version",
+                    alnair_sampling_types::ANTHROPIC_VERSION,
+                ),
         };
         request.send()
     };

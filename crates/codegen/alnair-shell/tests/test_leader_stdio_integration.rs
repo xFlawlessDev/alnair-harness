@@ -2740,8 +2740,8 @@ async fn test_leader_code_nav_isolation_end_to_end() {
 /// this because they drove readiness via a bare `watch::channel`.
 #[tokio::test]
 async fn test_lock_released_before_connect_prevents_deadlock() {
-    use fs2::FileExt;
     use alnair_shell::leader::run_leader_server;
+    use fs2::FileExt;
     use std::sync::Arc;
     use std::sync::atomic::{AtomicBool, AtomicUsize};
     use tokio::sync::{mpsc, watch};

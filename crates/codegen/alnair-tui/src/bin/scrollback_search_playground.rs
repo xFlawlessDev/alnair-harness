@@ -11,14 +11,14 @@ use std::collections::VecDeque;
 use std::io::{self, stdout};
 use std::time::Duration;
 
-use crossterm::ExecutableCommand;
-use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyModifiers};
-use crossterm::terminal::{self, EnterAlternateScreen, LeaveAlternateScreen};
 use alnair_tui::scrollback::{
     RenderBlock, ScratchBuffer, ScrollbackPane, ScrollbackSearchState, ScrollbackState,
 };
 use alnair_tui::theme::Theme;
 use alnair_tui::views::picker::render_search_bar;
+use crossterm::ExecutableCommand;
+use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyModifiers};
+use crossterm::terminal::{self, EnterAlternateScreen, LeaveAlternateScreen};
 use ratatui::Terminal;
 use ratatui::backend::CrosstermBackend;
 use ratatui::buffer::Buffer;

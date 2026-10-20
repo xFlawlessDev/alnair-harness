@@ -862,7 +862,8 @@ mod tests {
     fn scan_detects_alnair_session_media_path() {
         // Dot-directory (`.alnair`), percent-encoded session segment, and a
         // trailing sentence period — the shape of media-tool output prose.
-        let line = make_line("Saved to /Users/alice/.alnair/sessions/%2Fabc/00000000/images/1.jpg.");
+        let line =
+            make_line("Saved to /Users/alice/.alnair/sessions/%2Fabc/00000000/images/1.jpg.");
         let mut overlay = LinkOverlay::new();
         scan_unjoined(std::iter::once((0, &line)), 0, &[], &mut overlay);
 
@@ -1105,7 +1106,10 @@ mod tests {
         scan_unjoined(std::iter::once((0, &line)), 0, &[], &mut overlay);
 
         assert_eq!(overlay.links().len(), 1);
-        assert_eq!(&*overlay.links()[0].url, "file:///tmp/alnair-impl-summary.md");
+        assert_eq!(
+            &*overlay.links()[0].url,
+            "file:///tmp/alnair-impl-summary.md"
+        );
     }
 
     #[test]

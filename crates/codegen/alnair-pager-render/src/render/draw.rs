@@ -41,9 +41,9 @@
 //! Each frame is wrapped in `BeginSynchronizedUpdate` / `EndSynchronizedUpdate`
 //! so the terminal processes all escape sequences atomically. This prevents
 //! flicker and is critical for multiplexers like zellij and tmux.
+use alnair_ratatui_inline::LinkSpan;
 use crossterm::terminal::{BeginSynchronizedUpdate, EndSynchronizedUpdate};
 use crossterm::{QueueableCommand, cursor};
-use alnair_ratatui_inline::LinkSpan;
 use ratatui::Frame;
 use ratatui::backend::CrosstermBackend;
 use std::io::Write;

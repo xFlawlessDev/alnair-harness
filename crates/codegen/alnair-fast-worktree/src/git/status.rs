@@ -55,7 +55,8 @@ pub(crate) fn get_modified_files(source: &Path) -> Result<ModifiedFilesResult> {
     let mut deleted_count = 0u64;
 
     // Cap produce workers: gix-features spawn-EAGAIN aborts under panic=abort.
-    let status = alnair_gix_status::with_budgeted_thread_limit(repo.status(gix::progress::Discard)?);
+    let status =
+        alnair_gix_status::with_budgeted_thread_limit(repo.status(gix::progress::Discard)?);
     let iter = status.into_index_worktree_iter(Vec::<BString>::new())?;
 
     for item_result in iter {

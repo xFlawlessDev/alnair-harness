@@ -6,13 +6,13 @@ use crate::sampling::{
     ToolChoice, ToolDefinition, ToolSpec, conversation_to_chat_messages,
 };
 use agent_client_protocol as acp;
-use async_openai::types::responses::ResponseStreamEvent;
-use futures_util::StreamExt;
 pub use alnair_chat_state::compaction_utils::{
     AUTO_CONTINUE_PROMPT, extract_last_real_user_query, extract_last_user_query,
     extract_messages_since_last_user, extract_real_user_queries, is_synthetic_extracted_query,
 };
 use alnair_sampler::SamplerConfig as SamplingConfig;
+use async_openai::types::responses::ResponseStreamEvent;
+use futures_util::StreamExt;
 use reqwest::StatusCode;
 /// Short, self-narrating compaction prompt used by the short-prompt harness only.
 /// Frames the call as "summarize for a successor assistant who only sees

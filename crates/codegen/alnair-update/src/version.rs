@@ -484,7 +484,10 @@ mod tests {
             // Pre-releases must round-trip whole — truncating to "0.1.220"
             // would make an alpha install masquerade as the release and
             // mask alpha → stable updates.
-            ("alnair-0.1.220-alpha.4-linux-x86_64", Some("0.1.220-alpha.4")),
+            (
+                "alnair-0.1.220-alpha.4-linux-x86_64",
+                Some("0.1.220-alpha.4"),
+            ),
             // no platform suffix
             ("alnair-0.1.220-alpha.4", Some("0.1.220-alpha.4")),
             // unparseable version

@@ -282,7 +282,9 @@ mod tests {
         assert!(formatted.contains(&long_id), "Full ID must be present");
     }
 
-    fn make_test_record(metadata: Option<serde_json::Value>) -> alnair_fast_worktree::WorktreeRecord {
+    fn make_test_record(
+        metadata: Option<serde_json::Value>,
+    ) -> alnair_fast_worktree::WorktreeRecord {
         use alnair_fast_worktree::{WorktreeKind, WorktreeRecord, WorktreeStatus};
         WorktreeRecord {
             id: "test".into(),

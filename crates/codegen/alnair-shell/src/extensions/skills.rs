@@ -2,7 +2,9 @@ use agent_client_protocol as acp;
 use serde::{Deserialize, Serialize};
 
 use crate::util::config as cli_config;
-use alnair_agent::prompt::skills::{CompatConfig, SkillInfo, SkillsConfig, list_skills_with_plugins};
+use alnair_agent::prompt::skills::{
+    CompatConfig, SkillInfo, SkillsConfig, list_skills_with_plugins,
+};
 
 use super::ExtResult;
 

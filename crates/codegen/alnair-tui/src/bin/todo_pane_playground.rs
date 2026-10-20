@@ -9,12 +9,12 @@
 use std::io::{self, stdout};
 use std::time::Duration;
 
-use crossterm::ExecutableCommand;
-use crossterm::event::{self, Event, KeyCode, KeyModifiers};
-use crossterm::terminal::{self, EnterAlternateScreen, LeaveAlternateScreen};
 use alnair_shell::tools::{TodoItem, TodoPriority, TodoStatus};
 use alnair_tui::appearance::LayoutConfig;
 use alnair_tui::views::todo_pane::TodoPane;
+use crossterm::ExecutableCommand;
+use crossterm::event::{self, Event, KeyCode, KeyModifiers};
+use crossterm::terminal::{self, EnterAlternateScreen, LeaveAlternateScreen};
 use ratatui::Terminal;
 use ratatui::backend::CrosstermBackend;
 use ratatui::layout::{Constraint, Layout};

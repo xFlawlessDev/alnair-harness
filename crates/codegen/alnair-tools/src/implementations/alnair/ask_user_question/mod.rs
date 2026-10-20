@@ -611,10 +611,13 @@ mod tests {
             use_id_keyed_format: false,
         };
 
-        let result =
-            alnair_tool_runtime::Tool::run(&tool, test_ctx_with_call_id(shared, "test-call"), input)
-                .await
-                .unwrap();
+        let result = alnair_tool_runtime::Tool::run(
+            &tool,
+            test_ctx_with_call_id(shared, "test-call"),
+            input,
+        )
+        .await
+        .unwrap();
 
         match result {
             AskUserQuestionOutput::QuestionsSent {
@@ -639,10 +642,13 @@ mod tests {
             use_id_keyed_format: false,
         };
 
-        let result =
-            alnair_tool_runtime::Tool::run(&tool, test_ctx_with_call_id(shared, "test-call"), input)
-                .await
-                .unwrap();
+        let result = alnair_tool_runtime::Tool::run(
+            &tool,
+            test_ctx_with_call_id(shared, "test-call"),
+            input,
+        )
+        .await
+        .unwrap();
 
         match result {
             AskUserQuestionOutput::QuestionsSent {
@@ -698,10 +704,13 @@ mod tests {
             use_id_keyed_format: false,
         };
 
-        let err =
-            alnair_tool_runtime::Tool::run(&tool, test_ctx_with_call_id(shared, "test-call"), input)
-                .await
-                .unwrap_err();
+        let err = alnair_tool_runtime::Tool::run(
+            &tool,
+            test_ctx_with_call_id(shared, "test-call"),
+            input,
+        )
+        .await
+        .unwrap_err();
 
         let msg = err.to_string();
         assert!(msg.contains("Duplicate question text"), "got: {msg}");

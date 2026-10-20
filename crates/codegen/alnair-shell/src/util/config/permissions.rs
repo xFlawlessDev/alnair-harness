@@ -458,7 +458,11 @@ mod tests {
                 "ask",
             ),
             // No permission keys → Ask.
-            ("[ui]\ntheme = \"alnairnight\"\n", PermissionMode::Ask, "ask"),
+            (
+                "[ui]\ntheme = \"alnairnight\"\n",
+                PermissionMode::Ask,
+                "ask",
+            ),
         ];
         for (toml_str, expected_mode, expected_canonical) in cases {
             let root: TomlValue = toml::from_str(toml_str).unwrap();

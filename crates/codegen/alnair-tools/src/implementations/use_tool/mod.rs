@@ -87,7 +87,9 @@ async fn dispatch_local_mcp(
     ctx: alnair_tool_runtime::ToolCallContext,
 ) -> Result<ToolOutput, alnair_tool_runtime::ToolError> {
     let tool_id = alnair_tool_protocol::ToolId::new(tool_name).map_err(|_| {
-        alnair_tool_runtime::ToolError::invalid_arguments(format!("invalid tool name: '{tool_name}'"))
+        alnair_tool_runtime::ToolError::invalid_arguments(format!(
+            "invalid tool name: '{tool_name}'"
+        ))
     })?;
     let typed = dispatch.0.call_terminal(tool_id, tool_input, ctx).await?;
     serde_json::from_value(typed.value)
@@ -254,9 +256,9 @@ mod tests {
         ) -> alnair_tool_runtime::ToolStream<alnair_tool_runtime::TypedToolOutput> {
             assert_eq!(tool_id.as_str(), self.expected_tool_name);
             let value = serde_json::to_value(self.return_output.clone()).unwrap();
-            alnair_tool_runtime::terminal_only(Ok(alnair_tool_runtime::TypedToolOutput::from_value(
-                tool_id, value,
-            )))
+            alnair_tool_runtime::terminal_only(Ok(
+                alnair_tool_runtime::TypedToolOutput::from_value(tool_id, value),
+            ))
         }
     }
 
@@ -285,9 +287,9 @@ mod tests {
             }
             *self.captured_args.lock().unwrap() = Some(args);
             let value = serde_json::to_value(ToolOutput::Text("ok".into())).unwrap();
-            alnair_tool_runtime::terminal_only(Ok(alnair_tool_runtime::TypedToolOutput::from_value(
-                tool_id, value,
-            )))
+            alnair_tool_runtime::terminal_only(Ok(
+                alnair_tool_runtime::TypedToolOutput::from_value(tool_id, value),
+            ))
         }
     }
 
@@ -350,7 +352,10 @@ mod tests {
         .await;
 
         let err = result.unwrap_err();
-        assert_eq!(err.kind, alnair_tool_runtime::ToolErrorKind::InvalidArguments);
+        assert_eq!(
+            err.kind,
+            alnair_tool_runtime::ToolErrorKind::InvalidArguments
+        );
         assert!(err.detail.contains("not a valid MCP tool name"));
         assert!(err.detail.contains("read_file"));
     }
@@ -371,7 +376,10 @@ mod tests {
         .await;
 
         let err = result.unwrap_err();
-        assert_eq!(err.kind, alnair_tool_runtime::ToolErrorKind::InvalidArguments);
+        assert_eq!(
+            err.kind,
+            alnair_tool_runtime::ToolErrorKind::InvalidArguments
+        );
         assert!(err.detail.contains("inner_dispatch not set"));
     }
 
@@ -1076,7 +1084,10 @@ mod tests {
         .await;
 
         let err = result.unwrap_err();
-        assert_eq!(err.kind, alnair_tool_runtime::ToolErrorKind::InvalidArguments);
+        assert_eq!(
+            err.kind,
+            alnair_tool_runtime::ToolErrorKind::InvalidArguments
+        );
         assert!(err.detail.contains("native tool"), "got: {}", err.detail);
         assert!(err.detail.contains("scheduler_create"));
         assert!(err.detail.contains("directly"));

@@ -137,7 +137,7 @@ mod tests {
 
     #[test]
     fn every_row_contributes() {
-        // A row with neither a kind nor a Alnair name is dead weight (and signals a typo).
+        // A row with neither a kind nor an Alnair name is dead weight (and signals a typo).
         for t in CLAUDE_TOOLS {
             assert!(
                 t.kind.is_some() || !t.alnair.is_empty(),

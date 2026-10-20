@@ -54,7 +54,7 @@ fn test_system_prompt_write_and_read() {
 
 #[test]
 fn test_system_prompt_is_plain_text_not_json() {
-    let prompt = "You are a Alnair subagent.";
+    let prompt = "You are an Alnair subagent.";
     assert!(!prompt.starts_with('"'), "must not be JSON-quoted");
     assert!(!prompt.starts_with('{'), "must not be JSON object");
 }
@@ -96,7 +96,7 @@ fn test_system_prompt_matches_chat_history_system_message() {
     let session_dir = tmp.path().join("session-consistency");
     std::fs::create_dir_all(&session_dir).unwrap();
 
-    let system_prompt = "You are a Alnair subagent.\n\n<tool_calling>\n...";
+    let system_prompt = "You are an Alnair subagent.\n\n<tool_calling>\n...";
 
     std::fs::write(session_dir.join(SYSTEM_PROMPT_FILENAME), system_prompt).unwrap();
 
@@ -146,7 +146,7 @@ fn test_load_system_prompt_returns_content_when_present() {
     let session_dir = tmp.path().join("session-load-test");
     std::fs::create_dir_all(&session_dir).unwrap();
 
-    let prompt = "You are a Alnair subagent.";
+    let prompt = "You are an Alnair subagent.";
     std::fs::write(session_dir.join(SYSTEM_PROMPT_FILENAME), prompt).unwrap();
 
     let loaded = load_system_prompt_from_dir(&session_dir);

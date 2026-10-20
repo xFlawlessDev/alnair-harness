@@ -1,9 +1,9 @@
 use std::io::Write;
 use std::path::PathBuf;
 
+use alnair_shell::session::memory::storage::MemoryStorage;
 use anyhow::Result;
 use clap::Subcommand;
-use alnair_shell::session::memory::storage::MemoryStorage;
 
 #[derive(Debug, clap::Args, Clone)]
 pub struct MemoryArgs {

@@ -35,7 +35,8 @@ pub(super) struct ReplaySendUpdateFixture {
     persistence_rx: mpsc::UnboundedReceiver<PersistenceMsg>,
 }
 pub(super) async fn make_replay_send_update_fixture() -> ReplaySendUpdateFixture {
-    let (gateway_tx, mut gateway_rx) = mpsc::unbounded_channel::<alnair_acp_lib::AcpClientMessage>();
+    let (gateway_tx, mut gateway_rx) =
+        mpsc::unbounded_channel::<alnair_acp_lib::AcpClientMessage>();
     let gateway = GatewaySender::new(gateway_tx);
     let sent = Arc::new(tokio::sync::Mutex::new(
         Vec::<acp::SessionNotification>::new(),
@@ -829,10 +830,11 @@ async fn observe_only_confident_completion_stays_warn_only() {
     local
         .run_until(async {
             let mut fixture = make_replay_send_update_fixture().await;
-            fixture.actor.doom_loop_recovery = Some(alnair_sampling_types::DoomLoopRecoveryPolicy {
-                max_threshold: 8,
-                max_retries: 0,
-            });
+            fixture.actor.doom_loop_recovery =
+                Some(alnair_sampling_types::DoomLoopRecoveryPolicy {
+                    max_threshold: 8,
+                    max_retries: 0,
+                });
             let actor = Arc::new(fixture.actor);
             *actor
                 .current_prompt_id
@@ -1221,7 +1223,8 @@ async fn reasoning_only_doomloop_turn_captures_every_generation_as_segments() {
                 panic!("a reasoning_only empty response must be a terminal error, not recoverable");
             };
             let (cmd_tx, cmd_rx) = mpsc::unbounded_channel::<SessionCommand>();
-            let (_chat_tx, chat_rx) = mpsc::unbounded_channel::<alnair_chat_state::ChatStateEvent>();
+            let (_chat_tx, chat_rx) =
+                mpsc::unbounded_channel::<alnair_chat_state::ChatStateEvent>();
             let codebase_indexes = Arc::new(parking_lot::Mutex::new(
                 alnair_workspace::file_system::CodebaseIndexManager::new(),
             ));

@@ -1054,7 +1054,8 @@ mod tests {
         // Build a PARENTLESS commit holding the same working state, so its `^`
         // never resolves — exercising the base-unreachable fallback without
         // depending on gc to prune a real base.
-        let snap = snapshot_worktree_to_ref(&wt, "refs/alnair/snapshots/orphan-src", "src").unwrap();
+        let snap =
+            snapshot_worktree_to_ref(&wt, "refs/alnair/snapshots/orphan-src", "src").unwrap();
         let tree = git_capture_in(&wt, &["rev-parse", &format!("{snap}^{{tree}}")], &[]).unwrap();
         let ident = [
             ("GIT_AUTHOR_NAME", "T"),

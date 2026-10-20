@@ -913,9 +913,10 @@ mod tests {
             description: "Check workdir".to_string(),
         };
 
-        let result = alnair_tool_runtime::Tool::run(&tool, test_ctx(resources.into_shared()), input)
-            .await
-            .unwrap();
+        let result =
+            alnair_tool_runtime::Tool::run(&tool, test_ctx(resources.into_shared()), input)
+                .await
+                .unwrap();
 
         match result {
             BashToolOutput::Bash(bash) => {

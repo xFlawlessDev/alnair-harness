@@ -464,7 +464,11 @@ fn is_directory_target(path: &Path) -> bool {
 }
 
 fn derive_default_svg_path(started_at: &str) -> Result<PathBuf, ControlError> {
-    derive_unique_svg_path(&alnair_home().join(DEFAULT_PROFILE_DIR), "leader", started_at)
+    derive_unique_svg_path(
+        &alnair_home().join(DEFAULT_PROFILE_DIR),
+        "leader",
+        started_at,
+    )
 }
 
 fn derive_unique_svg_path(

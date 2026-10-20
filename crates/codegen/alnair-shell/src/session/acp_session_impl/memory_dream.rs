@@ -44,7 +44,9 @@ impl SessionActor {
         &self,
         bridge: &alnair_tools::bridge::ToolBridge,
     ) -> Result<(), String> {
-        use alnair_tools::implementations::memory::{MEMORY_GET_TOOL_NAME, MEMORY_SEARCH_TOOL_NAME};
+        use alnair_tools::implementations::memory::{
+            MEMORY_GET_TOOL_NAME, MEMORY_SEARCH_TOOL_NAME,
+        };
 
         bridge
             .register_mcp_tools(
@@ -592,7 +594,9 @@ impl SessionActor {
             self.chat_state_handle.get_conversation(),
         );
         let chat_history = crate::sampling::conversation_to_chat_messages(
-            alnair_chat_state::compaction_utils::prepare_conversation_for_summarization(conversation),
+            alnair_chat_state::compaction_utils::prepare_conversation_for_summarization(
+                conversation,
+            ),
         );
         MemoryFlushSnapshot {
             counts,
@@ -670,8 +674,13 @@ impl SessionActor {
                     .conversation_stream_responses(request)
                     .await
                     .map_err(|e| format!("rewrite stream failed: {e}"))?;
-                let events =
-                    alnair_sampler::stream_responses(raw, meta, request_id, idle_timeout, doom_loop);
+                let events = alnair_sampler::stream_responses(
+                    raw,
+                    meta,
+                    request_id,
+                    idle_timeout,
+                    doom_loop,
+                );
                 alnair_sampler::collect_response(events).await
             }
             crate::sampling::ApiBackend::Messages => {

@@ -27,6 +27,8 @@ pub mod trust;
 pub mod util;
 pub mod workspace_ops;
 pub mod worktree;
+pub use alnair_hunk_tracker::HunkTrackerHandle;
+pub use alnair_workspace_types::WorkspaceEvent;
 pub use capability::CapabilityMode;
 pub use channel::{TransportCallResult, TransportContext, TransportError, TransportNotification};
 pub use config::{
@@ -36,8 +38,6 @@ pub use config::{
 pub use error::{WorkspaceError, WorkspaceResult};
 pub use file_system::*;
 pub use handle::WorkspaceHandle;
-pub use alnair_hunk_tracker::HunkTrackerHandle;
-pub use alnair_workspace_types::WorkspaceEvent;
 pub use permission::*;
 pub use session::{WorkspaceSession, WorkspaceShared};
 pub use session::{file_state, git, jj};

@@ -197,8 +197,8 @@ impl TokenRefresher for GenericDeviceRefresher {
 mod tests {
     use super::*;
     use crate::auth::model::KimiAuth;
-    use chrono::{Duration, Utc};
     use alnair_models::XAI_OAUTH_CONFIG;
+    use chrono::{Duration, Utc};
     use parking_lot::Mutex;
     use wiremock::matchers::{body_string_contains, method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};

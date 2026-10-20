@@ -11,8 +11,8 @@ use std::net::TcpListener;
 use std::path::PathBuf;
 use std::sync::OnceLock;
 
-use base64::Engine as _;
 use alnair_config::signed_policy::{self, SignedPayload};
+use base64::Engine as _;
 
 pub const MANAGED: &str = "[cli]\ntheme = \"dark\"\n";
 pub const REQUIREMENTS_FAIL_CLOSED: &str = "fail_closed = true\n[features]\nweb_fetch = false\n";

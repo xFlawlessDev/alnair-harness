@@ -226,7 +226,11 @@ impl CredentialAuthority {
     /// Whether `base_url` is `platform`'s own registry host — the guard that
     /// keeps a subscription-OAuth bearer from riding a redirected `[model.*]`
     /// override to a third party (L10).
-    fn endpoint_is_platform_host(&self, platform: alnair_models::PlatformId, base_url: &str) -> bool {
+    fn endpoint_is_platform_host(
+        &self,
+        platform: alnair_models::PlatformId,
+        base_url: &str,
+    ) -> bool {
         crate::util::matches_trusted_base_url(base_url, &platform.base_url())
     }
 

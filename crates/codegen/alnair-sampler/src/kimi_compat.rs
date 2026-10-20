@@ -243,7 +243,7 @@ fn adapt_thinking(body: &mut Value) {
 
 /// Message-level adaptations:
 ///
-/// * Drop `model_id` — a alnair extension recorded on assistant turns;
+/// * Drop `model_id` — an alnair extension recorded on assistant turns;
 ///   kimi-cli's message serializer sends no such field
 ///   (packages/kosong/src/kosong/chat_provider/kimi.py:326-353).
 /// * Drop `content` from assistant tool-call messages whose visible content

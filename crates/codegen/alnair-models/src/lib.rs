@@ -2968,7 +2968,8 @@ mod tests {
             "https://api.moonshot.ai/v1"
         );
         // Subscription base honors the env override.
-        let _g = alnair_env::EnvVarGuard::set(alnair_env::CODE_BASE_URL_ENV, "https://mock.test/v1");
+        let _g =
+            alnair_env::EnvVarGuard::set(alnair_env::CODE_BASE_URL_ENV, "https://mock.test/v1");
         assert_eq!(PlatformId::KimiCode.base_url(), "https://mock.test/v1");
     }
 

@@ -13,10 +13,10 @@
 //! files, skill registry, MCP servers) and hands them to
 //! `UserMessageContext::render`, which dispatches on `template`.
 use crate::prompt::agents_md::AgentConfigFile;
-use chrono::NaiveDate;
 use alnair_tools::bridge::ToolBridge;
 use alnair_tools::implementations::skills::types::SkillInfo;
 use alnair_tools::types::skill_discovery_tracker::{XmlRenderMode, format_announcement_xml};
+use chrono::NaiveDate;
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::path::PathBuf;

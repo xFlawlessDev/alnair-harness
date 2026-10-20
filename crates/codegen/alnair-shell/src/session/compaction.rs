@@ -943,7 +943,8 @@ impl SessionActor {
             .into_iter()
             .map(alnair_sampling_types::ToolSpec::from)
             .collect();
-        let compaction_hosted_tools: Vec<alnair_sampling_types::HostedTool> = if use_backend_search {
+        let compaction_hosted_tools: Vec<alnair_sampling_types::HostedTool> = if use_backend_search
+        {
             self.agent.borrow().hosted_tools().to_vec()
         } else {
             Vec::new()

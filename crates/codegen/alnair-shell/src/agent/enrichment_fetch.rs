@@ -217,7 +217,9 @@ mod tests {
         assert!(catalog.is_empty());
         // The full registry DOES need enrichment (OpenAI is
         // wire_serves_metadata=false) — the fast path must not hide that.
-        assert!(any_platform_needs_enrichment(&alnair_models::PlatformId::ALL));
+        assert!(any_platform_needs_enrichment(
+            &alnair_models::PlatformId::ALL
+        ));
     }
 
     fn cache_file_in(dir: &tempfile::TempDir) -> std::path::PathBuf {
@@ -385,7 +387,9 @@ mod tests {
             let _url = EnvGuard::set(MODELS_DEV_URL_ENV, token);
             assert!(refresh_url().is_none(), "token {token:?} must disable");
             let catalog = load_enrichment_catalog_at(&path);
-            assert!(alnair_models::enrichment::lookup(&catalog, "kimi-code-plan-cn", "k3").is_some());
+            assert!(
+                alnair_models::enrichment::lookup(&catalog, "kimi-code-plan-cn", "k3").is_some()
+            );
         }
     }
 

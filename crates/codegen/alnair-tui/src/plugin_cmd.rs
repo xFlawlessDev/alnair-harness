@@ -196,7 +196,10 @@ fn cmd_list(json: bool) -> Result<()> {
 }
 
 fn installed_plugins(
-    repos: &[(&str, &alnair_agent::plugins::install_registry::InstalledRepo)],
+    repos: &[(
+        &str,
+        &alnair_agent::plugins::install_registry::InstalledRepo,
+    )],
 ) -> Vec<PluginEntry> {
     repos
         .iter()
@@ -507,7 +510,10 @@ mod tests {
             ),
             "{git}"
         );
-        assert!(git.ends_with("  alnair plugin install u/r --trust"), "{git}");
+        assert!(
+            git.ends_with("  alnair plugin install u/r --trust"),
+            "{git}"
+        );
         let local = trust_prompt("from directory /tmp/p", "./p");
         assert!(
             local.starts_with("Installing from directory /tmp/p requires confirmation."),

@@ -95,8 +95,8 @@ use std::rc::Rc;
 use std::time::Duration;
 
 use agent_client_protocol as acp;
-use async_trait::async_trait;
 use alnair_mcp::servers::{McpClientEventKind, McpServerName};
+use async_trait::async_trait;
 
 use crate::session::mcp_dispatcher::{
     McpServerStatus, McpServerStatusPayload, McpServerStatusReason, SERVER_STATUS_METHOD,

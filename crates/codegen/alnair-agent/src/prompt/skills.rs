@@ -380,9 +380,11 @@ fn collect_config_skills(config_paths: &[String], git_root: Option<&Path>) -> Ve
     // Provenance metadata only (scope still drives precedence): lets inspect
     // and UIs distinguish `[skills].paths` entries from plain user/repo skills.
     for skill in &mut skills {
-        skill.config_source = Some(alnair_tools::types::config_source::ConfigSource::ConfigToml {
-            path: PathBuf::from(&skill.path),
-        });
+        skill.config_source = Some(
+            alnair_tools::types::config_source::ConfigSource::ConfigToml {
+                path: PathBuf::from(&skill.path),
+            },
+        );
     }
     skills
 }
@@ -735,7 +737,10 @@ mod tests {
         write_skill_md(&server.path().join("dup"), "dup");
 
         let cwd = tempfile::tempdir().unwrap();
-        write_skill_md(&cwd.path().join(".alnair").join("skills").join("dup"), "dup");
+        write_skill_md(
+            &cwd.path().join(".alnair").join("skills").join("dup"),
+            "dup",
+        );
 
         let config = SkillsConfig {
             server_skill_dirs: vec![server.path().to_string_lossy().into_owned()],
@@ -771,7 +776,10 @@ mod tests {
         write_skill_md(&bundled.path().join("dup"), "dup");
 
         let cwd = tempfile::tempdir().unwrap();
-        write_skill_md(&cwd.path().join(".alnair").join("skills").join("dup"), "dup");
+        write_skill_md(
+            &cwd.path().join(".alnair").join("skills").join("dup"),
+            "dup",
+        );
 
         let config = SkillsConfig {
             bundled_skill_dirs: vec![bundled.path().to_string_lossy().into_owned()],
@@ -1111,7 +1119,8 @@ mod tests {
 
     #[test]
     fn parse_model_and_effort() {
-        let content = "---\nname: my-skill\ndescription: test\nmodel: alnair-3\neffort: high\n---\n";
+        let content =
+            "---\nname: my-skill\ndescription: test\nmodel: alnair-3\neffort: high\n---\n";
         let parsed = parse_skill_frontmatter(content, None).unwrap();
         assert_eq!(parsed.model.as_deref(), Some("alnair-3"));
         assert_eq!(parsed.effort.as_deref(), Some("high"));
@@ -1887,7 +1896,10 @@ mod tests {
         fs::create_dir_all(&repo_root).unwrap();
         init_git_repo(&repo_root);
 
-        let auto_dir = repo_root.join(".alnair").join("skills").join("overlap-skill");
+        let auto_dir = repo_root
+            .join(".alnair")
+            .join("skills")
+            .join("overlap-skill");
         write_skill_md(&auto_dir, "overlap-skill");
 
         let config = SkillsConfig {
@@ -1939,9 +1951,11 @@ mod tests {
     fn dedupe_skills_name_collision_does_not_propagate_config_source() {
         let winner = make_skill("same-name", "/some/path/a/SKILL.md");
         let mut loser = make_skill("same-name", "/some/path/b/SKILL.md");
-        loser.config_source = Some(alnair_tools::types::config_source::ConfigSource::ConfigToml {
-            path: PathBuf::from("/some/path/b/SKILL.md"),
-        });
+        loser.config_source = Some(
+            alnair_tools::types::config_source::ConfigSource::ConfigToml {
+                path: PathBuf::from("/some/path/b/SKILL.md"),
+            },
+        );
 
         let deduped = dedupe_skills(vec![winner, loser]);
 

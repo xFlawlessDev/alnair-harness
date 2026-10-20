@@ -125,7 +125,12 @@ pub(crate) fn enrich_from_meta(
     parent_cwd: &std::path::Path,
     parent_session_id: &str,
 ) {
-    enrich_from_meta_with_home(info, &effective_alnair_home(), parent_cwd, parent_session_id);
+    enrich_from_meta_with_home(
+        info,
+        &effective_alnair_home(),
+        parent_cwd,
+        parent_session_id,
+    );
 }
 fn enrich_from_meta_with_home(
     info: &mut SubagentInfo,

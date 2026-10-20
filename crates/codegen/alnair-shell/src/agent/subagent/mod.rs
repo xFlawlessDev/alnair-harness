@@ -200,7 +200,8 @@ pub(crate) struct SubagentSpawnContext {
     /// When a subagent exits, its surviving tasks (monitors, bg commands)
     /// need their notification handles swapped to this so events route
     /// to the parent's notification bridge.
-    pub parent_notification_handle: Option<alnair_tools::notification::types::ToolNotificationHandle>,
+    pub parent_notification_handle:
+        Option<alnair_tools::notification::types::ToolNotificationHandle>,
     /// Parent's scheduler handle. When `Some`, the subagent reuses the
     /// parent's scheduler actor so scheduled tasks survive subagent exit.
     pub parent_scheduler_handle:
@@ -1334,7 +1335,8 @@ async fn bootstrap_initial_context(
                         ));
                     }
                 };
-                let estimated_tokens = alnair_chat_state::estimate_conversation_tokens(&conversation);
+                let estimated_tokens =
+                    alnair_chat_state::estimate_conversation_tokens(&conversation);
                 const SAFE_RESUME_PERCENT: u64 = 80;
                 let threshold = child_context_window * SAFE_RESUME_PERCENT / 100;
                 if estimated_tokens > threshold {
@@ -1710,7 +1712,7 @@ pub(crate) fn subagent_harness_flavor_is_representable(_agent_type: &str) -> boo
 /// the alternate harness; the orchestrator keeps children lean, and other parents
 /// inherit the file-tool override (hashline vs standard). A `/goal` role may
 /// pass `harness_agent_type` to OVERRIDE that flavor regardless of the parent
-/// (so a alnair session can run an alternate-harness verifier and vice-versa);
+/// (so an alnair session can run an alternate-harness verifier and vice-versa);
 /// `None` for every non-goal spawn ⇒ the parent decides (unchanged). The base
 /// toolset stays role-dependent on `subagent_type` (general-purpose →
 /// implementer, else explorer), so the role keeps a capable toolset on the

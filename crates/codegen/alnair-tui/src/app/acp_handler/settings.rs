@@ -244,7 +244,8 @@ pub(super) fn apply_soft_default_permission_mode(
     } else if app.default_yolo {
         "always-approve".to_string()
     } else {
-        alnair_shell::util::config::resolved_display_permission_mode(effective_ui, remote).to_string()
+        alnair_shell::util::config::resolved_display_permission_mode(effective_ui, remote)
+            .to_string()
     });
 }
 

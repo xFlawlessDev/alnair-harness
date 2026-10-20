@@ -1,7 +1,7 @@
 use crate::{
     computer::types::{AsyncFileSystem, TerminalBackend},
     implementations::{
-        codex, alnair, alnair_concise, alnair_hashline, opencode, skills::types::SkillInfo,
+        alnair, alnair_concise, alnair_hashline, codex, opencode, skills::types::SkillInfo,
     },
     notification::ToolNotificationHandle,
     persistence::ResourcesPersistence,
@@ -365,7 +365,9 @@ struct ToolEntry {
     /// Noop when `T::Params = ()`.
     register_params: Box<dyn Fn(&mut Resources) + Send + Sync>,
     parse_input: Box<
-        dyn Fn(serde_json::Value) -> Result<ToolInput, alnair_tool_runtime::ToolError> + Send + Sync,
+        dyn Fn(serde_json::Value) -> Result<ToolInput, alnair_tool_runtime::ToolError>
+            + Send
+            + Sync,
     >,
     /// Registers this tool into a `LocalRegistry` using the concrete type.
     /// Captured at `register::<T>()` time when T is known.
@@ -404,7 +406,9 @@ struct FinalizedTool {
     /// Client-facing param → canonical param, for reverse-remapping at dispatch.
     reverse_params: HashMap<String, String>,
     parse_input: Arc<
-        dyn Fn(serde_json::Value) -> Result<ToolInput, alnair_tool_runtime::ToolError> + Send + Sync,
+        dyn Fn(serde_json::Value) -> Result<ToolInput, alnair_tool_runtime::ToolError>
+            + Send
+            + Sync,
     >,
     /// Resolved behavior contract version for this tool (e.g. `"current"`,
     /// `"legacy-0.4.10"`). `None` for unmanaged tools and dynamically
@@ -1517,8 +1521,9 @@ impl FinalizedToolset {
         output_converter: &OutputConverter,
         effective_tool_name: Option<String>,
     ) -> Result<ToolRunResult, alnair_tool_runtime::ToolError> {
-        let output = (output_converter)(value)
-            .map_err(|e| alnair_tool_runtime::ToolError::custom("output_decoding", e.to_string()))?;
+        let output = (output_converter)(value).map_err(|e| {
+            alnair_tool_runtime::ToolError::custom("output_decoding", e.to_string())
+        })?;
         let reminders_enabled;
         {
             reminders_enabled = self

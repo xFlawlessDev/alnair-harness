@@ -1,8 +1,8 @@
 //! Contains utility functions to attach file content and render it according to the
 //! training format we have been using
 use agent_client_protocol::{BlobResourceContents, EmbeddedResource, EmbeddedResourceResource};
-use base64::{Engine as _, engine::general_purpose};
 use alnair_tools::util::truncate::estimate_tokens;
+use base64::{Engine as _, engine::general_purpose};
 use regex::Regex;
 use sha2::{Digest, Sha256};
 use std::path::PathBuf;

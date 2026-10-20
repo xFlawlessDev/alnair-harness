@@ -60,7 +60,9 @@ pub(crate) fn background_bash_requires_exprs() -> Vec<Expr<ToolRequirement>> {
     use crate::types::tool_metadata::ToolMetadata;
     let alnair_bash = Expr::Value(ToolRequirement::Tool {
         namespace: ToolMetadata::tool_namespace(&BashTool).to_string(),
-        id: alnair_tool_runtime::Tool::id(&BashTool).as_str().to_string(),
+        id: alnair_tool_runtime::Tool::id(&BashTool)
+            .as_str()
+            .to_string(),
         if_params: Some(Expr::Value(ToolParamsRequirement {
             key: "enabled_background".to_string(),
             value: Expr::Value(serde_json::Value::Bool(true)),
@@ -91,7 +93,9 @@ pub(crate) fn task_output_requires_expr() -> Expr<ToolRequirement> {
     use crate::types::tool_metadata::ToolMetadata;
     let task_tool = Expr::Value(ToolRequirement::Tool {
         namespace: ToolMetadata::tool_namespace(&TaskTool).to_string(),
-        id: alnair_tool_runtime::Tool::id(&TaskTool).as_str().to_string(),
+        id: alnair_tool_runtime::Tool::id(&TaskTool)
+            .as_str()
+            .to_string(),
         if_params: None,
     });
     let mut arms = background_bash_requires_exprs();
@@ -135,9 +139,9 @@ impl TaskOutputTool {
             {
                 let res = resources.lock().await;
                 let renderer = res.require::<TemplateRenderer>()?;
-                read_file_name = renderer
-                    .render("${{ tools.by_kind.read }}")
-                    .map_err(|e| alnair_tool_runtime::ToolError::invalid_arguments(e.to_string()))?;
+                read_file_name = renderer.render("${{ tools.by_kind.read }}").map_err(|e| {
+                    alnair_tool_runtime::ToolError::invalid_arguments(e.to_string())
+                })?;
             }
             let max_output_bytes = resources
                 .lock()
@@ -662,12 +666,14 @@ impl crate::types::tool_metadata::ToolMetadata for TaskOutputTool {
         // renders it context-aware from the finalized toolset. This static
         // fallback mirrors the default alnair toolset.
         static DESC: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| {
-            alnair_tool_types::build_task_output_description(&alnair_tool_types::TaskOutputToolNaming {
-                monitor_tool: Some("monitor"),
-                read_tool: Some("read_file"),
-                bash_background_param: Some("is_background"),
-                subagent_background_param: Some("run_in_background"),
-            })
+            alnair_tool_types::build_task_output_description(
+                &alnair_tool_types::TaskOutputToolNaming {
+                    monitor_tool: Some("monitor"),
+                    read_tool: Some("read_file"),
+                    bash_background_param: Some("is_background"),
+                    subagent_background_param: Some("run_in_background"),
+                },
+            )
         });
         &DESC
     }

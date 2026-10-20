@@ -23,8 +23,8 @@
 use std::fs;
 use std::path::Path;
 
-use criterion::{BatchSize, Criterion, criterion_group, criterion_main};
 use alnair_fsnotify::{FsConfig, FsEventSource};
+use criterion::{BatchSize, Criterion, criterion_group, criterion_main};
 use tempfile::TempDir;
 
 const TOTAL_DIRS: usize = 12_000;

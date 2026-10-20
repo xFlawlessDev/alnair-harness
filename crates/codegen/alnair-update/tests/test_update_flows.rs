@@ -26,16 +26,16 @@ use std::path::Path;
 
 use serial_test::serial;
 
-use common::artifact_server::ArtifactServer;
-use common::{
-    can_exec_shell_scripts, host_platform, make_update_config, reset_home, set_test_version,
-    set_update_base, small_good_artifact, test_home,
-};
 use alnair_update::auto_update::{
     UpdateRunMode, check_update_status, ensure_latest_on_disk, install_internal_from_base,
     run_update, run_update_if_available,
 };
 use alnair_update::version::installed_on_disk_version;
+use common::artifact_server::ArtifactServer;
+use common::{
+    can_exec_shell_scripts, host_platform, make_update_config, reset_home, set_test_version,
+    set_update_base, small_good_artifact, test_home,
+};
 
 /// Lay down a managed-install layout in the test ALNAIR_SHARE_DIR:
 /// `bin/alnair -> ../downloads/alnair-<version>-<platform>` (what the installer

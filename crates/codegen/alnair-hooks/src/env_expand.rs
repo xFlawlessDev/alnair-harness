@@ -361,8 +361,10 @@ mod tests {
                     "ALNAIR_HOOKS_ENV_EXPAND_TEST_PRECEDENCE".to_string(),
                     "from-extra".to_string(),
                 );
-                let out =
-                    expand_env_vars_with_extra("${ALNAIR_HOOKS_ENV_EXPAND_TEST_PRECEDENCE}", &extra);
+                let out = expand_env_vars_with_extra(
+                    "${ALNAIR_HOOKS_ENV_EXPAND_TEST_PRECEDENCE}",
+                    &extra,
+                );
                 assert_eq!(out, "from-extra");
             },
         );
@@ -375,8 +377,10 @@ mod tests {
             Some("/from/proc/env"),
             || {
                 let extra = HashMap::new();
-                let out =
-                    expand_env_vars_with_extra("${ALNAIR_HOOKS_ENV_EXPAND_TEST_FALLBACK}/x", &extra);
+                let out = expand_env_vars_with_extra(
+                    "${ALNAIR_HOOKS_ENV_EXPAND_TEST_FALLBACK}/x",
+                    &extra,
+                );
                 assert_eq!(out, "/from/proc/env/x");
             },
         );

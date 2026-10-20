@@ -231,7 +231,8 @@ impl SessionActor {
         };
         let ctx = self.hook_run_ctx();
         let results =
-            alnair_hooks::dispatcher::dispatch_non_blocking(&registry, event, &envelope, &ctx).await;
+            alnair_hooks::dispatcher::dispatch_non_blocking(&registry, event, &envelope, &ctx)
+                .await;
         self.send_hook_execution(&event.to_string(), tool_name, prompt_id, &results)
             .await;
     }

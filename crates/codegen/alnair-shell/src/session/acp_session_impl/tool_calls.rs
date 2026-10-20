@@ -537,7 +537,8 @@ impl SessionActor {
                         )
                         .await;
                     deferred_followups.extend(err_followups);
-                    if self.hook_event_active(alnair_hooks::event::HookEventName::PostToolUseFailure)
+                    if self
+                        .hook_event_active(alnair_hooks::event::HookEventName::PostToolUseFailure)
                     {
                         let raw_input: serde_json::Value =
                             serde_json::from_str(&prepared.raw_arguments)
@@ -864,7 +865,8 @@ impl SessionActor {
             if let Some(registry) = hook_registry_snapshot {
                 let ctx = self.hook_run_ctx();
                 let pre_result =
-                    alnair_hooks::dispatcher::dispatch_pre_tool_use(&registry, &envelope, &ctx).await;
+                    alnair_hooks::dispatcher::dispatch_pre_tool_use(&registry, &envelope, &ctx)
+                        .await;
                 self.send_hook_execution(
                     "pre_tool_use",
                     Some(&resolved_tool_name),
@@ -1439,9 +1441,12 @@ impl SessionActor {
             ToolInput::ReadFile(read_file) => (
                 format!("Read `{}`", read_file.path.clone()),
                 acp::ToolKind::Read,
-                vec![acp::ToolCallLocation::new(read_file.path).line(
-                    alnair_tools::normalization::norm_offset_i64(read_file.offset).map(|l| l as u32),
-                )],
+                vec![
+                    acp::ToolCallLocation::new(read_file.path).line(
+                        alnair_tools::normalization::norm_offset_i64(read_file.offset)
+                            .map(|l| l as u32),
+                    ),
+                ],
                 Vec::new(),
             ),
             ToolInput::TodoWrite(_) => (

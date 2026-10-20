@@ -3,11 +3,11 @@
 use std::path::PathBuf;
 use std::process::ExitCode;
 
-use anyhow::{Context, Result, bail};
-use clap::Parser as ClapParser;
 use alnair_pager_pty_harness::{
     ScriptedRunConfig, ScriptedRunStatus, ScriptedScenario, ScriptedScenarioRunner, pager_binary,
 };
+use anyhow::{Context, Result, bail};
+use clap::Parser as ClapParser;
 
 #[derive(ClapParser, Debug)]
 #[command(

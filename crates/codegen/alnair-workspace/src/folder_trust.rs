@@ -544,7 +544,11 @@ mod tests {
         let tmp = repo_tmp();
         let alnair = tmp.path().join(".alnair");
         std::fs::create_dir_all(&alnair).unwrap();
-        std::fs::write(alnair.join("config.toml"), "[mcp_servers.x]\ncommand=\"y\"\n").unwrap();
+        std::fs::write(
+            alnair.join("config.toml"),
+            "[mcp_servers.x]\ncommand=\"y\"\n",
+        )
+        .unwrap();
         assert!(repo_configs_present(tmp.path()));
     }
 

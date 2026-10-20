@@ -100,7 +100,8 @@ impl crate::types::tool_metadata::ToolMetadata for KillTaskTool {
             id: alnair_tool_runtime::Tool::id(&TaskTool).to_string(),
             if_params: None,
         });
-        let mut arms = crate::implementations::alnair::task_output::background_bash_requires_exprs();
+        let mut arms =
+            crate::implementations::alnair::task_output::background_bash_requires_exprs();
         arms.push(task_tool);
         Expr::Or(arms)
     }

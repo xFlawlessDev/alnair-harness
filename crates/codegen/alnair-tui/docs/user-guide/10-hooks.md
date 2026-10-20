@@ -1,6 +1,6 @@
 # Hooks
 
-Hooks let you run a script or send an HTTP request at key moments in a Alnair session. Use them to automate tasks, enforce safety checks, log activity, send notifications, and integrate your own tools.
+Hooks let you run a script or send an HTTP request at key moments in an Alnair session. Use them to automate tasks, enforce safety checks, log activity, send notifications, and integrate your own tools.
 
 ---
 
@@ -49,7 +49,7 @@ A hook is a shell command or HTTP endpoint that Alnair calls when a specific lif
    }
    ```
 
-3. Start (or restart) a Alnair session. The hook runs automatically on `SessionStart`.
+3. Start (or restart) an Alnair session. The hook runs automatically on `SessionStart`.
 
 4. Press `Ctrl+L` on non–VS Code family terminals (or run `/hooks` anywhere — preferred on VS Code family) and check the Hooks tab to confirm it loaded.
 

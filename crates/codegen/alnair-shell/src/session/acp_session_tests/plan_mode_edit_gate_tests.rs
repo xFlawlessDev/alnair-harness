@@ -68,7 +68,9 @@ async fn tool_result_text(actor: &SessionActor, call_id: &str) -> String {
     conv.iter()
         .rev()
         .find_map(|item| match item {
-            alnair_sampling_types::ConversationItem::ToolResult(tr) if tr.tool_call_id == call_id => {
+            alnair_sampling_types::ConversationItem::ToolResult(tr)
+                if tr.tool_call_id == call_id =>
+            {
                 Some(tr.content.to_string())
             }
             _ => None,
@@ -76,7 +78,7 @@ async fn tool_result_text(actor: &SessionActor, call_id: &str) -> String {
         .unwrap_or_else(|| panic!("no tool_result for {call_id} in {conv:?}"))
 }
 /// The headline: plan mode Active + allow-all permissions (the always-approve
-/// worst case) still rejects a alnair edit outside the plan file, without ever
+/// worst case) still rejects an alnair edit outside the plan file, without ever
 /// reaching the permission layer.
 #[tokio::test(flavor = "current_thread")]
 async fn plan_mode_rejects_alnair_edit_outside_plan_file_despite_allow_all_permissions() {

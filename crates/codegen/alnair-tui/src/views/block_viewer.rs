@@ -5,8 +5,8 @@
 //!
 //! Supports thinking/agent message blocks (markdown content).
 
-use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseEventKind};
 use alnair_workspace::permission::mcp_titleize_segment;
+use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseEventKind};
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};

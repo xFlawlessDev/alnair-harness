@@ -27,7 +27,7 @@ use tracing::{debug, info};
 use crate::util::config::{McpConfig, McpServerConfig, McpServerTransportConfig};
 use alnair_models::PlatformId;
 
-/// A kimi-cli model entry that maps to a alnair `[model.<alias>]` custom entry
+/// A kimi-cli model entry that maps to an alnair `[model.<alias>]` custom entry
 /// (non-built-in provider).
 #[derive(Debug, Clone)]
 pub struct KimiCustomModel {

@@ -3536,7 +3536,9 @@ fn docs_footer_renders_for_browse_and_picker() {
             assert!(matches!(s.mode, SettingsModalMode::PickingEnum { .. }));
         }
         let mut buf = Buffer::empty(area);
-        alnair_tui::views::settings_modal::render_settings_modal(&mut buf, area, &mut s, false, None);
+        alnair_tui::views::settings_modal::render_settings_modal(
+            &mut buf, area, &mut s, false, None,
+        );
         let mut all_text = String::new();
         for y in 0..area.height {
             for x in 0..area.width {

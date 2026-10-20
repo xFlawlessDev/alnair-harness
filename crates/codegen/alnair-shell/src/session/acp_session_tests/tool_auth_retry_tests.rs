@@ -81,12 +81,11 @@ fn err(msg: &str) -> Result<ToolRunResult, alnair_tool_runtime::ToolError> {
 /// any non-success status). Use for retry tests that should exercise
 /// the structured status-code path rather than the string fallback.
 fn http_err(status: u16, msg: &str) -> Result<ToolRunResult, alnair_tool_runtime::ToolError> {
-    Err(
-        alnair_tool_runtime::ToolError::new(alnair_tool_runtime::ToolErrorKind::Custom, msg.to_owned())
-            .with_details(
-                serde_json::json!({"code": "http_failure", HTTP_STATUS_DETAILS_KEY: status}),
-            ),
+    Err(alnair_tool_runtime::ToolError::new(
+        alnair_tool_runtime::ToolErrorKind::Custom,
+        msg.to_owned(),
     )
+    .with_details(serde_json::json!({"code": "http_failure", HTTP_STATUS_DETAILS_KEY: status})))
 }
 
 #[test]

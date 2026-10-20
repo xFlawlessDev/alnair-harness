@@ -1524,7 +1524,11 @@ model: test-model
         .unwrap();
         let alnair_skill = sub.join(".alnair").join("skills").join("alnair-dyn");
         std::fs::create_dir_all(&alnair_skill).unwrap();
-        std::fs::write(alnair_skill.join("SKILL.md"), "---\nname: alnair-dyn\n---\n").unwrap();
+        std::fs::write(
+            alnair_skill.join("SKILL.md"),
+            "---\nname: alnair-dyn\n---\n",
+        )
+        .unwrap();
 
         let file = sub.join("file.rs");
         std::fs::write(&file, "fn main() {}").unwrap();

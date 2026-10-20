@@ -937,7 +937,8 @@ mod tests {
         input.model = Some("invented-model".to_string());
 
         let result =
-            alnair_tool_runtime::Tool::run(&TaskTool, test_ctx(resources.into_shared()), input).await;
+            alnair_tool_runtime::Tool::run(&TaskTool, test_ctx(resources.into_shared()), input)
+                .await;
 
         let msg = result
             .expect_err("invalid model must reject before spawn")

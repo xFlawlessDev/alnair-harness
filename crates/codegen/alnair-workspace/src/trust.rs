@@ -351,7 +351,7 @@ impl TrustStore {
 /// The key is the canonicalized git repository root when `cwd` is inside a
 /// repo (trust applies to the whole repo), otherwise the canonicalized `cwd`.
 ///
-/// A alnair-managed worktree first collapses onto its recorded source repo's git
+/// An alnair-managed worktree first collapses onto its recorded source repo's git
 /// ROOT (via the `~/.alnair/worktrees.db` registry), so every `alnair -w` worktree
 /// shares one trust key regardless of creation mode — including standalone clones
 /// that git can't link back to their source — and regardless of the subdir
@@ -383,7 +383,7 @@ pub fn workspace_key(cwd: &Path) -> PathBuf {
 /// Git-topology-derived workspace key (pre-safety-guard); see [`workspace_key`],
 /// which rejects an over-broad derived root in favor of the cwd.
 fn git_derived_workspace_key(cwd: &Path) -> PathBuf {
-    // A alnair-managed worktree (any creation mode, incl. standalone clones git
+    // An alnair-managed worktree (any creation mode, incl. standalone clones git
     // can't link) collapses onto its recorded source repo so trust is shared.
     if let Some(source_repo) = crate::worktree::source_repo_for_cwd(&cwd.to_string_lossy()) {
         // Key on the source repo's git ROOT so every worktree of one repo shares

@@ -4,7 +4,6 @@ use crate::auth::credential_authority::SessionCredential;
 use crate::auth::{AuthManager, KimiCodeConfig};
 use crate::{config::StorageMode, sampling::ApiBackend, tools::config::ShellToolsetConfig};
 use agent_client_protocol as acp;
-use indexmap::IndexMap;
 use alnair_agent::prompt::skills::SkillsConfig;
 use alnair_sampler::{AuthScheme, SamplerConfig};
 use alnair_sampling_types::{
@@ -15,6 +14,7 @@ use alnair_sampling_types::{
 use alnair_tools::types::compat::{
     COMPAT_CELLS, CompatConfig, CompatConfigToml, CompatRemoteKey, CompatSurface, CompatVendor,
 };
+use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
 use std::num::NonZeroU64;
 use std::path::PathBuf;
@@ -4191,14 +4191,18 @@ pub fn sampling_config_for_model(
         .and_then(alnair_models::parse_managed_model_key)
         .map(|(platform, _)| match platform.chat_compat() {
             alnair_models::PlatformChatCompat::Kimi => alnair_sampling_types::ChatCompat::Kimi,
-            alnair_models::PlatformChatCompat::DeepSeek => alnair_sampling_types::ChatCompat::DeepSeek,
+            alnair_models::PlatformChatCompat::DeepSeek => {
+                alnair_sampling_types::ChatCompat::DeepSeek
+            }
             alnair_models::PlatformChatCompat::Passthrough => {
                 alnair_sampling_types::ChatCompat::Passthrough
             }
             alnair_models::PlatformChatCompat::StrictOpenAi => {
                 alnair_sampling_types::ChatCompat::StrictOpenAi
             }
-            alnair_models::PlatformChatCompat::Mistral => alnair_sampling_types::ChatCompat::Mistral,
+            alnair_models::PlatformChatCompat::Mistral => {
+                alnair_sampling_types::ChatCompat::Mistral
+            }
         })
         .unwrap_or_else(|| {
             if crate::util::is_effective_coding_endpoint_url(&credentials.base_url) {
@@ -4770,8 +4774,9 @@ reasoning_effort = "low"
                 None,
             ),
         );
-        let resolved = resolve_aux_model_sampling_config("alnair", &catalog, &endpoints, None, None)
-            .expect("override entry has an API key, so resolution succeeds");
+        let resolved =
+            resolve_aux_model_sampling_config("alnair", &catalog, &endpoints, None, None)
+                .expect("override entry has an API key, so resolution succeeds");
         assert_eq!(resolved.model, "v9m-rl-learnability-tp8");
         assert_eq!(resolved.base_url, "https://vendor.example/v1");
         assert_eq!(resolved.api_key.as_deref(), Some("vendor-key"));
@@ -5045,7 +5050,10 @@ reasoning_effort = "low"
     }
     #[test]
     fn env_keys_resolve_first_set_wins() {
-        let keys = EnvKeys::new(["ALNAIR_TEST_ENV_KEY_PRIMARY", "ALNAIR_TEST_ENV_KEY_FALLBACK"]);
+        let keys = EnvKeys::new([
+            "ALNAIR_TEST_ENV_KEY_PRIMARY",
+            "ALNAIR_TEST_ENV_KEY_FALLBACK",
+        ]);
         assert_eq!(keys.resolve_value_with(|_| None), None, "none set");
         assert_eq!(
             keys.resolve_value_with(
@@ -9143,7 +9151,9 @@ default = "alnair-4.5"
             .expect("alnair-build key must exist");
         assert_eq!(by_key.info.context_window.get(), 500_000);
         assert_eq!(by_key.info.model, "alnair-4.5");
-        let by_latest = resolved.get("alnair-4.5").expect("alnair-4.5 key must exist");
+        let by_latest = resolved
+            .get("alnair-4.5")
+            .expect("alnair-4.5 key must exist");
         assert_eq!(
             by_latest.info.context_window.get(),
             500_000,
@@ -9209,8 +9219,13 @@ default = "alnair-4.5"
         .unwrap();
         let cfg = Config::new_from_toml_cfg(&raw).expect("config should parse");
         let mut prefetched = IndexMap::new();
-        let mut entry =
-            test_model_entry("alnair-4.5", "https://test.example.com/v1", None, None, None);
+        let mut entry = test_model_entry(
+            "alnair-4.5",
+            "https://test.example.com/v1",
+            None,
+            None,
+            None,
+        );
         entry.info.context_window = NonZeroU64::new(default_cw).unwrap();
         entry.info.agent_type = default_agent_type();
         entry.info.api_backend = ApiBackend::default();
@@ -9243,8 +9258,13 @@ default = "alnair-4.5"
         .unwrap();
         let cfg = Config::new_from_toml_cfg(&raw).expect("config should parse");
         let mut prefetched = IndexMap::new();
-        let mut entry =
-            test_model_entry("alnair-4.5", "https://test.example.com/v1", None, None, None);
+        let mut entry = test_model_entry(
+            "alnair-4.5",
+            "https://test.example.com/v1",
+            None,
+            None,
+            None,
+        );
         entry.info.context_window = NonZeroU64::new(65_536).unwrap();
         prefetched.insert("alnair-4.5".to_owned(), entry);
         let resolved = resolve_model_list(&cfg, Some(prefetched), &Default::default());
@@ -9910,8 +9930,12 @@ default = "alnair-4.5"
         let dir = tempfile::tempdir().unwrap();
         let home = dir.path();
 
-        save_platform_api_key_in(home, alnair_models::PlatformId::MoonshotCn, "  sk-from-tui  ")
-            .expect("write must succeed");
+        save_platform_api_key_in(
+            home,
+            alnair_models::PlatformId::MoonshotCn,
+            "  sk-from-tui  ",
+        )
+        .expect("write must succeed");
 
         // Env unset in this resolve (injected getenv) → auth.json wins.
         let platforms = PlatformsConfig::default();

@@ -67,7 +67,7 @@ def section(t):
 
 
 class AcpClient:
-    """Talks ACP (JSON-RPC over NDJSON) to a alnair agent stdio subprocess."""
+    """Talks ACP (JSON-RPC over NDJSON) to an alnair agent stdio subprocess."""
 
     def __init__(self, proc, cwd=None):
         self.proc = proc

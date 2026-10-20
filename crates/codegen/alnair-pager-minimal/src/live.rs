@@ -872,10 +872,10 @@ mod tests {
     }
     #[test]
     fn pending_hint_formats_press_again() {
-        use crossterm::event::{KeyCode, KeyModifiers};
         use alnair_tui::app::actions::Action;
         use alnair_tui::app::app_view::PendingAction;
         use alnair_tui::input::key::KeyShortcut;
+        use crossterm::event::{KeyCode, KeyModifiers};
         assert!(minimal_pending_hint(&None).is_none());
         let shortcut = KeyShortcut::new(KeyCode::Char('q'), KeyModifiers::CONTROL);
         let pending = Some(PendingAction::new(Action::Quit, shortcut, "quit"));

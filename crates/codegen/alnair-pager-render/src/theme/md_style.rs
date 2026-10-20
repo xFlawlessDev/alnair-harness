@@ -4,8 +4,8 @@
 //! Colors come from the `md_*` fields on the current [`Theme`], which are
 //! already quantized to the terminal's color capability level.
 
-use anstyle::{Ansi256Color, AnsiColor, Color, Style};
 use alnair_markdown::MarkdownStyle;
+use anstyle::{Ansi256Color, AnsiColor, Color, Style};
 
 /// Convert `ratatui::style::Color` → `anstyle::Color` (type conversion only).
 ///

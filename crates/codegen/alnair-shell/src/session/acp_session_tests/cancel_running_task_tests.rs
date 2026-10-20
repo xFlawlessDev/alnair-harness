@@ -20,7 +20,9 @@ async fn persist_ack_waits_for_disk_flush_before_success() {
             let tmp = tempfile::TempDir::new().unwrap();
             let session_dir = tmp.path().join("session");
             let cwd = AbsPathBuf::new(std::path::PathBuf::from("/tmp")).unwrap();
-            let fs = Arc::new(alnair_workspace::file_system::MockFs::new(cwd.to_path_buf()));
+            let fs = Arc::new(alnair_workspace::file_system::MockFs::new(
+                cwd.to_path_buf(),
+            ));
             let terminal = Arc::new(DummyTerminal {});
             let (hunk_tx, _hunk_rx) = tokio::sync::mpsc::unbounded_channel();
             let hunk_tracker_handle = alnair_hunk_tracker::HunkTrackerActor::spawn(
@@ -458,7 +460,9 @@ async fn first_turn_memory_injection_disabled_does_not_persist_to_chat_history()
                 cwd: session_dir.path().to_string_lossy().to_string(),
             };
             let cwd = AbsPathBuf::new(session_dir.path().to_path_buf()).unwrap();
-            let fs = Arc::new(alnair_workspace::file_system::MockFs::new(cwd.to_path_buf()));
+            let fs = Arc::new(alnair_workspace::file_system::MockFs::new(
+                cwd.to_path_buf(),
+            ));
             let terminal = Arc::new(DummyTerminal {});
             let (hunk_tx, _hunk_rx) = tokio::sync::mpsc::unbounded_channel();
             let hunk_tracker_handle = alnair_hunk_tracker::HunkTrackerActor::spawn(
@@ -793,7 +797,9 @@ async fn cancel_running_task_teardown_clears_running_and_pending_work() {
             let (persistence_tx, _persistence_rx) =
                 tokio::sync::mpsc::unbounded_channel::<PersistenceMsg>();
             let cwd = AbsPathBuf::new(std::path::PathBuf::from("/tmp")).unwrap();
-            let fs = Arc::new(alnair_workspace::file_system::MockFs::new(cwd.to_path_buf()));
+            let fs = Arc::new(alnair_workspace::file_system::MockFs::new(
+                cwd.to_path_buf(),
+            ));
             let terminal = Arc::new(DummyTerminal {});
             let (hunk_tx, _hunk_rx) = tokio::sync::mpsc::unbounded_channel();
             let hunk_tracker_handle = alnair_hunk_tracker::HunkTrackerActor::spawn(
@@ -1788,7 +1794,9 @@ async fn cancel_propagates_to_sampler_handle_so_no_further_emission() {
             let (persistence_tx, _persistence_rx) =
                 tokio::sync::mpsc::unbounded_channel::<PersistenceMsg>();
             let cwd = AbsPathBuf::new(std::path::PathBuf::from("/tmp")).unwrap();
-            let fs = Arc::new(alnair_workspace::file_system::MockFs::new(cwd.to_path_buf()));
+            let fs = Arc::new(alnair_workspace::file_system::MockFs::new(
+                cwd.to_path_buf(),
+            ));
             let terminal = Arc::new(DummyTerminal {});
             let (hunk_tx, _hunk_rx) = tokio::sync::mpsc::unbounded_channel();
             let hunk_tracker_handle = alnair_hunk_tracker::HunkTrackerActor::spawn(

@@ -12,7 +12,7 @@ use std::collections::{HashMap, HashSet};
 use tokio::sync::{mpsc, oneshot};
 /// Coarse lifecycle state of a session as known to the leader/agent.
 ///
-/// A alnair session has no
+/// An alnair session has no
 /// terminal status field on its own — it is a resumable log on disk — so
 /// "liveness" is *residency + turn-state*, not a pid. The agent's join-handle
 /// supervisor tracks this per session so a panicked actor can be reaped
@@ -139,11 +139,13 @@ pub struct SessionHandle {
     pub workspace_ops: alnair_workspace::WorkspaceOps,
     /// Terminal backend for this session. Subagents inherit the parent's
     /// backend so background tasks and monitors survive the subagent's exit.
-    pub terminal_backend: Option<std::sync::Arc<dyn alnair_tools::computer::types::TerminalBackend>>,
+    pub terminal_backend:
+        Option<std::sync::Arc<dyn alnair_tools::computer::types::TerminalBackend>>,
     /// Notification handle for this session's tool bridge. Subagents use
     /// this to reparent surviving tasks' notification handles on exit so
     /// events route to the parent's notification bridge.
-    pub tools_notification_handle: Option<alnair_tools::notification::types::ToolNotificationHandle>,
+    pub tools_notification_handle:
+        Option<alnair_tools::notification::types::ToolNotificationHandle>,
     /// Scheduler handle for this session. Subagents inherit the parent's
     /// handle so scheduled tasks survive the subagent's exit.
     pub scheduler_handle:

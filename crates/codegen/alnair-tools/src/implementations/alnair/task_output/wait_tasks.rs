@@ -35,11 +35,13 @@ impl crate::types::tool_metadata::ToolMetadata for WaitTasksTool {
         // renders it context-aware from the finalized toolset. This static
         // fallback mirrors the default alnair toolset.
         static DESC: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| {
-            alnair_tool_types::build_wait_tasks_description(&alnair_tool_types::WaitTasksToolNaming {
-                background_retrieval_tool: "get_command_or_subagent_output",
-                bash_background_param: Some("is_background"),
-                subagent_background_param: Some("run_in_background"),
-            })
+            alnair_tool_types::build_wait_tasks_description(
+                &alnair_tool_types::WaitTasksToolNaming {
+                    background_retrieval_tool: "get_command_or_subagent_output",
+                    bash_background_param: Some("is_background"),
+                    subagent_background_param: Some("run_in_background"),
+                },
+            )
         });
         &DESC
     }

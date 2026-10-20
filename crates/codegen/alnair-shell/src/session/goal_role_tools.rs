@@ -313,7 +313,7 @@ pub(crate) mod tests {
 
     #[test]
     fn from_summary_uses_alnair_names() {
-        // A alnair toolset: client names match the literal defaults.
+        // An alnair toolset: client names match the literal defaults.
         let tn = RoleToolNames::from_summary(&summary_with(&[
             (ToolKind::Read, "read_file"),
             (ToolKind::ListDir, "list_dir"),

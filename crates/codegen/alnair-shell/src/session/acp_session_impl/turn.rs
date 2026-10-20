@@ -60,7 +60,9 @@ impl UsageDrainOutcome {
     /// Same policy as freeze's terminal outcome: FG live → fail-closed;
     /// sticky and background → report only.
     pub(super) fn from_outstanding_reply(
-        reply: Option<&alnair_tools::implementations::alnair::task::types::SubagentOutstandingReply>,
+        reply: Option<
+            &alnair_tools::implementations::alnair::task::types::SubagentOutstandingReply,
+        >,
     ) -> Self {
         match reply {
             None => Self {
@@ -1864,7 +1866,8 @@ impl SessionActor {
             let fallback_text = response.fallback_text();
             let stop_reason = response.stop_reason;
             let response_is_empty = response.is_empty();
-            let turn_refused = stop_reason == Some(alnair_sampling_types::StopReason::ContentFilter);
+            let turn_refused =
+                stop_reason == Some(alnair_sampling_types::StopReason::ContentFilter);
             let refusal_explanation = response.stop_message.clone();
             let final_answer_text = json_schema.is_some().then(|| response.assistant_text());
             for item in response.items {

@@ -110,7 +110,11 @@ pub(crate) fn embedding_session_credentials(
             as Arc<dyn AuthCredentialProvider>
     });
     let may_ride = auth_credentials.is_some();
-    alnair_memory::EndpointScopedCredentials::for_endpoint(embed_base_url, may_ride, auth_credentials)
+    alnair_memory::EndpointScopedCredentials::for_endpoint(
+        embed_base_url,
+        may_ride,
+        auth_credentials,
+    )
 }
 #[cfg(test)]
 mod tests {
@@ -118,8 +122,8 @@ mod tests {
     use crate::auth::KimiAuth;
     use crate::auth::KimiCodeConfig;
     use crate::auth::manager::AuthManager;
-    use chrono::{Duration as ChronoDuration, Utc};
     use alnair_auth::AuthCredentialProvider;
+    use chrono::{Duration as ChronoDuration, Utc};
     use std::sync::Mutex;
     /// Serializes tests that pin `ALNAIR_AUTH_EARLY_INVALIDATION_SECS`, since
     /// env vars are process-global and parallel tests would race.

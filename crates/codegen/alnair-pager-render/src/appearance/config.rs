@@ -4,8 +4,8 @@
 //! - `RawAppearanceConfig`: Serde-friendly types for TOML (de)serialization
 //! - `AppearanceConfig`: Runtime types with ratatui::Color, BlockBackground, etc.
 
-use documented::{Documented, DocumentedFields};
 use alnair_shared::ui_config::UiConfig;
+use documented::{Documented, DocumentedFields};
 use ratatui::style::Color;
 use serde::{Deserialize, Serialize};
 use toml_edit::{DocumentMut, Item, RawString};

@@ -66,7 +66,10 @@ async fn test_fork_session_creates_new_session_with_parent_tracking() {
 
     assert_eq!(loaded.summary.info.id.to_string(), "fork-session-456");
     assert_eq!(loaded.summary.info.cwd, "/new/path");
-    assert_eq!(loaded.summary.current_model_id, acp::ModelId::new("alnair-3"));
+    assert_eq!(
+        loaded.summary.current_model_id,
+        acp::ModelId::new("alnair-3")
+    );
     assert_eq!(
         loaded.summary.parent_session_id,
         Some("source-session-123".to_string())

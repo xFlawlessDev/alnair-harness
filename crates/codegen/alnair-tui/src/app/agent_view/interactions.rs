@@ -1606,10 +1606,10 @@ mod question_no_freeform_tests {
     use crate::app::agent_view::AgentView;
     use crate::views::prompt_widget::StashedPrompt;
     use crate::views::question_view::{QuestionFocus, QuestionSelection, QuestionViewState};
+    use alnair_tools::implementations::alnair::ask_user_question::{Question, QuestionOption};
     use crossterm::event::{
         KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
     };
-    use alnair_tools::implementations::alnair::ask_user_question::{Question, QuestionOption};
     use ratatui::buffer::Buffer;
     use ratatui::layout::Rect;
     /// Fixed options, single-select — shaped like the free-usage upsell.

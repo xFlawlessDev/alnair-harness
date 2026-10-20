@@ -6,7 +6,8 @@ use crate::slash::command::{CommandExecCtx, CommandResult, SlashCommand};
 /// Where feedback goes: the project's own issue tracker. Alnair is a community
 /// build, so its feedback belongs on its own repo — mirroring the official
 /// kimi-cli, whose `/feedback` opens its repo's issues page.
-pub const FEEDBACK_ISSUES_URL: &str = "https://git.zacharyzhang.com/ZacharyZhang-NY/Alnair-CLI/issues";
+pub const FEEDBACK_ISSUES_URL: &str =
+    "https://git.zacharyzhang.com/ZacharyZhang-NY/Alnair-CLI/issues";
 
 /// Open the Alnair issue tracker in the browser.
 pub struct FeedbackCommand;

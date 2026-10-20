@@ -479,7 +479,8 @@ fn make_ask_user_question_args(
     let req = AskUserQuestionExtRequest {
         session_id: "test-session".into(),
         tool_call_id: tool_call_id.into(),
-        mode: alnair_tools::implementations::alnair::ask_user_question::AskUserQuestionMode::Default,
+        mode:
+            alnair_tools::implementations::alnair::ask_user_question::AskUserQuestionMode::Default,
         questions: vec![Question {
             question: "ACP-driven question".into(),
             options: vec![QuestionOption {

@@ -10,10 +10,10 @@
 //! capability level via [`Theme::quantized`]. Runtime-generated colors (syntax
 //! highlighting, blending) are also quantized via [`color_support::quantize`].
 
-pub mod cache;
-pub mod color_support;
 mod alnairday;
 mod alnairnight;
+pub mod cache;
+pub mod color_support;
 pub mod md_style;
 pub mod osc11;
 mod oscura;
@@ -1115,7 +1115,10 @@ mod tests {
             Some(ThemeKind::AlnairNight)
         );
         assert_eq!(ThemeKind::from_name("dark"), Some(ThemeKind::AlnairNight));
-        assert_eq!(ThemeKind::from_name("alnairday"), Some(ThemeKind::AlnairDay));
+        assert_eq!(
+            ThemeKind::from_name("alnairday"),
+            Some(ThemeKind::AlnairDay)
+        );
         assert_eq!(ThemeKind::from_name("light"), Some(ThemeKind::AlnairDay));
         assert_eq!(
             ThemeKind::from_name("tokyonight"),

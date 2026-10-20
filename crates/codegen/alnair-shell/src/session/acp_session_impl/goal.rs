@@ -1375,7 +1375,9 @@ impl SessionActor {
     ) -> crate::session::goal_planner::RoleSpawnOverride {
         use crate::session::events::{Event, GoalRoleModelFailOpenReason as Reason};
         use crate::session::goal_planner::RoleSpawnOverride;
-        use alnair_tools::implementations::alnair::task::backend::{ChannelBackend, SubagentBackend};
+        use alnair_tools::implementations::alnair::task::backend::{
+            ChannelBackend, SubagentBackend,
+        };
         use alnair_tools::implementations::alnair::task::types::SubagentDescribeOutcome;
 
         let fail_open = |reason: Reason| {

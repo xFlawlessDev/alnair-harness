@@ -430,13 +430,14 @@ thread_local! {
 pub fn load_invert_scroll() -> bool {
     INVERT_SCROLL_LOADED.with(|loaded| {
         if !loaded.get() {
-            let from_env = std::env::var("ALNAIR_INVERT_SCROLL")
-                .ok()
-                .and_then(|v| match v.trim() {
-                    "1" | "true" => Some(true),
-                    "0" | "false" => Some(false),
-                    _ => None,
-                });
+            let from_env =
+                std::env::var("ALNAIR_INVERT_SCROLL")
+                    .ok()
+                    .and_then(|v| match v.trim() {
+                        "1" | "true" => Some(true),
+                        "0" | "false" => Some(false),
+                        _ => None,
+                    });
             let value = from_env.unwrap_or_else(|| {
                 load_bool_from_effective_config("invert_scroll", INVERT_SCROLL_DEFAULT)
             });

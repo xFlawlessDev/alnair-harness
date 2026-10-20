@@ -48,7 +48,8 @@ pub(crate) async fn resolve_generic_oauth_tokens(
             continue;
         };
         let manager = std::sync::Arc::new(crate::auth::AuthManager::new_oauth_provider(
-            alnair_home, oauth,
+            alnair_home,
+            oauth,
         ));
         manager.configure_refresher();
         if let Ok(auth) = manager.auth().await {
@@ -74,7 +75,9 @@ pub(crate) async fn resolve_generic_oauth_tokens(
 /// claude-pro-max with no Kimi session and no API key) is treated as
 /// credential-less: catalog wiped/never fetched, session stuck on the
 /// bundled Kimi table with an empty picker.
-pub(crate) fn stored_oauth_platforms(alnair_home: &std::path::Path) -> Vec<alnair_models::PlatformId> {
+pub(crate) fn stored_oauth_platforms(
+    alnair_home: &std::path::Path,
+) -> Vec<alnair_models::PlatformId> {
     let Ok(store) = crate::auth::read_auth_json(&alnair_home.join("auth.json")) else {
         return Vec::new();
     };
@@ -426,8 +429,14 @@ fn fetch_one_platform_models(
             // rows) add neither, so their requests stay byte-identical.
             if platform.listing() == alnair_models::ListingDialect::Anthropic {
                 req = req
-                    .header("anthropic-version", alnair_sampling_types::ANTHROPIC_VERSION)
-                    .header("anthropic-beta", alnair_sampling_types::ANTHROPIC_OAUTH_BETA);
+                    .header(
+                        "anthropic-version",
+                        alnair_sampling_types::ANTHROPIC_VERSION,
+                    )
+                    .header(
+                        "anthropic-beta",
+                        alnair_sampling_types::ANTHROPIC_OAUTH_BETA,
+                    );
             }
             // GitHub Copilot /models needs the VS Code editor identity + the
             // Copilot API version. github-copilot-GATED, so every other Bearer
@@ -455,10 +464,12 @@ fn fetch_one_platform_models(
             }
             req
         }
-        alnair_models::PlatformKeyHeader::XApiKey => client
-            .get(&url)
-            .header("x-api-key", bearer)
-            .header("anthropic-version", alnair_sampling_types::ANTHROPIC_VERSION),
+        alnair_models::PlatformKeyHeader::XApiKey => {
+            client.get(&url).header("x-api-key", bearer).header(
+                "anthropic-version",
+                alnair_sampling_types::ANTHROPIC_VERSION,
+            )
+        }
     };
     let response = request.send()?;
     if !response.status().is_success() {
@@ -1766,8 +1777,10 @@ mod tests {
             .mount(&modelsdev_server)
             .await;
         let cache_dir = tempfile::tempdir().unwrap();
-        let _base =
-            alnair_test_support::EnvGuard::set(alnair_models::GROQ_BASE_URL_ENV, platform_server.uri());
+        let _base = alnair_test_support::EnvGuard::set(
+            alnair_models::GROQ_BASE_URL_ENV,
+            platform_server.uri(),
+        );
         let _mdev = alnair_test_support::EnvGuard::set(
             crate::agent::enrichment_fetch::MODELS_DEV_URL_ENV,
             format!("{}/api.json", modelsdev_server.uri()),
@@ -2622,8 +2635,10 @@ mod tests {
             .mount(&modelsdev_server)
             .await;
         let cache_dir = tempfile::tempdir().unwrap();
-        let _base =
-            alnair_test_support::EnvGuard::set(alnair_models::XAI_BASE_URL_ENV, platform_server.uri());
+        let _base = alnair_test_support::EnvGuard::set(
+            alnair_models::XAI_BASE_URL_ENV,
+            platform_server.uri(),
+        );
         let _mdev = alnair_test_support::EnvGuard::set(
             crate::agent::enrichment_fetch::MODELS_DEV_URL_ENV,
             format!("{}/api.json", modelsdev_server.uri()),
@@ -2795,8 +2810,10 @@ mod tests {
             .mount(&modelsdev_server)
             .await;
         let cache_dir = tempfile::tempdir().unwrap();
-        let _base =
-            alnair_test_support::EnvGuard::set(alnair_env::CODE_BASE_URL_ENV, platform_server.uri());
+        let _base = alnair_test_support::EnvGuard::set(
+            alnair_env::CODE_BASE_URL_ENV,
+            platform_server.uri(),
+        );
         let _mdev = alnair_test_support::EnvGuard::set(
             crate::agent::enrichment_fetch::MODELS_DEV_URL_ENV,
             format!("{}/api.json", modelsdev_server.uri()),
@@ -2886,8 +2903,10 @@ mod tests {
             .mount(&modelsdev_server)
             .await;
         let cache_dir = tempfile::tempdir().unwrap();
-        let _base =
-            alnair_test_support::EnvGuard::set(alnair_models::ZAI_BASE_URL_ENV, platform_server.uri());
+        let _base = alnair_test_support::EnvGuard::set(
+            alnair_models::ZAI_BASE_URL_ENV,
+            platform_server.uri(),
+        );
         let _mdev = alnair_test_support::EnvGuard::set(
             crate::agent::enrichment_fetch::MODELS_DEV_URL_ENV,
             format!("{}/api.json", modelsdev_server.uri()),
@@ -3523,7 +3542,10 @@ mod tests {
     #[test]
     fn inference_url_defaults_to_proxy() {
         let ep = endpoints("https://proxy.alnair.com/v1", None, None);
-        assert_eq!(ep.resolve_inference_base_url(), "https://proxy.alnair.com/v1");
+        assert_eq!(
+            ep.resolve_inference_base_url(),
+            "https://proxy.alnair.com/v1"
+        );
     }
     #[test]
     fn inference_url_uses_models_base_url() {

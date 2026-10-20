@@ -93,7 +93,8 @@ pub(crate) fn typed_tool_output_preserving_cco(
 ) -> alnair_tool_runtime::TypedToolOutput {
     let cco = source.chat_completion_output();
     let value = serde_json::to_value(payload).unwrap_or(serde_json::Value::Null);
-    alnair_tool_runtime::TypedToolOutput::from_value(tool_id, value).with_chat_completion_output(cco)
+    alnair_tool_runtime::TypedToolOutput::from_value(tool_id, value)
+        .with_chat_completion_output(cco)
 }
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct ListDirContent {
@@ -2233,7 +2234,8 @@ mod tests {
             0,
             false,
         );
-        let dropped = alnair_tool_runtime::TypedToolOutput::from_value(typed.tool_id, expected_value);
+        let dropped =
+            alnair_tool_runtime::TypedToolOutput::from_value(typed.tool_id, expected_value);
         assert!(dropped.chat_completion_output.is_none());
     }
     #[test]

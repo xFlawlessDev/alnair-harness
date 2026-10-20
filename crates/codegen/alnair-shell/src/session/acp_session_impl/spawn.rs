@@ -182,8 +182,10 @@ pub(crate) async fn spawn_session_actor(
     >,
     max_turns: Option<usize>,
     forked_tool_override: Option<Vec<ToolSpec>>,
-) -> Result<(SessionHandle, String, tokio::sync::oneshot::Receiver<()>), alnair_agent::AgentBuildError>
-{
+) -> Result<
+    (SessionHandle, String, tokio::sync::oneshot::Receiver<()>),
+    alnair_agent::AgentBuildError,
+> {
     if max_turns == Some(0) {
         return Err(alnair_agent::AgentBuildError::InvalidConfig(
             "max_turns must be greater than 0".to_string(),
@@ -768,8 +770,10 @@ pub(crate) async fn spawn_session_actor(
             e
         })?;
     let resolved_task_output =
-        alnair_tools::reminders::task_completion::resolve_task_output_tool_name(agent.tool_bridge())
-            .await;
+        alnair_tools::reminders::task_completion::resolve_task_output_tool_name(
+            agent.tool_bridge(),
+        )
+        .await;
     let resolved_read =
         alnair_tools::reminders::task_completion::resolve_read_tool_name(agent.tool_bridge()).await;
     let _ = task_output_tool_name.set(resolved_task_output.clone());

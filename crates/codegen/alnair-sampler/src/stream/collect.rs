@@ -58,8 +58,8 @@ pub async fn collect_response(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use futures_util::stream;
     use alnair_sampling_types::{ConversationItem, SamplingError, StopReason};
+    use futures_util::stream;
 
     use crate::events::SamplingChannel;
     use crate::stream::stream_chat_completions;

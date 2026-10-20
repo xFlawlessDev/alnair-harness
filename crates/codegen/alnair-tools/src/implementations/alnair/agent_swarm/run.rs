@@ -11,8 +11,8 @@ use std::time::Duration;
 // and the loop spins forever.
 use tokio::time::Instant;
 
-use futures::stream::{FuturesUnordered, StreamExt};
 use alnair_tool_types::{SwarmMemberOutcome, SwarmMemberResult};
+use futures::stream::{FuturesUnordered, StreamExt};
 
 use super::plan::MemberSpec;
 use super::schedule::{

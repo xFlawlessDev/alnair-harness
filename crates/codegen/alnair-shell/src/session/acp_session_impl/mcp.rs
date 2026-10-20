@@ -1235,13 +1235,15 @@ impl SessionActor {
                                 .get(server_name.as_str())
                                 .copied()
                                 .unwrap_or("unknown");
-                            event_writer.emit(alnair_file_utils::events::Event::McpServerConnected {
-                                server_name: server_name.clone(),
-                                transport: transport_str.to_string(),
-                                tool_count,
-                                duration_ms: elapsed.as_millis() as u64,
-                                tools: registered_tool_names,
-                            });
+                            event_writer.emit(
+                                alnair_file_utils::events::Event::McpServerConnected {
+                                    server_name: server_name.clone(),
+                                    transport: transport_str.to_string(),
+                                    tool_count,
+                                    duration_ms: elapsed.as_millis() as u64,
+                                    tools: registered_tool_names,
+                                },
+                            );
                             crate::session::telemetry::emit_mcp_connection_span(
                                 "connected",
                                 server_name.as_str(),

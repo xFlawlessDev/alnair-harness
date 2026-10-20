@@ -32,7 +32,10 @@ async fn out_of_band_stale_row_heals_on_focus_gained() {
     // Mock-auth env + pretend we're inside a neovim `:terminal` (sets the
     // embedded-editor context the doubled-line fix gates on).
     let mut env = content.env_for_pager();
-    env.push(("NVIM".into(), "/tmp/alnair-pty-harness-fake-nvim.sock".into()));
+    env.push((
+        "NVIM".into(),
+        "/tmp/alnair-pty-harness-fake-nvim.sock".into(),
+    ));
     let env_refs: Vec<(&str, &str)> = env.iter().map(|(k, v)| (k.as_str(), v.as_str())).collect();
 
     let binary = pager_binary().expect("resolve pager binary");

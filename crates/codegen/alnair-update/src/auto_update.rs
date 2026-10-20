@@ -15,8 +15,8 @@ use crate::version::{
     Release, UpdateConfig, fetch_latest_version, get_installed_alnair_version, get_latest_version,
     is_version_cache_fresh, try_fetch_stable_version, write_version_cache,
 };
-use alnair_shell::util::config;
 use alnair_shell::util::alnair_home::{alnair_application, alnair_home};
+use alnair_shell::util::config;
 
 #[derive(Clone, Copy, Debug)]
 pub enum UpdateRunMode {
@@ -719,7 +719,10 @@ pub(crate) const ARCHIVE_EXT: &str = if cfg!(windows) { "zip" } else { "tar.gz" 
 /// Release-asset archive name for `version` on this platform:
 /// `alnair-<version>-<target-triple>.{tar.gz|zip}` (PRD F8).
 pub(crate) fn release_asset_name(version: &str) -> Result<String> {
-    Ok(format!("alnair-{version}-{}.{ARCHIVE_EXT}", target_triple()?))
+    Ok(format!(
+        "alnair-{version}-{}.{ARCHIVE_EXT}",
+        target_triple()?
+    ))
 }
 
 /// Name of the checksum manifest asset attached to every release.
@@ -1234,7 +1237,11 @@ async fn download_verified_from_base(
     let binary_name = format!("alnair-{}-{}", version, platform);
     let binary_path = download_dir.join(&binary_name);
 
-    eprintln!("  Downloading alnair v{} ({})...", version, target_triple()?);
+    eprintln!(
+        "  Downloading alnair v{} ({})...",
+        version,
+        target_triple()?
+    );
 
     download_with_progress(&archive_asset.browser_download_url, &archive_path).await?;
 
@@ -1329,7 +1336,10 @@ async fn regenerate_completions(binary: &Path, alnair_home: &Path) {
     let completions: &[(&str, PathBuf)] = &[
         ("bash", alnair_home.join("completions/bash/alnair.bash")),
         ("zsh", alnair_home.join("completions/zsh/_alnair")),
-        ("fish", user_home.join(".config/fish/completions/alnair.fish")),
+        (
+            "fish",
+            user_home.join(".config/fish/completions/alnair.fish"),
+        ),
     ];
 
     for (shell, dest) in completions {
@@ -1391,7 +1401,11 @@ fn relative_symlink_target(target: &Path, link: &Path) -> PathBuf {
 /// Windows: [`windows_replace_exe`], which restores the prior binary itself
 /// when the replacement copy fails.
 async fn swap_managed_bin_link(binary_path: &Path, bin_dir: &Path) -> Result<PathBuf> {
-    let alnair_name = if cfg!(windows) { "alnair.exe" } else { "alnair" };
+    let alnair_name = if cfg!(windows) {
+        "alnair.exe"
+    } else {
+        "alnair"
+    };
     let link_path = bin_dir.join(alnair_name);
 
     #[cfg(unix)]
@@ -2784,7 +2798,10 @@ mod tests {
 
         let out = dir.path().join("alnair-extracted");
         let err = extract_alnair_binary(&archive, &out).await.unwrap_err();
-        assert!(format!("{err}").contains("no 'alnair' binary"), "err: {err}");
+        assert!(
+            format!("{err}").contains("no 'alnair' binary"),
+            "err: {err}"
+        );
     }
 
     #[cfg(not(windows))]

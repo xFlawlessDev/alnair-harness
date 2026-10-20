@@ -1,4 +1,4 @@
-use alnair_tools::types::{claude_names_for, alnair_names_for};
+use alnair_tools::types::{alnair_names_for, claude_names_for};
 use regex::Regex;
 
 /// A compiled hook matcher for tool names. The pattern semantics are chosen so that

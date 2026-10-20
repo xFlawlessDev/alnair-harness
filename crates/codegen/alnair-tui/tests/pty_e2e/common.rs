@@ -1110,8 +1110,8 @@ pub(crate) fn run_wrap(wrap_args: &[&str], extra_env: &[(&str, &str)]) -> (Optio
     let mut env: Vec<(&str, &str)> = vec![("ALNAIR_SHARE_DIR", &home_str), ("NO_COLOR", "1")];
     env.extend_from_slice(extra_env);
 
-    let mut harness =
-        PtyHarness::new(&binary, DEFAULT_ROWS, DEFAULT_COLS, &args, &env).expect("spawn alnair wrap");
+    let mut harness = PtyHarness::new(&binary, DEFAULT_ROWS, DEFAULT_COLS, &args, &env)
+        .expect("spawn alnair wrap");
 
     let code = harness
         .wait_for_exit_and_drain(WRAP_TIMEOUT, WRAP_DRAIN_TIMEOUT)

@@ -45,6 +45,7 @@ pub mod subagent;
 mod turn_completion;
 mod xt_filter;
 pub(crate) use crate::terminal::kitty_flags_pushed;
+use alnair_shell::util::config;
 pub use cli::{
     AgentArgs, AgentCmd, Command, LeaderArgs, LeaderMgmtArgs, LeaderMgmtCommand, LeaderTargetArgs,
     OutputFormat, PagerArgs, ServeArgs, WrapArgs,
@@ -59,7 +60,6 @@ pub use foreign_sessions::ForeignScanCoordinator;
 pub(crate) use foreign_sessions::{
     badge_for_picker_source, foreign_tool_display_label, is_foreign_picker_source,
 };
-use alnair_shell::util::config;
 use ratatui::backend::CrosstermBackend;
 use std::io::{self, Write};
 use std::panic;
@@ -322,7 +322,8 @@ pub async fn run(
     let startup_start = std::time::Instant::now();
     let raw_config = alnair_shell::config::load_effective_config()
         .map_err(|e| anyhow::anyhow!("Failed to load config: {e}"))?;
-    let kimi_code_config = match alnair_shell::agent::config::Config::new_from_toml_cfg(&raw_config) {
+    let kimi_code_config = match alnair_shell::agent::config::Config::new_from_toml_cfg(&raw_config)
+    {
         Ok(c) => c.kimi_code_config,
         Err(e) => {
             tracing::warn!(
@@ -938,7 +939,9 @@ fn init_terminal(
             })?;
         }
         if mode.is_fullscreen() {
-            alnair_shell::util::with_locked_stderr(|stderr| execute!(stderr, EnterAlternateScreen))?;
+            alnair_shell::util::with_locked_stderr(|stderr| {
+                execute!(stderr, EnterAlternateScreen)
+            })?;
         }
         #[cfg(windows)]
         if want_minimal {
@@ -1697,8 +1700,8 @@ mod tests {
     }
     #[test]
     fn cli_session_id_with_resume_and_fork_ok() {
-        let args =
-            try_parse_pager(&["alnair-pager", "-s", "a", "--resume", "b", "--fork-session"]).unwrap();
+        let args = try_parse_pager(&["alnair-pager", "-s", "a", "--resume", "b", "--fork-session"])
+            .unwrap();
         assert!(args.session_startup_intent().is_ok());
     }
     #[test]

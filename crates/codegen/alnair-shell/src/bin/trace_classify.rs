@@ -19,8 +19,8 @@
 
 use std::path::PathBuf;
 
-use clap::Parser;
 use alnair_shell::trace_classifier::{RunArgs, run, validate_min_confidence};
+use clap::Parser;
 
 #[derive(Parser, Debug)]
 #[command(

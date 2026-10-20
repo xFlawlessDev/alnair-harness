@@ -7,8 +7,8 @@
 
 use std::time::{Duration, Instant};
 
-use anyhow::{Context, Result, bail};
 use alnair_pager_pty_harness::{ContentController, PtyHarness, keys, pager_binary};
+use anyhow::{Context, Result, bail};
 
 const ROWS: u16 = 40;
 const COLS: u16 = 100;

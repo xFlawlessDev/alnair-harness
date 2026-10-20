@@ -342,8 +342,9 @@ async fn snapshot_ors_ledger_incomplete_even_when_reply_complete() {
 /// queued reply, repeating the last one; other events are ignored.
 fn scripted_outstanding_responder(
     replies: Vec<alnair_tools::implementations::alnair::task::types::SubagentOutstandingReply>,
-) -> tokio::sync::mpsc::UnboundedSender<alnair_tools::implementations::alnair::task::types::SubagentEvent>
-{
+) -> tokio::sync::mpsc::UnboundedSender<
+    alnair_tools::implementations::alnair::task::types::SubagentEvent,
+> {
     use alnair_tools::implementations::alnair::task::types::SubagentEvent;
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<SubagentEvent>();
     tokio::task::spawn_local(async move {

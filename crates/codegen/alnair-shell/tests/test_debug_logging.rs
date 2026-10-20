@@ -193,7 +193,10 @@ async fn agent_session_writes_named_session_file() {
             &server,
             workdir.path(),
             home,
-            &[("ALNAIR_DEBUG_LOG", "1"), ("ALNAIR_SHARE_DIR", &alnair_home_str)],
+            &[
+                ("ALNAIR_DEBUG_LOG", "1"),
+                ("ALNAIR_SHARE_DIR", &alnair_home_str),
+            ],
         )
         .await;
         client.initialize_with_timeout().await;

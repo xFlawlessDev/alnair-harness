@@ -1445,9 +1445,13 @@ mod tests {
     #[test]
     fn render_per_model_breakdown_shows_each_model() {
         let mut goal = make_goal();
-        goal.live_tokens_by_model = vec![("alnair-4".into(), 12_300), ("alnair-3-mini".into(), 8_000)];
+        goal.live_tokens_by_model =
+            vec![("alnair-4".into(), 12_300), ("alnair-3-mini".into(), 8_000)];
         let text = render_to_text(&goal);
-        assert!(text.contains("alnair-4"), "first model must render:\n{text}");
+        assert!(
+            text.contains("alnair-4"),
+            "first model must render:\n{text}"
+        );
         assert!(
             text.contains("alnair-3-mini"),
             "second model must render:\n{text}"

@@ -8,9 +8,9 @@ use crate::session::normalize_cache::{
     HarnessVariant, NormalizeCache, NormalizeError, NormalizedEntry, run_blocking,
 };
 use agent_client_protocol::ImageContent;
+use alnair_tools::util::image_compress::{FilterType, ReEncodeParams, re_encode_under_limit};
 use base64::Engine as _;
 use bytes::Bytes;
-use alnair_tools::util::image_compress::{FilterType, ReEncodeParams, re_encode_under_limit};
 use std::borrow::Cow;
 /// Decoded attachment bytes above this are re-encoded to fit this cap.
 ///
@@ -257,8 +257,8 @@ pub fn render_compression_notice(compressed: &[ImageCompressionInfo], is_cursor:
 /// strips an image — the strip is re-persisted (irreversible), so the
 /// evidence must reach logs.
 pub(crate) fn persisted_image_reject_reason(bytes: &[u8]) -> Option<String> {
-    use image::ImageFormat as F;
     use alnair_tools::util::image_validate as iv;
+    use image::ImageFormat as F;
     let Ok(format) = image::guess_format(bytes) else {
         return Some(format!("unrecognized format ({} bytes)", bytes.len()));
     };

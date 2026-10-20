@@ -7,8 +7,8 @@ use crate::session::info::Info;
 use crate::session::persistence::{CHAT_FORMAT_VERSION, Summary};
 use crate::tools::todo::TodoState;
 use agent_client_protocol as acp;
-use async_trait::async_trait;
 use alnair_workspace::session::file_state::RewindPoint;
+use async_trait::async_trait;
 use std::fs::OpenOptions;
 use std::io::{self, Read};
 use std::path::{Path, PathBuf};
@@ -724,7 +724,8 @@ impl JsonlStorageAdapter {
             transform_conversation_cwd(&mut chat_to_copy, &source_info.cwd, &target_info.cwd);
         }
         if options.strip_reasoning {
-            chat_to_copy = alnair_chat_state::compaction_utils::strip_reasoning_blocks(chat_to_copy);
+            chat_to_copy =
+                alnair_chat_state::compaction_utils::strip_reasoning_blocks(chat_to_copy);
         }
         let num_chat_messages = chat_to_copy.len();
         let num_messages = updates_to_copy.len();

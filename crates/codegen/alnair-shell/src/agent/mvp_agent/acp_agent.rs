@@ -1094,7 +1094,7 @@ impl acp::Agent for MvpAgent {
                 target : alnair_workspace::session::git::RESTORE_CODE_LOG, session_id =
                 % session_id.0, supplied_cwd = % cwd.as_str(), persisted_cwd = % summary
                 .info.cwd, target_sha = % target_sha,
-                "restore_code: skipping session HEAD checkout — supplied cwd is neither a alnair worktree nor the session's persisted cwd (refusing to detach the source repo)"
+                "restore_code: skipping session HEAD checkout — supplied cwd is neither an alnair worktree nor the session's persisted cwd (refusing to detach the source repo)"
             );
             alnair_log::unified_log::warn(
                 "restore_code: skipped session HEAD checkout (unsafe cwd)",

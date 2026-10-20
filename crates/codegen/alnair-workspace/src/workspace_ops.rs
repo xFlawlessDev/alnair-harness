@@ -15,7 +15,6 @@ use crate::error::{WorkspaceError, WorkspaceResult};
 use crate::file_system::ContentSearchRequest;
 use crate::handle::WorkspaceHandle;
 use crate::worktree::{ApplyWorktreeRequest, CreateWorktreeRequest, RemoveWorktreeRequest};
-use async_trait::async_trait;
 use alnair_tools::types::output::ToolRunResult;
 pub use alnair_workspace_types::rpc::WorkspaceRpc;
 pub use alnair_workspace_types::rpc::agents_md::DiscoverAgentsMdReq;
@@ -56,6 +55,7 @@ pub use alnair_workspace_types::rpc::worktree::{
     PrepareWorktreeFromWorktreeResponse, WorktreeDbPathReq, WorktreeDbPathResponse,
     WorktreeDbRebuildReq, WorktreeDbStatsReq, WorktreeGcReq, WorktreeListReq, WorktreeShowReq,
 };
+use async_trait::async_trait;
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -147,7 +147,9 @@ fn file_content_view_to_wire(
         content: view.content,
     }
 }
-fn file_content_entry_to_wire(entry: alnair_hunk_tracker::FileContentEntry) -> FileContentEntryWire {
+fn file_content_entry_to_wire(
+    entry: alnair_hunk_tracker::FileContentEntry,
+) -> FileContentEntryWire {
     FileContentEntryWire {
         path: entry.path,
         baseline: file_content_view_to_wire(entry.baseline),

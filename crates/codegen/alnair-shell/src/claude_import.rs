@@ -2143,8 +2143,10 @@ extra_rule_dirs = ["/c/rules"]
         // our tempdir's `.claude/settings.json`. The dev's real ~/.alnair
         // config rules (if any) are out of scope for this test.
         let resolved =
-            alnair_workspace::permission::resolution::resolve_permissions_with_provenance(dir.path())
-                .await;
+            alnair_workspace::permission::resolution::resolve_permissions_with_provenance(
+                dir.path(),
+            )
+            .await;
         if let Some(r) = resolved {
             let tempdir_claude = claude_dir.join("settings.json");
             use alnair_workspace::permission::types::RequirementSource;

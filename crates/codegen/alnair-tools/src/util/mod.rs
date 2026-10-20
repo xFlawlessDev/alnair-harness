@@ -1,3 +1,4 @@
+pub mod alnair_home;
 pub mod base64_images;
 pub mod binary;
 pub mod command_display;
@@ -7,7 +8,6 @@ pub mod git_detect;
 pub mod hash;
 pub mod image_compress;
 pub mod image_validate;
-pub mod alnair_home;
 pub mod mcp_truncate;
 pub mod path_suggestions;
 pub(crate) mod query_tools;
@@ -17,14 +17,14 @@ pub mod spawn;
 pub mod truncate;
 pub mod unicode_confusables;
 
+pub use alnair_home::{alnair_application, alnair_home};
+pub use alnair_tty_utils::detach_std_command;
 pub use command_display::strip_redundant_session_cd;
 #[cfg(unix)]
 pub use env::detach_from_tty;
 pub use env::substitute_plugin_tokens;
 pub use env::{ALNAIR_AGENT_ENV, ALNAIR_AGENT_ENV_VALUE, apply_alnair_agent_marker, pager_env};
 pub use fs::{UnicodePathMatch, canonicalize_with_timeout, try_resolve_unicode_filename};
-pub use alnair_home::{alnair_application, alnair_home};
-pub use alnair_tty_utils::detach_std_command;
 pub use path_suggestions::format_not_found_error;
 pub use remap::{remap_json_keys, remap_schema_properties, reverse_map};
 pub use spawn::{

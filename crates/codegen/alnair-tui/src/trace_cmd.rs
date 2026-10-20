@@ -1,8 +1,8 @@
 use std::path::{Path, PathBuf};
 
-use anyhow::{Context, Result};
 use alnair_shell::agent::config::Config as AgentConfig;
 use alnair_shell::util::alnair_home::alnair_home;
+use anyhow::{Context, Result};
 
 #[derive(Debug, clap::Args, Clone)]
 pub struct TraceArgs {

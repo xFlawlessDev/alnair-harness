@@ -523,7 +523,8 @@ mod tests {
 
     #[test]
     fn per_tool_override_wins() {
-        let v = resolve_version("current", "Alnair:run_terminal_cmd", Some("legacy-0.4.10")).unwrap();
+        let v =
+            resolve_version("current", "Alnair:run_terminal_cmd", Some("legacy-0.4.10")).unwrap();
         assert_eq!(v, Some("legacy-0.4.10".to_string()));
     }
 
@@ -535,7 +536,8 @@ mod tests {
 
     #[test]
     fn override_on_unmanaged_tool_errors() {
-        let err = resolve_version("current", "Alnair:web_search", Some("legacy-0.4.10")).unwrap_err();
+        let err =
+            resolve_version("current", "Alnair:web_search", Some("legacy-0.4.10")).unwrap_err();
         assert!(err.contains("unmanaged tool"));
     }
 
@@ -586,7 +588,8 @@ mod tests {
 
     #[test]
     fn active_version_produces_no_warning() {
-        let res = resolve_version_with_warnings("current", "Alnair:run_terminal_cmd", None).unwrap();
+        let res =
+            resolve_version_with_warnings("current", "Alnair:run_terminal_cmd", None).unwrap();
         assert!(
             res.warnings.is_empty(),
             "active versions should produce no warnings, got: {:?}",
@@ -596,8 +599,8 @@ mod tests {
 
     #[test]
     fn active_bundle_produces_no_bundle_level_warning() {
-        let res =
-            resolve_version_with_warnings("legacy-0.4.10", "Alnair:run_terminal_cmd", None).unwrap();
+        let res = resolve_version_with_warnings("legacy-0.4.10", "Alnair:run_terminal_cmd", None)
+            .unwrap();
         assert!(
             res.warnings.iter().all(|w| !w.fq_tool_id.is_empty()),
             "no bundle-level warning expected for Active bundle, got: {:?}",
@@ -610,7 +613,8 @@ mod tests {
         // No registry version is Deprecated, so that branch can't be hit
         // directly. Exercise the Active (no-warning) path and the not-found
         // error path as the closest reachable proxies.
-        let (version, warnings) = validate_and_resolve("Alnair:run_terminal_cmd", "current").unwrap();
+        let (version, warnings) =
+            validate_and_resolve("Alnair:run_terminal_cmd", "current").unwrap();
         assert_eq!(version, Some("current".to_string()));
         assert!(
             warnings.is_empty(),
@@ -633,8 +637,8 @@ mod tests {
 
     #[test]
     fn resolve_with_warnings_returns_correct_version() {
-        let res =
-            resolve_version_with_warnings("legacy-0.4.10", "Alnair:run_terminal_cmd", None).unwrap();
+        let res = resolve_version_with_warnings("legacy-0.4.10", "Alnair:run_terminal_cmd", None)
+            .unwrap();
         assert_eq!(res.contract_version, Some("legacy-0.4.10".to_string()));
     }
 

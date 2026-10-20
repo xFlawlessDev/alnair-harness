@@ -335,7 +335,8 @@ async fn config_model_entry_takes_a_session_resolver_only_on_its_own_endpoint() 
                     api_base_url: None,
                 };
                 let (_dir, actor, _rx) =
-                    actor_with_catalog(vec![("alnair-4.5".to_string(), entry)], "alnair-4.5", "").await;
+                    actor_with_catalog(vec![("alnair-4.5".to_string(), entry)], "alnair-4.5", "")
+                        .await;
                 let resolver = actor
                     .reconstruct_full_config()
                     .await

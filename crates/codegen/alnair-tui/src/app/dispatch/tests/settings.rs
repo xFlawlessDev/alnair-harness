@@ -2889,7 +2889,10 @@ fn set_auto_dark_theme_does_not_apply_when_system_is_light() {
             crate::theme::ThemeKind::AlnairDay,
             "auto_dark_theme commit must NOT change live display when system=Light",
         );
-        assert_eq!(app.current_ui.auto_dark_theme.as_deref(), Some("alnairnight"),);
+        assert_eq!(
+            app.current_ui.auto_dark_theme.as_deref(),
+            Some("alnairnight"),
+        );
     });
 }
 /// Symmetric to the dark test: `set_auto_light_theme` applies only
@@ -3071,7 +3074,10 @@ fn rollback_auto_dark_theme_reverts_current_ui() {
             }),
             &mut app,
         );
-        assert_eq!(app.current_ui.auto_dark_theme.as_deref(), Some("alnairnight"),);
+        assert_eq!(
+            app.current_ui.auto_dark_theme.as_deref(),
+            Some("alnairnight"),
+        );
     });
 }
 #[test]
@@ -3092,7 +3098,10 @@ fn rollback_auto_light_theme_reverts_current_ui() {
             }),
             &mut app,
         );
-        assert_eq!(app.current_ui.auto_light_theme.as_deref(), Some("alnairday"));
+        assert_eq!(
+            app.current_ui.auto_light_theme.as_deref(),
+            Some("alnairday")
+        );
     });
 }
 /// Edge case — if the rollback value is

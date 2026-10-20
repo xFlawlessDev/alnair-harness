@@ -635,7 +635,9 @@ impl LocalTerminalActor {
         if alnair_sandbox::should_restrict_child_network() {
             unsafe {
                 let filter = alnair_sandbox::child_net::prebuilt_child_network_filter();
-                cmd.pre_exec(move || alnair_sandbox::child_net::install_child_network_filter(filter));
+                cmd.pre_exec(move || {
+                    alnair_sandbox::child_net::install_child_network_filter(filter)
+                });
             }
         }
 
@@ -2648,7 +2650,9 @@ fn spawn_shell_command(
         if alnair_sandbox::should_restrict_child_network() {
             unsafe {
                 let filter = alnair_sandbox::child_net::prebuilt_child_network_filter();
-                cmd.pre_exec(move || alnair_sandbox::child_net::install_child_network_filter(filter));
+                cmd.pre_exec(move || {
+                    alnair_sandbox::child_net::install_child_network_filter(filter)
+                });
             }
         }
         cmd

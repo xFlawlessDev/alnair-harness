@@ -5,8 +5,8 @@
 //! (conversation-only) and resubmits; unchanged/empty Enter or Esc exits.
 //! Structure mirrors `queue_edit.rs`.
 
-use crossterm::event::{KeyCode, KeyEvent, MouseButton, MouseEvent, MouseEventKind};
 use alnair_ratatui_textarea::{TextArea, TextAreaState};
+use crossterm::event::{KeyCode, KeyEvent, MouseButton, MouseEvent, MouseEventKind};
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::Style;

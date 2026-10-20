@@ -1282,7 +1282,11 @@ fn resolve_binary_with_home(alnair_home: &Path) -> Result<std::path::PathBuf, Co
 }
 /// Binary file name for the managed alnair install (`alnair` / `alnair.exe`).
 fn managed_alnair_bin_name() -> &'static str {
-    if cfg!(windows) { "alnair.exe" } else { "alnair" }
+    if cfg!(windows) {
+        "alnair.exe"
+    } else {
+        "alnair"
+    }
 }
 /// Core leader-binary resolution with the current-exe path injected, for testability.
 fn resolve_binary_impl(

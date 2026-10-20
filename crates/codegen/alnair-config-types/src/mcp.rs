@@ -1,8 +1,8 @@
 //! MCP server configuration value types.
 
 use agent_client_protocol as acp;
-use indexmap::IndexMap;
 use alnair_mcp::oauth_config::McpOAuthConfig;
+use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::PathBuf;

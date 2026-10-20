@@ -613,7 +613,9 @@ fn handle_ext_notification(notif: &acp::ExtNotification, app: &mut AppView) -> b
         "alnair/scheduled_task_inject_prompt" => handle_scheduled_task_inject_prompt(notif, app),
         "alnair/git_head_changed" => handle_git_head_changed(notif, app),
         "alnair/mcp/init_progress" => handle_mcp_init_progress(notif, app),
-        "alnair/mcp/tools_changed" | "alnair/mcp_initialized" => handle_mcp_tools_changed(notif, app),
+        "alnair/mcp/tools_changed" | "alnair/mcp_initialized" => {
+            handle_mcp_tools_changed(notif, app)
+        }
         "alnair/mcp/server_status" if push_server_status_enabled() => {
             handle_mcp_server_status(notif, app)
         }

@@ -138,7 +138,9 @@ pub(crate) async fn create_test_actor_ex(
     tokio::sync::mpsc::UnboundedReceiver<SessionEvent>,
 ) {
     let cwd = alnair_paths::AbsPathBuf::new(std::path::PathBuf::from("/tmp")).unwrap();
-    let fs = Arc::new(alnair_workspace::file_system::MockFs::new(cwd.to_path_buf()));
+    let fs = Arc::new(alnair_workspace::file_system::MockFs::new(
+        cwd.to_path_buf(),
+    ));
     let terminal = Arc::new(DummyTerminal {});
     let (hunk_tx, _hunk_rx) = tokio::sync::mpsc::unbounded_channel();
     let hunk_tracker_handle = alnair_hunk_tracker::HunkTrackerActor::spawn(

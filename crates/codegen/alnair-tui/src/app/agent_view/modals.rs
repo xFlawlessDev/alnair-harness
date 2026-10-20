@@ -982,7 +982,10 @@ impl AgentView {
             ButtonAction::HooksAction(hooks_action) => {
                 if let Some(ref mut state) = self.extensions_modal {
                     state.modal_message = None;
-                    if matches!(hooks_action, alnair_hooks_plugins_types::HooksAction::Reload) {
+                    if matches!(
+                        hooks_action,
+                        alnair_hooks_plugins_types::HooksAction::Reload
+                    ) {
                         // Reload rebuilds the entire plugin registry -- show
                         // tab-level "Loading..." instead of a single-entry badge.
                         state.pending_action = Some("Reloading...".into());

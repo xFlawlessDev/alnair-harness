@@ -215,9 +215,10 @@ mod tests {
             file_path: tmp.path().join("new.txt").to_string_lossy().into_owned(),
             content: "hello\nworld\n".to_string(),
         };
-        let result = alnair_tool_runtime::Tool::run(&tool, test_ctx(shared_resources.clone()), input)
-            .await
-            .unwrap();
+        let result =
+            alnair_tool_runtime::Tool::run(&tool, test_ctx(shared_resources.clone()), input)
+                .await
+                .unwrap();
 
         match &result {
             SearchReplaceOutput::EditsApplied(applied) => {
@@ -242,9 +243,10 @@ mod tests {
             file_path: file_path.to_string_lossy().into_owned(),
             content: "new content\n".to_string(),
         };
-        let result = alnair_tool_runtime::Tool::run(&tool, test_ctx(resources.into_shared()), input)
-            .await
-            .unwrap();
+        let result =
+            alnair_tool_runtime::Tool::run(&tool, test_ctx(resources.into_shared()), input)
+                .await
+                .unwrap();
 
         match &result {
             SearchReplaceOutput::EditsApplied(applied) => {
@@ -267,9 +269,10 @@ mod tests {
             file_path: nested.to_string_lossy().into_owned(),
             content: "nested\n".to_string(),
         };
-        let result = alnair_tool_runtime::Tool::run(&tool, test_ctx(resources.into_shared()), input)
-            .await
-            .unwrap();
+        let result =
+            alnair_tool_runtime::Tool::run(&tool, test_ctx(resources.into_shared()), input)
+                .await
+                .unwrap();
 
         assert!(matches!(result, SearchReplaceOutput::EditsApplied(_)));
         let content = std::fs::read_to_string(&nested).unwrap();
@@ -308,9 +311,10 @@ mod tests {
             file_path: file_path.to_string_lossy().into_owned(),
             content: String::new(),
         };
-        let result = alnair_tool_runtime::Tool::run(&tool, test_ctx(resources.into_shared()), input)
-            .await
-            .unwrap();
+        let result =
+            alnair_tool_runtime::Tool::run(&tool, test_ctx(resources.into_shared()), input)
+                .await
+                .unwrap();
 
         assert!(matches!(result, SearchReplaceOutput::EditsApplied(_)));
         assert!(file_path.exists());
@@ -331,9 +335,10 @@ mod tests {
             file_path: file_path.to_string_lossy().into_owned(),
             content: "new\n".to_string(),
         };
-        let result = alnair_tool_runtime::Tool::run(&tool, test_ctx(resources.into_shared()), input)
-            .await
-            .unwrap();
+        let result =
+            alnair_tool_runtime::Tool::run(&tool, test_ctx(resources.into_shared()), input)
+                .await
+                .unwrap();
 
         match &result {
             SearchReplaceOutput::EditsApplied(applied) => {
@@ -360,9 +365,10 @@ mod tests {
             file_path: "subdir/relative.txt".to_string(),
             content: "resolved\n".to_string(),
         };
-        let result = alnair_tool_runtime::Tool::run(&tool, test_ctx(resources.into_shared()), input)
-            .await
-            .unwrap();
+        let result =
+            alnair_tool_runtime::Tool::run(&tool, test_ctx(resources.into_shared()), input)
+                .await
+                .unwrap();
 
         let expected = tmp.path().join("subdir/relative.txt");
         match &result {

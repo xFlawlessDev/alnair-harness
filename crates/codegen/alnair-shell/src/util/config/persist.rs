@@ -1,7 +1,7 @@
 use super::load::load_config_from_toml;
 use super::mcp::{Config, user_config_path};
-use anyhow::Result;
 use alnair_agent::prompt::skills::SkillsConfig;
+use anyhow::Result;
 use toml::Value as TomlValue;
 use toml::map::Map as TomlMap;
 
@@ -923,7 +923,10 @@ auto_update = true
         };
         merge_section(&mut table, "models", &cfg);
         let m = table.get("models").unwrap().as_table().unwrap();
-        assert_eq!(m.get("default").and_then(|v| v.as_str()), Some("alnair-new"));
+        assert_eq!(
+            m.get("default").and_then(|v| v.as_str()),
+            Some("alnair-new")
+        );
         assert_eq!(
             m.get("session_summary").and_then(|v| v.as_str()),
             Some("old-title")

@@ -48,11 +48,11 @@ use std::sync::Arc;
 use std::sync::mpsc::{Receiver, Sender};
 use std::time::{Duration, Instant};
 
-use indexmap::IndexMap;
 use alnair_mermaid::{
     MermaidTheme, RenderLimits, RenderParams, RenderedDiagram, SubprocessError, default_engine,
     render_checked, run_with_timeout,
 };
+use indexmap::IndexMap;
 
 use crate::app::agent_view::AgentView;
 use crate::scrollback::blocks::mermaid_content::{
@@ -2058,8 +2058,12 @@ mod tests {
             80,
             MermaidRenderQuality::Terminal,
         );
-        let light_key =
-            MermaidCacheKey::derive(src, ThemeKind::AlnairDay, 80, MermaidRenderQuality::Terminal);
+        let light_key = MermaidCacheKey::derive(
+            src,
+            ThemeKind::AlnairDay,
+            80,
+            MermaidRenderQuality::Terminal,
+        );
         assert_ne!(
             dark_key.cache_filename(),
             light_key.cache_filename(),

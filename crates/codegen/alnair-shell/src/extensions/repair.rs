@@ -106,7 +106,11 @@ async fn handle_session_repair(agent: &MvpAgent, args: &acp::ExtRequest) -> ExtR
 /// Repair a non-resident session's history on disk: load via the resume
 /// path's corruption-tolerant reader (legacy upgrades apply), repair, write
 /// back atomically. `alnair_root` is injectable for tests.
-async fn repair_on_disk(alnair_root: &std::path::Path, session_id: &str, dry_run: bool) -> ExtResult {
+async fn repair_on_disk(
+    alnair_root: &std::path::Path,
+    session_id: &str,
+    dry_run: bool,
+) -> ExtResult {
     let summary = crate::session::persistence::find_summary_by_session_id_in_root(
         session_id,
         &alnair_root.join("sessions"),

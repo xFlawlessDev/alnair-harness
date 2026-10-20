@@ -32,7 +32,9 @@ impl DrainSource {
 /// source). No-op for `Pending` source — its ack was already resolved.
 pub(super) fn try_send_ack(
     ack_tx: Option<
-        tokio::sync::oneshot::Sender<alnair_tools::implementations::alnair::update_goal::UpdateGoalAck>,
+        tokio::sync::oneshot::Sender<
+            alnair_tools::implementations::alnair::update_goal::UpdateGoalAck,
+        >,
     >,
     ack: alnair_tools::implementations::alnair::update_goal::UpdateGoalAck,
 ) {
@@ -1461,7 +1463,9 @@ impl SessionActor {
         self.agent
             .borrow()
             .tool_bridge()
-            .update_resource(alnair_tools::implementations::alnair::task::types::GoalLoopActive(active))
+            .update_resource(
+                alnair_tools::implementations::alnair::task::types::GoalLoopActive(active),
+            )
             .await;
     }
 }

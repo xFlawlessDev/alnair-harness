@@ -735,7 +735,10 @@ async fn list_skills(
 /// `ConfigSource` and reject unknown tags, so runtime stamping must wait
 /// until clients without these variants have aged out. Until then this
 /// mapping is the single owner of the scope→source translation.
-fn skill_entry_source(s: &alnair_agent::prompt::skills::SkillInfo, alnair_home: &Path) -> ConfigSource {
+fn skill_entry_source(
+    s: &alnair_agent::prompt::skills::SkillInfo,
+    alnair_home: &Path,
+) -> ConfigSource {
     use alnair_tools::implementations::skills::types::SkillScope;
 
     if let Some(source) = s.config_source.clone() {
@@ -1544,7 +1547,10 @@ mod tests {
             );
         }
 
-        for path in ["/repo/.alnair/rules/team.md", r"C:\repo\.alnair\rules\team.md"] {
+        for path in [
+            "/repo/.alnair/rules/team.md",
+            r"C:\repo\.alnair\rules\team.md",
+        ] {
             assert_eq!(instruction_file_type(path, false, &[]), "rules");
         }
         for path in [
@@ -1756,7 +1762,11 @@ mod tests {
             ConfigSource::Server { .. }
         ));
 
-        let s = skill_fixture("e", "/home/u/.alnair/bundled/e/SKILL.md", SkillScope::Bundled);
+        let s = skill_fixture(
+            "e",
+            "/home/u/.alnair/bundled/e/SKILL.md",
+            SkillScope::Bundled,
+        );
         assert!(matches!(
             skill_entry_source(&s, home),
             ConfigSource::Bundled { .. }
@@ -1781,7 +1791,11 @@ mod tests {
         ));
 
         // Bundled name in a project dir: stays project.
-        let s = skill_fixture("help", "/repo/.alnair/skills/help/SKILL.md", SkillScope::Repo);
+        let s = skill_fixture(
+            "help",
+            "/repo/.alnair/skills/help/SKILL.md",
+            SkillScope::Repo,
+        );
         assert!(matches!(
             skill_entry_source(&s, home),
             ConfigSource::Project { .. }

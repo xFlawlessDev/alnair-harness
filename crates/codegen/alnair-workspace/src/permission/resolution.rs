@@ -436,7 +436,9 @@ impl ResolveInputs<'static> {
         Self {
             policy_block: yolo_disabled_by_policy(),
             managed: managed_settings(),
-            managed_config_rules: managed_config_permissions(&alnair_config::managed_config_layers()),
+            managed_config_rules: managed_config_permissions(
+                &alnair_config::managed_config_layers(),
+            ),
         }
     }
 }
@@ -2566,7 +2568,10 @@ mod tests {
         assert!(al.is_server_denied(&http_named("foo", "https://x.example.com/mcp")));
         assert!(al.is_server_denied(&http_named("alnair_com_foo", "https://x.example.com/mcp")));
         assert!(!al.is_server_denied(&http_named("foobar", "https://x.example.com/mcp")));
-        assert!(!al.is_server_denied(&http_named("alnair_com_foobar", "https://x.example.com/mcp")));
+        assert!(!al.is_server_denied(&http_named(
+            "alnair_com_foobar",
+            "https://x.example.com/mcp"
+        )));
     }
 
     #[test]
@@ -4146,7 +4151,8 @@ mod tests {
         )
         .unwrap();
 
-        let layers = alnair_config::managed_config_layers_at(Some(system.path()), Some(user.path()));
+        let layers =
+            alnair_config::managed_config_layers_at(Some(system.path()), Some(user.path()));
         assert!(layers[0].is_system && layers[0].path.starts_with(system.path()));
         assert!(!layers[1].is_system && layers[1].path.starts_with(user.path()));
         let rules = managed_config_permissions(&layers);

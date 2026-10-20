@@ -1593,10 +1593,9 @@ impl McpErasedTool {
         is_timeout: &mut bool,
         ew: &alnair_file_utils::events::EventWriter,
     ) -> Result<rmcp::model::CallToolResult, alnair_tool_runtime::ToolError> {
-        let mcp_service = client
-            .ensure_initialized()
-            .await
-            .map_err(|e| alnair_tool_runtime::ToolError::custom("process_manager", e.to_string()))?;
+        let mcp_service = client.ensure_initialized().await.map_err(|e| {
+            alnair_tool_runtime::ToolError::custom("process_manager", e.to_string())
+        })?;
         let tool_timeout = client.tool_timeout_for(&self.tool.name);
         let timeout_duration = std::time::Duration::from_secs(tool_timeout);
         let mut params = CallToolRequestParams::new(self.tool.name.clone());

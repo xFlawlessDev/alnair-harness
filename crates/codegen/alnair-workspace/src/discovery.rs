@@ -118,8 +118,12 @@ pub fn discover_plugins(
     trust_store: &PluginTrustStore,
     project_trusted: bool,
 ) -> Vec<Value> {
-    let discovered =
-        alnair_agent::plugins::discover_plugins(Some(root_cwd), config, trust_store, project_trusted);
+    let discovered = alnair_agent::plugins::discover_plugins(
+        Some(root_cwd),
+        config,
+        trust_store,
+        project_trusted,
+    );
 
     discovered
         .into_iter()
@@ -410,7 +414,11 @@ mod tests {
     #[test]
     fn discover_plugins_finds_manifest_plugin() {
         let tmp = tempfile::tempdir().unwrap();
-        let plugins_dir = tmp.path().join(".alnair").join("plugins").join("test-plugin");
+        let plugins_dir = tmp
+            .path()
+            .join(".alnair")
+            .join("plugins")
+            .join("test-plugin");
         fs::create_dir_all(&plugins_dir).unwrap();
         fs::write(
             plugins_dir.join("plugin.json"),
@@ -435,7 +443,11 @@ mod tests {
     #[test]
     fn discover_plugins_json_has_expected_fields() {
         let tmp = tempfile::tempdir().unwrap();
-        let plugins_dir = tmp.path().join(".alnair").join("plugins").join("field-test");
+        let plugins_dir = tmp
+            .path()
+            .join(".alnair")
+            .join("plugins")
+            .join("field-test");
         fs::create_dir_all(plugins_dir.join("skills")).unwrap();
         fs::write(
             plugins_dir.join("plugin.json"),

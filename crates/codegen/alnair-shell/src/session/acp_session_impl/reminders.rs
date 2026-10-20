@@ -301,8 +301,10 @@ impl SessionActor {
                     "draining between-turn bash task completions"
                 );
                 let task_output_name =
-                    alnair_tools::reminders::task_completion::resolve_task_output_tool_name(&bridge)
-                        .await;
+                    alnair_tools::reminders::task_completion::resolve_task_output_tool_name(
+                        &bridge,
+                    )
+                    .await;
                 let read_tool_name =
                     alnair_tools::reminders::task_completion::resolve_read_tool_name(&bridge).await;
                 let reminder =

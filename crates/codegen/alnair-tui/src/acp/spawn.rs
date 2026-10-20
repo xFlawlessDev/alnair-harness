@@ -30,7 +30,7 @@ pub struct SpawnedAgent {
     pub auth_manager: std::sync::Arc<AuthManager>,
 }
 
-/// Spawn a AlnairShell agent in a background thread.
+/// Spawn an AlnairShell agent in a background thread.
 pub async fn spawn_alnair_shell(
     agent_config: AgentConfig,
     cancel: &CancellationToken,

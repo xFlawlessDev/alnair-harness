@@ -9,8 +9,8 @@ mod schema;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use anyhow::{Context, Result};
 use alnair_sqlite_journal::JournalMode;
+use anyhow::{Context, Result};
 use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
 

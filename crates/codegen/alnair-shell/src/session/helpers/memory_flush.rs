@@ -197,7 +197,8 @@ pub fn is_duplicate(content: &str, db_path: &std::path::Path) -> bool {
 
     // Journal-mode-aware open: never mmap a legacy WAL -shm on network
     // mounts (SIGBUS); see alnair_sqlite_journal::JournalMode::open_readonly.
-    let conn = match alnair_sqlite_journal::JournalMode::for_db_path(db_path).open_readonly(db_path) {
+    let conn = match alnair_sqlite_journal::JournalMode::for_db_path(db_path).open_readonly(db_path)
+    {
         Ok(c) => c,
         Err(_) => {
             tracing::debug!(target: LOG, "MEMORY_FLUSH_DEDUP: can't open DB, allowing write");

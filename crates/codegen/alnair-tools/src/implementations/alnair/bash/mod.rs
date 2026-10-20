@@ -4419,8 +4419,9 @@ mod tests {
         fn legacy_rt_ctx(
             resources: crate::types::resources::SharedResources,
         ) -> alnair_tool_runtime::ToolCallContext {
-            let mut ctx =
-                alnair_tool_runtime::ToolCallContext::new(alnair_tool_protocol::ToolCallId::new_v7());
+            let mut ctx = alnair_tool_runtime::ToolCallContext::new(
+                alnair_tool_protocol::ToolCallId::new_v7(),
+            );
             ctx.extensions.insert(resources);
             ctx.extensions.insert(alnair_tool_runtime::BehaviorVersion(
                 "legacy-0.4.10".to_string(),

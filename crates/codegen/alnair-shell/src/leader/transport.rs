@@ -285,8 +285,8 @@ mod windows_impl {
         async fn listener_is_ready_tracks_pipe_lifecycle() {
             // Unique path per process so parallel test binaries don't collide on
             // the derived pipe name.
-            let path =
-                std::env::temp_dir().join(format!("alnair-ready-probe-{}.sock", std::process::id()));
+            let path = std::env::temp_dir()
+                .join(format!("alnair-ready-probe-{}.sock", std::process::id()));
 
             // Nothing bound yet -> ERROR_FILE_NOT_FOUND -> not ready.
             assert!(!listener_is_ready(&path));

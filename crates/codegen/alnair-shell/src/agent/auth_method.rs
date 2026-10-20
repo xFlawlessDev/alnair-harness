@@ -549,7 +549,10 @@ pub(crate) async fn authenticate_platform_api_key(
         alnair_models::PlatformKeyHeader::XApiKey => crate::http::shared_client()
             .get(&url)
             .header("x-api-key", key)
-            .header("anthropic-version", alnair_sampling_types::ANTHROPIC_VERSION),
+            .header(
+                "anthropic-version",
+                alnair_sampling_types::ANTHROPIC_VERSION,
+            ),
     };
     let response = request
         .send()
@@ -1418,10 +1421,12 @@ mod tests {
             .mount(&server)
             .await;
         let _base = EnvGuard::set(alnair_models::QWEN_TOKEN_PLAN_BASE_URL_ENV, &server.uri());
-        let err =
-            authenticate_platform_api_key(alnair_models::PlatformId::QwenTokenPlan, Some("qtp-bad"))
-                .await
-                .expect_err("a 401 from /models must reject the key");
+        let err = authenticate_platform_api_key(
+            alnair_models::PlatformId::QwenTokenPlan,
+            Some("qtp-bad"),
+        )
+        .await
+        .expect_err("a 401 from /models must reject the key");
         assert_eq!(
             err.message,
             "Invalid API key for qwen-token-plan \u{2014} check your key on \
@@ -1442,7 +1447,10 @@ mod tests {
             .expect(1)
             .mount(&server)
             .await;
-        let _base = EnvGuard::set(alnair_models::QWEN_TOKEN_PLAN_CN_BASE_URL_ENV, &server.uri());
+        let _base = EnvGuard::set(
+            alnair_models::QWEN_TOKEN_PLAN_CN_BASE_URL_ENV,
+            &server.uri(),
+        );
         let err = authenticate_platform_api_key(
             alnair_models::PlatformId::QwenTokenPlanCn,
             Some("qtp-cn-bad"),
@@ -1515,10 +1523,12 @@ mod tests {
             .mount(&server)
             .await;
         let _base = EnvGuard::set(alnair_models::ZAI_CODING_CN_BASE_URL_ENV, &server.uri());
-        let err =
-            authenticate_platform_api_key(alnair_models::PlatformId::ZaiCodingCn, Some("zai-cn-bad"))
-                .await
-                .expect_err("a 401 from /models must reject the key");
+        let err = authenticate_platform_api_key(
+            alnair_models::PlatformId::ZaiCodingCn,
+            Some("zai-cn-bad"),
+        )
+        .await
+        .expect_err("a 401 from /models must reject the key");
         assert_eq!(
             err.message,
             "Invalid API key for zai-coding-cn \u{2014} check your key on open.bigmodel.cn"

@@ -135,7 +135,10 @@ impl StatusConfig {
                 "ALNAIR_WORKSPACE_SESSION_IDLE_PRUNE_SECS",
                 defaults.session_idle_prune,
             ),
-            drain_timeout: secs_or("ALNAIR_WORKSPACE_DRAIN_TIMEOUT_SECS", defaults.drain_timeout),
+            drain_timeout: secs_or(
+                "ALNAIR_WORKSPACE_DRAIN_TIMEOUT_SECS",
+                defaults.drain_timeout,
+            ),
             agent_rpc_timeout: agent_rpc,
             agent_connect_timeout: agent_connect,
             idle_ignores_background: parse_or(
@@ -500,7 +503,12 @@ mod tests {
     #[test]
     fn from_env_reads_preview_activity_scrape_interval() {
         let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        unsafe { std::env::set_var("ALNAIR_WORKSPACE_PREVIEW_ACTIVITY_SCRAPE_INTERVAL_MS", "5000") };
+        unsafe {
+            std::env::set_var(
+                "ALNAIR_WORKSPACE_PREVIEW_ACTIVITY_SCRAPE_INTERVAL_MS",
+                "5000",
+            )
+        };
         let cfg = StatusConfig::from_env();
         unsafe { std::env::remove_var("ALNAIR_WORKSPACE_PREVIEW_ACTIVITY_SCRAPE_INTERVAL_MS") };
         assert_eq!(

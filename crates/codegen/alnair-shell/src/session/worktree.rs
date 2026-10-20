@@ -5,9 +5,9 @@
 //! functions that depend on shell-specific infrastructure (persistence,
 //! auth, registry client, storage client, session restore).
 use crate::util::config::WorktreeType as ShellWorktreeType;
-use anyhow::{Context, Result};
 use alnair_workspace::session::git::find_git_root_from_path;
 pub use alnair_workspace::worktree::*;
+use anyhow::{Context, Result};
 use std::path::Path;
 const WORKTREE_LOG: &str = "xai_worktree";
 impl From<ShellWorktreeType> for WorktreeType {

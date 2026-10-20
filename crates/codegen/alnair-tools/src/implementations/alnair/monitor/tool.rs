@@ -135,7 +135,9 @@ impl alnair_tool_runtime::Tool for MonitorTool {
                 owner_session_id,
             })
             .await
-            .map_err(|e| alnair_tool_runtime::ToolError::custom("process_manager", e.to_string()))?;
+            .map_err(|e| {
+                alnair_tool_runtime::ToolError::custom("process_manager", e.to_string())
+            })?;
 
         let task_id = bg_handle.task_id.clone();
 

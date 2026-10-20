@@ -14,9 +14,9 @@ use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use std::sync::{Arc, Mutex, OnceLock};
 
+use alnair_fast_worktree::{BtrfsDelegate, IgnoredFilesMode, WorkingTreeMode, WorktreeBuilder};
 use anyhow::Result;
 use git2::{DiffOptions, Oid, Repository};
-use alnair_fast_worktree::{BtrfsDelegate, IgnoredFilesMode, WorkingTreeMode, WorktreeBuilder};
 use serde::{Deserialize, Serialize};
 use tokio::sync::Mutex as TokioMutex;
 use tokio_util::sync::CancellationToken;

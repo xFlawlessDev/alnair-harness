@@ -157,7 +157,10 @@ fn reconnect_restore_outcome(
 /// becomes `TrustState::Pending` (show the question); everything else becomes
 /// `TrustState::Done`. The feature-off fast path (kill-switch / opt-out /
 /// local build) short-circuits before any I/O.
-fn seed_trust_state(app: &mut AppView, remote: Option<&alnair_shell::util::config::RemoteSettings>) {
+fn seed_trust_state(
+    app: &mut AppView,
+    remote: Option<&alnair_shell::util::config::RemoteSettings>,
+) {
     use alnair_workspace::folder_trust::{
         TrustOutcome, decide, decide_inputs_with_interactive, feature_enabled,
     };

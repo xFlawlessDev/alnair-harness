@@ -207,7 +207,9 @@ fn submit_platform_api_key_ignores_blank_key() {
     assert!(matches!(
         app.auth_state,
         AuthState::Authenticating {
-            mode: AuthMode::ApiKeyEntry(PlatformLogin(alnair_shell::models::PlatformId::MoonshotCn)),
+            mode: AuthMode::ApiKeyEntry(PlatformLogin(
+                alnair_shell::models::PlatformId::MoonshotCn
+            )),
             ..
         }
     ));

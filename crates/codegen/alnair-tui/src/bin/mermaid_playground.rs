@@ -10,10 +10,10 @@
 use std::io::{self, stdout};
 use std::time::Duration;
 
+use alnair_tui::scrollback::{RenderBlock, ScratchBuffer, ScrollbackPane, ScrollbackState};
 use crossterm::ExecutableCommand;
 use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyModifiers};
 use crossterm::terminal::{self, EnterAlternateScreen, LeaveAlternateScreen};
-use alnair_tui::scrollback::{RenderBlock, ScratchBuffer, ScrollbackPane, ScrollbackState};
 use ratatui::Terminal;
 use ratatui::backend::CrosstermBackend;
 use ratatui::layout::Rect;

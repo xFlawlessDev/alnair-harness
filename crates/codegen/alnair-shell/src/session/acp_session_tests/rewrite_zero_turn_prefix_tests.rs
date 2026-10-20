@@ -147,7 +147,7 @@ fn stale_source_reminder() -> ConversationItem {
          - stale-source-skill: from the source session.\n</system-reminder>",
     )
 }
-/// Regression: a zero-turn agent rebuild INTO a alnair/Default agent
+/// Regression: a zero-turn agent rebuild INTO an alnair/Default agent
 /// must re-inject the baseline skill `<system-reminder>`. `initialize()`
 /// is otherwise the only place skills are surfaced for the alnair agent, so
 /// before the fix a switch into such an agent — whose rebuilt bridge holds

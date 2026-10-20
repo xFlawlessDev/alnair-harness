@@ -101,7 +101,7 @@ Alnair writes to the clipboard through up to three routes, which match the **Cli
 **SSH and selected text**: a remote Alnair process usually cannot read the local terminal's PRIMARY or CLIPBOARD selection. Use terminal-native `Shift+Insert`, or hold `Shift` while middle-clicking when your terminal uses that gesture to bypass mouse reporting. The terminal then sends the local selection through the PTY instead of asking the remote process to access it.
 
 **Known limitation — Apple Terminal + SSH**:
-Apple Terminal ignores OSC 52, so copying from a Alnair session over SSH can't reach your local clipboard. Use the workaround below.
+Apple Terminal ignores OSC 52, so copying from an Alnair session over SSH can't reach your local clipboard. Use the workaround below.
 
 **Temporary workaround**: Use `alnair wrap ssh` instead of plain `ssh` (for example, `alnair wrap ssh user@host`). It runs the command in a local PTY that intercepts OSC 52 sequences, including tmux-wrapped ones, and writes their contents to your local clipboard. The same command wraps anything else whose clipboard can't reach you — for example `alnair wrap docker exec -it <container> bash` or `alnair wrap kubectl exec -it <pod> -- bash`.
 

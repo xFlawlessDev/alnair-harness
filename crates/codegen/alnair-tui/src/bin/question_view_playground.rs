@@ -1,15 +1,15 @@
 use std::io::{self, stdout};
 use std::time::Duration;
 
-use crossterm::ExecutableCommand;
-use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyModifiers};
-use crossterm::terminal::{self, EnterAlternateScreen, LeaveAlternateScreen};
 use alnair_tools::implementations::alnair::ask_user_question::{Question, QuestionOption};
 use alnair_tui::theme::Theme;
 use alnair_tui::views::prompt_widget::StashedPrompt;
 use alnair_tui::views::question_view::{
     QUESTION_VIEW_HPAD, QuestionViewState, question_view_height, render_question_view,
 };
+use crossterm::ExecutableCommand;
+use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyModifiers};
+use crossterm::terminal::{self, EnterAlternateScreen, LeaveAlternateScreen};
 use ratatui::Terminal;
 use ratatui::backend::CrosstermBackend;
 use ratatui::layout::{Constraint, Layout};

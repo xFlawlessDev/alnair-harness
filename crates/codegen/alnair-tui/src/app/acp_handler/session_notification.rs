@@ -736,7 +736,9 @@ pub(super) fn handle_session_notification(notif: &acp::ExtNotification, app: &mu
                 use crate::views::extensions_modal::TabDataState;
                 modal.seed_plugin_groups_once(&plugins);
                 modal.plugins_data =
-                    TabDataState::Loaded(alnair_hooks_plugins_types::PluginsListResponse { plugins });
+                    TabDataState::Loaded(alnair_hooks_plugins_types::PluginsListResponse {
+                        plugins,
+                    });
                 if !matches!(modal.skills_data, TabDataState::Loading) {
                     modal.skills_data = TabDataState::Loading;
                     plugins_changed_needs_skills_refetch = true;
@@ -1099,8 +1101,10 @@ pub(super) fn handle_child_session_notification(
             {
                 info.tokens_used = Some(tokens_after);
                 if let Some(cw) = info.context_window_tokens.filter(|&cw| cw > 0) {
-                    info.context_usage_pct =
-                        Some(alnair_token_estimation::usage_percentage_u8(tokens_after, cw));
+                    info.context_usage_pct = Some(alnair_token_estimation::usage_percentage_u8(
+                        tokens_after,
+                        cw,
+                    ));
                 }
             }
             changed

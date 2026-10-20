@@ -1,6 +1,6 @@
 # Custom Hooks Guide
 
-Hooks let you run custom scripts or HTTP requests at key moments during a Alnair session — for example, before or after a tool runs, when a session starts or ends, or when the agent sends a notification.
+Hooks let you run custom scripts or HTTP requests at key moments during an Alnair session — for example, before or after a tool runs, when a session starts or ends, or when the agent sends a notification.
 
 They are perfect for automation, safety checks, logging, notifications, and integrating with your own tools.
 
@@ -37,7 +37,7 @@ Common use cases:
    }
    ```
 
-3. Start (or restart) a Alnair session. The hook runs automatically on `SessionStart`.
+3. Start (or restart) an Alnair session. The hook runs automatically on `SessionStart`.
 
    Try it: press `Ctrl+L` on non–VS Code family (or run `/hooks` anywhere — preferred on VS Code / Cursor / Windsurf / Zed) and check the Hooks tab to confirm it's loaded.
 

@@ -459,22 +459,23 @@ async fn post_tool_use_and_failure_never_double_fire() {
             *actor.client_hooks.borrow_mut() = client_hooks;
 
             // Collect the `hookEventName` of every `alnair/hooks/event` notification queued.
-            let drain =
-                |rx: &mut tokio::sync::mpsc::UnboundedReceiver<alnair_acp_lib::AcpClientMessage>| {
-                    let mut events = Vec::new();
-                    while let Ok(msg) = rx.try_recv() {
-                        if let alnair_acp_lib::AcpClientMessage::ExtNotification(args) = msg
-                            && args.request.method.as_ref() == "alnair/hooks/event"
-                        {
-                            let params: serde_json::Value =
-                                serde_json::from_str(args.request.params.get()).unwrap();
-                            if let Some(name) = params["hookEventName"].as_str() {
-                                events.push(name.to_string());
-                            }
+            let drain = |rx: &mut tokio::sync::mpsc::UnboundedReceiver<
+                alnair_acp_lib::AcpClientMessage,
+            >| {
+                let mut events = Vec::new();
+                while let Ok(msg) = rx.try_recv() {
+                    if let alnair_acp_lib::AcpClientMessage::ExtNotification(args) = msg
+                        && args.request.method.as_ref() == "alnair/hooks/event"
+                    {
+                        let params: serde_json::Value =
+                            serde_json::from_str(args.request.params.get()).unwrap();
+                        if let Some(name) = params["hookEventName"].as_str() {
+                            events.push(name.to_string());
                         }
                     }
-                    events
-                };
+                }
+                events
+            };
 
             let todo_call = |id: &str| crate::sampling::types::ToolCallResponse {
                 id: id.to_string(),

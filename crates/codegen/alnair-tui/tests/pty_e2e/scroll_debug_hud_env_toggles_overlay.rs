@@ -33,7 +33,10 @@ const MARKER_COUNT: usize = 120;
 async fn scroll_debug_hud_env_shows_hud_and_tracks_flood() {
     let (mut harness, _content, top_before) = spawn_bottom_pinned_marker_scrollback_with_env(
         MARKER_COUNT,
-        &[("ALNAIR_SCROLL_DEBUG", "1"), ("ALNAIR_SCROLL_MODE", "trackpad")],
+        &[
+            ("ALNAIR_SCROLL_DEBUG", "1"),
+            ("ALNAIR_SCROLL_MODE", "trackpad"),
+        ],
     )
     .await;
 

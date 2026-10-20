@@ -18,12 +18,12 @@ use serial_test::serial;
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
+use alnair_update::auto_update::install_internal_from_base;
+use alnair_update::version::installed_on_disk_version;
 use common::{
     archive_name, host_platform, make_release_archive, make_update_config, mount_latest,
     mount_release, release_json, reset_home, sha256_hex, small_good_artifact, test_home,
 };
-use alnair_update::auto_update::install_internal_from_base;
-use alnair_update::version::installed_on_disk_version;
 
 /// Base URL for the updater: `{server}/releases`, mirroring the production
 /// `https://api.github.com/repos/{owner}/{repo}/releases`.
@@ -499,15 +499,21 @@ async fn install_cleans_up_old_versions_keeping_n_minus_one() {
 
     let downloads = test_home().join("downloads");
     assert!(
-        downloads.join(format!("alnair-0.1.181-{platform}")).exists(),
+        downloads
+            .join(format!("alnair-0.1.181-{platform}"))
+            .exists(),
         "current"
     );
     assert!(
-        downloads.join(format!("alnair-0.1.180-{platform}")).exists(),
+        downloads
+            .join(format!("alnair-0.1.180-{platform}"))
+            .exists(),
         "N-1 retained"
     );
     assert!(
-        !downloads.join(format!("alnair-0.1.179-{platform}")).exists(),
+        !downloads
+            .join(format!("alnair-0.1.179-{platform}"))
+            .exists(),
         "oldest deleted"
     );
 

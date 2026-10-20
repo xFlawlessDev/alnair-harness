@@ -526,9 +526,10 @@ mod tests {
             limit: None,
         };
 
-        let result = alnair_tool_runtime::Tool::run(&tool, test_ctx(resources.into_shared()), input)
-            .await
-            .unwrap();
+        let result =
+            alnair_tool_runtime::Tool::run(&tool, test_ctx(resources.into_shared()), input)
+                .await
+                .unwrap();
         match result {
             ReadFileOutput::FileReadError(msg) => {
                 assert!(msg.contains("File not found"));
@@ -552,9 +553,10 @@ mod tests {
             limit: Some(2),
         };
 
-        let result = alnair_tool_runtime::Tool::run(&tool, test_ctx(resources.into_shared()), input)
-            .await
-            .unwrap();
+        let result =
+            alnair_tool_runtime::Tool::run(&tool, test_ctx(resources.into_shared()), input)
+                .await
+                .unwrap();
         match result {
             ReadFileOutput::FileContent(fc) => {
                 assert!(fc.content.contains("2: 2"));
@@ -581,9 +583,10 @@ mod tests {
             limit: None,
         };
 
-        let result = alnair_tool_runtime::Tool::run(&tool, test_ctx(resources.into_shared()), input)
-            .await
-            .unwrap();
+        let result =
+            alnair_tool_runtime::Tool::run(&tool, test_ctx(resources.into_shared()), input)
+                .await
+                .unwrap();
         match result {
             ReadFileOutput::FileContent(fc) => {
                 assert!(fc.content.contains("<type>directory</type>"));
@@ -610,9 +613,10 @@ mod tests {
             limit: None,
         };
 
-        let result = alnair_tool_runtime::Tool::run(&tool, test_ctx(resources.into_shared()), input)
-            .await
-            .unwrap();
+        let result =
+            alnair_tool_runtime::Tool::run(&tool, test_ctx(resources.into_shared()), input)
+                .await
+                .unwrap();
         match result {
             ReadFileOutput::FileReadError(msg) => {
                 assert!(msg.contains("Cannot read binary file"));
@@ -633,9 +637,10 @@ mod tests {
             limit: None,
         };
 
-        let result = alnair_tool_runtime::Tool::run(&tool, test_ctx(resources.into_shared()), input)
-            .await
-            .unwrap();
+        let result =
+            alnair_tool_runtime::Tool::run(&tool, test_ctx(resources.into_shared()), input)
+                .await
+                .unwrap();
         match result {
             ReadFileOutput::FileReadError(msg) => {
                 assert!(msg.contains("offset must be >= 1"));
@@ -707,9 +712,10 @@ mod tests {
             limit: None,
         };
 
-        let result = alnair_tool_runtime::Tool::run(&tool, test_ctx(resources.into_shared()), input)
-            .await
-            .unwrap();
+        let result =
+            alnair_tool_runtime::Tool::run(&tool, test_ctx(resources.into_shared()), input)
+                .await
+                .unwrap();
         match result {
             ReadFileOutput::ImageContent(img) => {
                 assert_eq!(img.mime_type, "image/png");
@@ -746,9 +752,10 @@ mod tests {
             offset: None,
             limit: None,
         };
-        let result = alnair_tool_runtime::Tool::run(&tool, test_ctx(resources.into_shared()), input)
-            .await
-            .unwrap();
+        let result =
+            alnair_tool_runtime::Tool::run(&tool, test_ctx(resources.into_shared()), input)
+                .await
+                .unwrap();
         match result {
             ReadFileOutput::ImageContent(img) => {
                 let decoded = general_purpose::STANDARD.decode(&img.data).unwrap();
@@ -781,9 +788,10 @@ mod tests {
             limit: None,
         };
 
-        let result = alnair_tool_runtime::Tool::run(&tool, test_ctx(resources.into_shared()), input)
-            .await
-            .unwrap();
+        let result =
+            alnair_tool_runtime::Tool::run(&tool, test_ctx(resources.into_shared()), input)
+                .await
+                .unwrap();
         match result {
             ReadFileOutput::FileContent(fc) => {
                 assert!(
@@ -820,9 +828,10 @@ mod tests {
             limit: None,
         };
 
-        let result = alnair_tool_runtime::Tool::run(&tool, test_ctx(resources.into_shared()), input)
-            .await
-            .unwrap();
+        let result =
+            alnair_tool_runtime::Tool::run(&tool, test_ctx(resources.into_shared()), input)
+                .await
+                .unwrap();
         match result {
             ReadFileOutput::FileContent(fc) => {
                 assert!(
@@ -851,9 +860,10 @@ mod tests {
             limit: None,
         };
 
-        let result = alnair_tool_runtime::Tool::run(&tool, test_ctx(resources.into_shared()), input)
-            .await
-            .unwrap();
+        let result =
+            alnair_tool_runtime::Tool::run(&tool, test_ctx(resources.into_shared()), input)
+                .await
+                .unwrap();
         match result {
             ReadFileOutput::FileReadError(msg) => {
                 assert!(
@@ -882,9 +892,10 @@ mod tests {
             limit: None,
         };
 
-        let result = alnair_tool_runtime::Tool::run(&tool, test_ctx(resources.into_shared()), input)
-            .await
-            .unwrap();
+        let result =
+            alnair_tool_runtime::Tool::run(&tool, test_ctx(resources.into_shared()), input)
+                .await
+                .unwrap();
         match result {
             ReadFileOutput::FileContent(fc) => {
                 assert_eq!(fc.total_lines, 0);
@@ -919,9 +930,10 @@ mod tests {
             limit: Some(5),
         };
 
-        let result = alnair_tool_runtime::Tool::run(&tool, test_ctx(resources.into_shared()), input)
-            .await
-            .unwrap();
+        let result =
+            alnair_tool_runtime::Tool::run(&tool, test_ctx(resources.into_shared()), input)
+                .await
+                .unwrap();
         match result {
             ReadFileOutput::FileContent(fc) => {
                 assert!(
@@ -951,9 +963,10 @@ mod tests {
             limit: None,
         };
 
-        let result = alnair_tool_runtime::Tool::run(&tool, test_ctx(resources.into_shared()), input)
-            .await
-            .unwrap();
+        let result =
+            alnair_tool_runtime::Tool::run(&tool, test_ctx(resources.into_shared()), input)
+                .await
+                .unwrap();
         match result {
             ReadFileOutput::FileContent(fc) => {
                 assert!(fc.content.contains("hello world"));
@@ -985,9 +998,10 @@ mod tests {
             limit: None,
         };
 
-        let result = alnair_tool_runtime::Tool::run(&tool, test_ctx(resources.into_shared()), input)
-            .await
-            .unwrap();
+        let result =
+            alnair_tool_runtime::Tool::run(&tool, test_ctx(resources.into_shared()), input)
+                .await
+                .unwrap();
         match result {
             ReadFileOutput::ImageContent(img) => {
                 assert!(
@@ -1024,9 +1038,10 @@ mod tests {
             limit: None,
         };
 
-        let result = alnair_tool_runtime::Tool::run(&tool, test_ctx(resources.into_shared()), input)
-            .await
-            .unwrap();
+        let result =
+            alnair_tool_runtime::Tool::run(&tool, test_ctx(resources.into_shared()), input)
+                .await
+                .unwrap();
         match result {
             ReadFileOutput::FileContent(fc) => {
                 assert!(
@@ -1062,9 +1077,10 @@ mod tests {
             limit: Some(3),
         };
 
-        let result = alnair_tool_runtime::Tool::run(&tool, test_ctx(resources.into_shared()), input)
-            .await
-            .unwrap();
+        let result =
+            alnair_tool_runtime::Tool::run(&tool, test_ctx(resources.into_shared()), input)
+                .await
+                .unwrap();
         match result {
             ReadFileOutput::FileContent(fc) => {
                 assert!(
@@ -1108,9 +1124,10 @@ mod tests {
             limit: None,
         };
 
-        let result = alnair_tool_runtime::Tool::run(&tool, test_ctx(resources.into_shared()), input)
-            .await
-            .unwrap();
+        let result =
+            alnair_tool_runtime::Tool::run(&tool, test_ctx(resources.into_shared()), input)
+                .await
+                .unwrap();
         match result {
             ReadFileOutput::FileReadError(msg) => {
                 assert!(
@@ -1165,9 +1182,10 @@ mod tests {
             limit: None,
         };
 
-        let result = alnair_tool_runtime::Tool::run(&tool, test_ctx(resources.into_shared()), input)
-            .await
-            .unwrap();
+        let result =
+            alnair_tool_runtime::Tool::run(&tool, test_ctx(resources.into_shared()), input)
+                .await
+                .unwrap();
         match result {
             ReadFileOutput::FileContent(fc) => {
                 assert!(

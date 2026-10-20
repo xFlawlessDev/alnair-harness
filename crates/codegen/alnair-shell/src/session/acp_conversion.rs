@@ -546,7 +546,8 @@ pub fn acp_tool_update(
                     message.clone()
                 }
                 alnair_tools::types::output::AskUserQuestionOutput::QuestionsSent {
-                    message, ..
+                    message,
+                    ..
                 } => message.clone(),
             };
             Some(acp::ToolCallUpdate::new(
@@ -1111,7 +1112,8 @@ mod tests {
         )
         .unwrap();
         // Session directory paths use urlencoding::encode(&cwd)
-        let encoded_overlay = urlencoding::encode("/root/.alnair/worktrees/project/ab-123-a-overlay");
+        let encoded_overlay =
+            urlencoding::encode("/root/.alnair/worktrees/project/ab-123-a-overlay");
         let input = format!(
             "output-file: /root/.alnair/sessions/{}/session-id/terminal/call.log",
             encoded_overlay
