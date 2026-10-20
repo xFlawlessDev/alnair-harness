@@ -75,11 +75,26 @@ rustflags = [
     "-C", "link-arg=-Wl,-z,relro,-z,now,-z,noexecstack",
 ]
 
+# Stack reserve: the MSVC linker defaults to 1 MB, which a debug build of this
+# workspace overflows on the MAIN thread before any application code runs
+# ("thread 'main' has overflowed its stack", exit 0xC00000FD). RUST_MIN_STACK
+# does not help - it only sizes spawned threads, never the process main thread,
+# whose reserve comes from the PE header. Debug builds carry the deepest frames
+# (no inlining), so the reserve is sized for them; release builds fit in far
+# less. Keep both Windows targets in sync.
 [target.x86_64-pc-windows-msvc]
-rustflags = ["-C", "force-unwind-tables=yes", "-C", "target-feature=+crt-static"]
+rustflags = [
+    "-C", "force-unwind-tables=yes",
+    "-C", "target-feature=+crt-static",
+    "-C", "link-arg=/STACK:16777216",
+]
 
 [target.aarch64-pc-windows-msvc]
-rustflags = ["-C", "force-unwind-tables=yes", "-C", "target-feature=+crt-static"]
+rustflags = [
+    "-C", "force-unwind-tables=yes",
+    "-C", "target-feature=+crt-static",
+    "-C", "link-arg=/STACK:16777216",
+]
 
 
 # jemalloc page size for Apple Silicon (macOS aarch64 uses 16KB pages = 2^14).
