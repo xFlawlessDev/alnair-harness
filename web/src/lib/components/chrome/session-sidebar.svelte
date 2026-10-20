@@ -52,21 +52,29 @@
 	</div>
 
 	<nav class="mt-1 flex min-h-0 flex-1 flex-col">
-		<div class="flex items-center justify-between px-4 pb-1.5">
+		<div class="flex items-center justify-between px-4 pt-1 pb-2">
 			<p class="text-[10px] font-medium tracking-[0.08em] text-ink-tertiary uppercase">
 				Workspaces
 			</p>
 			<span class="tabular font-mono text-[10px] text-ink-tertiary/70">{total}</span>
 		</div>
 
-		<div class="min-h-0 flex-1 scroll-fade-y scrollbar-thin overflow-y-auto px-2 pb-2">
+		<!--
+			No `scroll-fade-y` here. It is a mask over the container, so it dims
+			whatever sits at the top edge — which is the first workspace as soon
+			as the list overflows. A plain scroller with padding reads cleanly.
+		-->
+		<div class="min-h-0 flex-1 scrollbar-thin overflow-y-auto px-2 pt-0.5 pb-2">
 			{#each groups as group (group.name)}
 				{@const open = isOpen(group)}
 				{@const holdsActive = group.sessions.some((session) => session.id === activeId)}
-				<section class="mb-1">
+				<section class="mb-1.5 first:mt-1">
 					<button
 						type="button"
-						class="group flex w-full items-center gap-1.5 rounded-md px-1.5 py-1.5 text-left transition-colors hover:bg-paper-card/60"
+						class={[
+							'group flex w-full items-center gap-1.5 rounded-md px-1.5 py-1.5 text-left transition-colors',
+							holdsActive ? 'bg-paper-card/50' : 'hover:bg-paper-card/60'
+						]}
 						aria-expanded={open}
 						onclick={() => toggle(group.name, open)}
 					>

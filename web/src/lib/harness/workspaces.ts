@@ -8,10 +8,11 @@ import type { Session, WorkspaceGroup } from './types.js';
  * nested under it — so the grouping happens here, once, and the components
  * never re-derive it.
  *
- * Ordering matches the TUI picker: groups alphabetically by name with the
- * current workspace pinned first, and sessions newest-first inside a group.
+ * The order is stable: groups alphabetically, sessions newest-first inside a
+ * group. Nothing is pinned by the active session, because a list that reorders
+ * when you click it moves the row out from under the pointer.
  */
-export function groupByWorkspace(sessions: Session[], currentWorkspace?: string): WorkspaceGroup[] {
+export function groupByWorkspace(sessions: Session[]): WorkspaceGroup[] {
 	const groups = new Map<string, WorkspaceGroup>();
 
 	for (const session of sessions) {
@@ -43,15 +44,6 @@ export function groupByWorkspace(sessions: Session[], currentWorkspace?: string)
 
 	for (const group of ordered) {
 		group.sessions.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
-	}
-
-	// The workspace being worked in comes first, whatever the alphabet says.
-	if (currentWorkspace) {
-		const index = ordered.findIndex((group) => group.name === currentWorkspace);
-		if (index > 0) {
-			const [pinned] = ordered.splice(index, 1);
-			ordered.unshift(pinned);
-		}
 	}
 
 	return ordered;

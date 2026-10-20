@@ -30,15 +30,22 @@ describe('groupByWorkspace', () => {
 		expect(groups[0].sessions.map((entry) => entry.id)).toEqual(['b', 'a']);
 	});
 
-	it('pins the current workspace first, ahead of the alphabet', () => {
-		const groups = groupByWorkspace(
-			[
-				session('a', 'alnair-cli', '2026-10-20T10:00:00Z'),
-				session('c', 'zzz-site', '2026-10-20T09:00:00Z')
-			],
-			'zzz-site'
+	it('keeps the order stable regardless of which session is active', () => {
+		// Clicking a conversation must not move its group to the top: a list
+		// that reorders under the pointer loses the row the reader aimed at.
+		const rows = [
+			session('a', 'alnair-cli', '2026-10-20T10:00:00Z'),
+			session('c', 'zzz-site', '2026-10-20T09:00:00Z')
+		];
+		expect(groupByWorkspace(rows).map((group) => group.name)).toEqual(['alnair-cli', 'zzz-site']);
+
+		const withOtherActive = rows.map((row) =>
+			row.id === 'c' ? { ...row, status: 'running' as const } : row
 		);
-		expect(groups.map((group) => group.name)).toEqual(['zzz-site', 'alnair-cli']);
+		expect(groupByWorkspace(withOtherActive).map((group) => group.name)).toEqual([
+			'alnair-cli',
+			'zzz-site'
+		]);
 	});
 
 	it('marks a workspace active when any of its sessions is busy', () => {

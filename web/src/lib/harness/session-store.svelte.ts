@@ -199,7 +199,10 @@ export class HarnessStore implements SessionStore {
 	busy = $state(false);
 
 	get groups(): WorkspaceGroup[] {
-		return groupByWorkspace(this.sessions, this.currentWorkspace);
+		// Alphabetical, with no session-derived pinning: clicking a conversation
+		// must not reorder the list under the pointer. `currentWorkspace` only
+		// marks which group is open; it does not move it.
+		return groupByWorkspace(this.sessions);
 	}
 
 	get currentWorkspace(): string {
