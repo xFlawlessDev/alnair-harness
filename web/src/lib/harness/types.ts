@@ -1,78 +1,28 @@
 /**
- * Wire-shaped types for the web harness.
+ * The view model the UI renders.
  *
- * These are deliberately *not* the Rust ACP types: they are the view model the
- * UI renders, and the mock layer fills them in today. When the harness is wired
- * up, an adapter maps ACP session updates onto these shapes and nothing in the
- * components below has to change.
+ * Derived from the wire, never hand-authored: `reducer.ts` folds ACP session
+ * updates and Alnair's `_alnair/session/update` notifications into these
+ * shapes. That split is the point — a protocol bump touches the reducer, not
+ * the components.
+ *
+ * Fields exist only if something on the wire (or in the catalog) can produce
+ * them. Where the agent sends less than the UI would like, the UI says less.
  */
+
+/* ------------------------------------------------------------------ status */
 
 export type TurnRole = 'user' | 'assistant' | 'system';
 
+/** `acp::ToolCallStatus` folded onto the four states a row can show. */
 export type PartStatus = 'pending' | 'running' | 'complete' | 'error';
 
-export type TurnStatus = 'queued' | 'streaming' | 'complete' | 'error' | 'cancelled';
+/** `StopReason` plus the pre-response states. */
+export type TurnStatus = 'streaming' | 'complete' | 'cancelled' | 'refused' | 'error';
 
-export interface PlanStep {
-	id: string;
-	title: string;
-	status: PartStatus;
-}
+export type SessionStatus = 'running' | 'idle' | 'attention';
 
-export interface Source {
-	id: string;
-	title: string;
-	url: string;
-	host: string;
-	snippet?: string;
-}
-
-export interface TestCase {
-	name: string;
-	status: 'passed' | 'failed' | 'skipped';
-	durationMs: number;
-	message?: string;
-}
-
-export interface TestSuite {
-	id: string;
-	name: string;
-	status: 'passed' | 'failed' | 'running';
-	cases: TestCase[];
-}
-
-export interface SubagentStep {
-	id: string;
-	label: string;
-	detail?: string;
-	status: PartStatus;
-}
-
-export interface TextPart {
-	kind: 'text';
-	id: string;
-	text: string;
-}
-
-export interface ReasoningPart {
-	kind: 'reasoning';
-	id: string;
-	text: string;
-	status: PartStatus;
-	durationMs?: number;
-}
-
-export interface ToolPart {
-	kind: 'tool';
-	id: string;
-	name: string;
-	/** One-line summary of the call, already formatted for display. */
-	summary: string;
-	input?: string;
-	output?: string;
-	status: PartStatus;
-	durationMs?: number;
-}
+/* ------------------------------------------------------------------- files */
 
 /** One line of a file, numbered as it appears on disk. */
 export interface NumberedLine {
@@ -104,8 +54,6 @@ export interface FileReadPart {
 	path: string;
 	language: string;
 	lines: NumberedLine[];
-	/** Total lines in the file, when the read was a window into it. */
-	totalLines?: number;
 	status: PartStatus;
 	durationMs?: number;
 }
@@ -117,9 +65,7 @@ export interface FileWritePart {
 	path: string;
 	language: string;
 	lines: NumberedLine[];
-	/** Set when the preview is capped below the real file length. */
-	hiddenLines?: number;
-	/** `false` for an overwrite of an existing file. */
+	/** `false` when the agent overwrote an existing file (it sent an `oldText`). */
 	created: boolean;
 	status: PartStatus;
 	durationMs?: number;
@@ -138,87 +84,81 @@ export interface FileEditPart {
 	durationMs?: number;
 }
 
-/** `read` on an image: a preview plus the metadata the agent was given. */
+/** `read` on an image: the bytes the agent was given, or a resolvable URI. */
 export interface ImageReadPart {
 	kind: 'image-read';
 	id: string;
 	path: string;
-	/** Data URL or a same-origin path. */
+	/** Data URL, or a same-origin path when the agent sent a `uri`. */
 	src: string;
 	mime: string;
-	width: number;
-	height: number;
-	bytes: number;
+	/** Only when the agent reported them; the wire does not require it. */
+	width?: number;
+	height?: number;
+	bytes?: number;
 	status: PartStatus;
 	durationMs?: number;
 }
 
-export interface TodoItem {
+/* -------------------------------------------------------------------- turn */
+
+export interface TextPart {
+	kind: 'text';
 	id: string;
-	title: string;
+	text: string;
+}
+
+export interface ReasoningPart {
+	kind: 'reasoning';
+	id: string;
+	text: string;
 	status: PartStatus;
-	/** Optional note shown under the title. */
-	detail?: string;
+	durationMs?: number;
 }
 
-export interface PlanDocument {
-	title: string;
-	/** Path of the plan file, as the agent wrote it. */
-	path: string;
-	updatedAt: string;
-	markdown: string;
+/** Any tool call that has no richer row of its own. */
+export interface ToolPart {
+	kind: 'tool';
+	id: string;
+	name: string;
+	/** The agent's own one-line title, already formatted. */
+	summary: string;
+	input?: string;
+	output?: string;
+	status: PartStatus;
+	durationMs?: number;
 }
 
+/** An `execute` tool call: the command and what it printed. */
 export interface TerminalPart {
 	kind: 'terminal';
 	id: string;
 	command: string;
-	cwd: string;
+	cwd?: string;
 	output: string;
 	exitCode?: number;
 	status: PartStatus;
 	durationMs?: number;
+	/** Set when the task outlived the call and kept running. */
+	backgrounded?: boolean;
+	taskId?: string;
+	outputFile?: string;
 }
 
-export interface PlanPart {
-	kind: 'plan';
-	id: string;
-	title: string;
-	steps: PlanStep[];
-}
-
+/** A subagent, folded from spawned / progress / finished. */
 export interface SubagentPart {
 	kind: 'subagent';
 	id: string;
 	title: string;
 	agent: string;
-	model: string;
-	steps: SubagentStep[];
+	model?: string;
+	status: PartStatus;
+	turnCount: number;
+	toolCallCount: number;
+	tokensUsed: number;
+	toolsUsed: string[];
 	result?: string;
-	status: PartStatus;
-}
-
-export interface TestsPart {
-	kind: 'tests';
-	id: string;
-	title: string;
-	command: string;
-	suites: TestSuite[];
-	status: PartStatus;
-}
-
-export interface CheckpointPart {
-	kind: 'checkpoint';
-	id: string;
-	label: string;
-	detail: string;
-}
-
-export interface SourcesPart {
-	kind: 'sources';
-	id: string;
-	title: string;
-	sources: Source[];
+	error?: string;
 }
 
 export interface DiffPart {
@@ -238,18 +178,44 @@ export interface ErrorPart {
 	detail?: string;
 }
 
+/**
+ * A one-line system notice: a retry, a compaction, a model switch, a recap.
+ * Alnair emits these as distinct updates; the UI shows them the same way.
+ */
+export interface NoticePart {
+	kind: 'notice';
+	id: string;
+	tone: 'info' | 'warning' | 'success';
+	title: string;
+	detail?: string;
+}
+
+/**
+ * A blocking permission request. The turn is parked until it is answered, so
+ * this part lives in the thread next to the tool call it gates.
+ */
+export interface PermissionPart {
+	kind: 'permission';
+	id: string;
+	toolCallId: string;
+	title: string;
+	/** Tool kind, so the card can show the right accent. */
+	toolKind: string;
+	options: { optionId: string; name: string; kind: string }[];
+	/** `true` once the agent reports the interaction resolved. */
+	resolved: boolean;
+}
+
 export type TurnPart =
 	| TextPart
 	| ReasoningPart
 	| ToolPart
 	| TerminalPart
-	| PlanPart
 	| SubagentPart
-	| TestsPart
-	| CheckpointPart
-	| SourcesPart
 	| DiffPart
 	| ErrorPart
+	| NoticePart
+	| PermissionPart
 	| FileReadPart
 	| FileWritePart
 	| FileEditPart
@@ -261,67 +227,135 @@ export interface Turn {
 	status: TurnStatus;
 	/** ISO timestamp. */
 	at: string;
-	model?: string;
+	/** Catalog key of the model that ran this turn. */
+	modelId?: string;
 	effort?: string;
 	durationMs?: number;
+	/** The `promptId` the agent reported in `turn_completed`. */
+	promptId?: string;
 	parts: TurnPart[];
 }
 
-export type SessionStatus = 'running' | 'idle' | 'attention';
+/* ----------------------------------------------------------------- session */
 
+/**
+ * One row of `alnair/session/list`. Every field except `status` comes straight
+ * off the wire; `status` is derived from that session's live transcript.
+ */
 export interface Session {
 	id: string;
+	/** `summary` on the wire: the generated title, else the first prompt. */
 	title: string;
 	cwd: string;
-	branch: string;
-	model: string;
-	status: SessionStatus;
+	branch?: string;
+	/** Catalog key, when the agent reported one. */
+	modelId?: string;
+	/** `local`, `remote`, or `both`. */
+	source: string;
+	numMessages: number;
+	createdAt: string;
 	updatedAt: string;
-	/** Total tokens billed in this session so far. */
-	tokens: number;
-	unread?: boolean;
+	/** `alnair/session.kind` from the row envelope. */
+	kind?: string;
+	/** Derived: a live turn, a parked request, or neither. */
+	status: SessionStatus;
 }
 
-export type GraphNodeStatus = 'pending' | 'ready' | 'running' | 'achieved' | 'blocked' | 'failed';
+/* ------------------------------------------------------- plan and todos */
 
-export interface GraphNode {
+/**
+ * One entry of the agent's plan — the ACP `plan` update, which is what the
+ * `todo_write` tool produces. The header popover reads this.
+ */
+export interface TodoItem {
+	/** Stable index within the plan; `PlanEntry` carries no id of its own. */
 	id: string;
-	title: string;
-	status: GraphNodeStatus;
-	dependsOn: string[];
-	/** Fraction of the node's own budget already spent, 0–1. */
-	budgetUsed?: number;
+	content: string;
+	status: 'pending' | 'in_progress' | 'completed' | 'cancelled';
+	priority: 'high' | 'medium' | 'low';
+	detail?: string;
 }
 
+/**
+ * The plan document under review (`alnair/exit_plan_mode`). Distinct from the
+ * todo list: this is the artifact the user approves, not the step tracker.
+ */
+export interface PlanArtifact {
+	title: string;
+	path?: string;
+	updatedAt?: string;
+	markdown: string;
+}
+
+/* ------------------------------------------------------------------ graph */
+
+/**
+ * `graph_updated` is a summary, not a DAG: counts, the current node, and the
+ * budget. The inspector renders exactly this.
+ */
 export interface GraphState {
 	id: string;
 	objective: string;
+	/** Goal vocabulary: `active`, paused variants, `budget_limited`, `complete`. */
+	status: string;
+	/** `idle`, `planning`, or `executing`. */
+	phase: string;
 	planVersion: number;
-	status: 'running' | 'paused' | 'achieved';
-	concurrency: number;
-	nodes: GraphNode[];
+	total: number;
+	achieved: number;
+	failed: number;
+	running: number;
+	currentNode?: string;
+	currentNodeTitle?: string;
+	tokenBudget?: number;
+	tokensSpent: number;
+	lastEvent?: string;
+	pauseMessage?: string;
 }
 
+/* ----------------------------------------------------------------- models */
+
 export interface ModelOption {
+	/** Catalog key, e.g. `kimi-code/kimi-k2-turbo-preview`. */
 	id: string;
 	label: string;
 	provider: string;
+	/** Canonical efforts the model accepts; empty when it has none. */
 	efforts: string[];
 	contextWindow: number;
 }
 
+/**
+ * Context usage. The wire sends a total and the window, not a per-category
+ * breakdown, so there is no `segments` here.
+ */
 export interface ContextUsage {
 	used: number;
 	limit: number;
-	/** Breakdown in tokens; rendered as a small stacked bar. */
-	segments: { label: string; tokens: number }[];
+	/** 0–100. */
+	percent: number;
 }
 
 export interface WorkspaceInfo {
 	name: string;
 	path: string;
-	branch: string;
+	branch?: string;
 	ahead: number;
 	behind: number;
 	dirty: boolean;
+}
+
+/* ------------------------------------------------------------------ store */
+
+/** A parked permission request, surfaced above the composer. */
+export interface PermissionRequest {
+	toolCallId: string;
+	title: string;
+	options: { optionId: string; name: string; kind: string }[];
+}
+
+export interface AvailableCommand {
+	name: string;
+	description: string;
+	hint?: string;
 }

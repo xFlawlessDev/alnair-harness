@@ -20,8 +20,8 @@
 			<WrenchIcon class={running ? 'text-running' : 'text-tool'} />
 		</Trace.Icon>
 		<Trace.Title>
-			<span class="font-mono text-[12.5px] text-ink">{part.name}</span>
-			<span class="ml-1.5 text-ink-tertiary">{part.summary}</span>
+			<span class="font-mono text-[12.5px] text-ink-tertiary">{part.name}</span>
+			<span class="ml-1.5 text-ink">{part.summary}</span>
 		</Trace.Title>
 		{#if part.durationMs}
 			<Trace.Description>{formatDuration(part.durationMs)}</Trace.Description>

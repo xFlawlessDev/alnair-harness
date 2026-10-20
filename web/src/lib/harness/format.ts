@@ -50,9 +50,9 @@ export function formatClock(iso: string): string {
 	return new Date(iso).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 }
 
-export function formatPercent(part: number, whole: number): string {
-	if (whole <= 0) return '0%';
-	return `${Math.round((part / whole) * 100)}%`;
+/** A fraction in `[0, 1]` as a percentage. */
+export function formatPercent(fraction: number): string {
+	return `${Math.round(fraction * 100)}%`;
 }
 
 /** `~/dev/alnair-cli` → `alnair-cli`. */

@@ -1,7 +1,7 @@
 <script lang="ts">
 	import GitBranchIcon from '@lucide/svelte/icons/git-branch';
 	import FolderTreeIcon from '@lucide/svelte/icons/folder-tree';
-	import { formatRelative, formatTokens } from '#lib/harness/format.js';
+	import { formatRelative } from '#lib/harness/format.js';
 	import type { Session, WorkspaceInfo } from '#lib/harness/types.js';
 	import Logo from './logo.svelte';
 	import StatusDot from './status-dot.svelte';
@@ -18,12 +18,9 @@
 		onselect: (id: string) => void;
 	} = $props();
 
-	const statusOf = (session: Session) =>
-		session.status === 'running'
-			? 'running'
-			: session.status === 'attention'
-				? 'attention'
-				: 'idle';
+	/** `both` means the session exists locally and in the remote registry. */
+	const sourceLabel = (session: Session) =>
+		session.source === 'both' ? 'synced' : session.source === 'remote' ? 'remote' : undefined;
 </script>
 
 <aside class="rule-r flex h-full w-64 shrink-0 flex-col bg-paper-raised">
@@ -31,7 +28,7 @@
 		<Logo size={26} class="text-ink" />
 		<div class="min-w-0">
 			<p class="text-[15px] leading-none font-medium tracking-tight">Alnair</p>
-			<p class="mt-1 text-[10.5px] leading-none text-ink-tertiary">web harness · mock</p>
+			<p class="mt-1 text-[10.5px] leading-none text-ink-tertiary">web harness · fixtures</p>
 		</div>
 	</div>
 
@@ -43,10 +40,12 @@
 		<FolderTreeIcon class="size-3.5 shrink-0 text-ink-tertiary" />
 		<span class="min-w-0 flex-1">
 			<span class="block truncate text-[12.5px] font-medium">{workspace.name}</span>
-			<span class="mt-0.5 flex items-center gap-1 text-[10.5px] text-ink-tertiary">
-				<GitBranchIcon class="size-2.5" />
-				<span class="truncate">{workspace.branch}</span>
-			</span>
+			{#if workspace.branch}
+				<span class="mt-0.5 flex items-center gap-1 text-[10.5px] text-ink-tertiary">
+					<GitBranchIcon class="size-2.5" />
+					<span class="truncate">{workspace.branch}</span>
+				</span>
+			{/if}
 		</span>
 		{#if workspace.dirty}
 			<span class="size-1.5 shrink-0 rounded-full bg-terra" title="Uncommitted changes"></span>
@@ -63,6 +62,7 @@
 			<ul class="flex flex-col gap-0.5">
 				{#each sessions as session (session.id)}
 					{@const active = session.id === activeId}
+					{@const source = sourceLabel(session)}
 					<li>
 						<button
 							type="button"
@@ -80,7 +80,7 @@
 								></span>
 							{/if}
 							<span class="flex items-center gap-1.5">
-								<StatusDot status={statusOf(session)} pulse={session.status === 'running'} />
+								<StatusDot status={session.status} pulse={session.status === 'running'} />
 								<span
 									class="min-w-0 flex-1 truncate text-[12.5px] leading-snug"
 									class:font-medium={active}
@@ -89,15 +89,21 @@
 								>
 									{session.title}
 								</span>
-								{#if session.unread}
-									<span class="size-1.5 shrink-0 rounded-full bg-terra" title="Needs attention"
-									></span>
+								{#if session.status === 'attention'}
+									<span class="size-1.5 shrink-0 rounded-full bg-terra" title="Needs input"></span>
 								{/if}
 							</span>
 							<span class="flex items-center gap-1.5 pl-3.5 text-[10.5px] text-ink-tertiary">
-								<span class="truncate font-mono">{session.branch}</span>
-								<span class="text-ink-tertiary/40">·</span>
+								{#if session.branch}
+									<span class="truncate font-mono">{session.branch}</span>
+									<span class="text-ink-tertiary/40">·</span>
+								{/if}
 								<span class="tabular shrink-0">{formatRelative(session.updatedAt)}</span>
+								{#if source}
+									<span class="shrink-0 rounded-sm bg-paper px-1 font-mono text-[9px]">
+										{source}
+									</span>
+								{/if}
 							</span>
 						</button>
 					</li>
@@ -108,10 +114,8 @@
 
 	<div class="flex items-center justify-between border-t border-line px-4 py-2.5">
 		<p class="text-[10.5px] text-ink-tertiary">
-			<span class="tabular font-mono"
-				>{formatTokens(sessions.reduce((sum, s) => sum + s.tokens, 0))}</span
-			>
-			tokens this week
+			<span class="tabular font-mono">{sessions.length}</span>
+			sessions in this workspace
 		</p>
 		<span class="font-mono text-[10px] text-ink-tertiary/60">v0.1.20</span>
 	</div>

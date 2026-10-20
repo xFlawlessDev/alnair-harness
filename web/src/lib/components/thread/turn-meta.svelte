@@ -31,8 +31,8 @@
 </script>
 
 <div class="flex items-center gap-2.5 text-[11px] text-ink-tertiary">
-	{#if turn.model}
-		<span class="font-medium text-ink-secondary">{turn.model}</span>
+	{#if turn.modelId}
+		<span class="font-medium text-ink-secondary">{turn.modelId}</span>
 		<span class="text-ink-tertiary/50">·</span>
 	{/if}
 	{#if turn.effort}

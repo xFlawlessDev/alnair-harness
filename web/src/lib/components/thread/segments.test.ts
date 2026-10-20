@@ -16,7 +16,21 @@ const reasoning = (id: string): TurnPart => ({
 	text: '',
 	status: 'complete'
 });
-const checkpoint = (id: string): TurnPart => ({ kind: 'checkpoint', id, label: 'c', detail: '' });
+const notice = (id: string): TurnPart => ({
+	kind: 'notice',
+	id,
+	tone: 'info',
+	title: 'retrying'
+});
+const permission = (id: string): TurnPart => ({
+	kind: 'permission',
+	id,
+	toolCallId: 'c1',
+	title: 'Edit a file',
+	toolKind: 'edit',
+	options: [],
+	resolved: false
+});
 
 describe('groupParts', () => {
 	it('keeps consecutive trace parts in one segment', () => {
@@ -30,20 +44,22 @@ describe('groupParts', () => {
 		]);
 	});
 
-	it('breaks the trace run at text and checkpoints', () => {
+	it('breaks the trace run at text, notices and permission cards', () => {
 		const segments = groupParts([
 			reasoning('a'),
 			text('t1'),
 			tool('b'),
-			checkpoint('c1'),
-			tool('c')
+			notice('n1'),
+			tool('c'),
+			permission('p1')
 		]);
 		expect(segments.map((segment) => segment.kind)).toEqual([
 			'trace',
 			'text',
 			'trace',
-			'checkpoint',
-			'trace'
+			'notice',
+			'trace',
+			'permission'
 		]);
 	});
 

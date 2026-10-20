@@ -1,11 +1,11 @@
 import { getContext, setContext } from 'svelte';
-import { MockSessionStore, type SessionStore } from './session-store.svelte.js';
+import { HarnessStore, type SessionStore } from './session-store.svelte.js';
 
 const KEY = Symbol('alnair-harness-store');
 
 /** Creates the store once per layout and puts it on the component context. */
 export function provideSessionStore(): SessionStore {
-	const store = new MockSessionStore();
+	const store = new HarnessStore();
 	setContext(KEY, store);
 	return store;
 }

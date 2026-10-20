@@ -34,10 +34,12 @@
 			</span>
 		</Trace.Title>
 		<Trace.Description class="tabular">
-			{#if part.totalLines && part.totalLines > part.lines.length}
-				{start}–{end} of {part.totalLines}
-			{:else}
-				{part.lines.length} lines
+			{#if part.lines.length > 0}
+				{#if start > 1}
+					{start}–{end}
+				{:else}
+					{part.lines.length} lines
+				{/if}
 			{/if}
 		</Trace.Description>
 		{#if part.durationMs}

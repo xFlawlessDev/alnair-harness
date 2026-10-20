@@ -11,7 +11,13 @@
 		turns,
 		graph,
 		context
-	}: { session: Session; turns: Turn[]; graph: GraphState; context: ContextUsage } = $props();
+	}: {
+		session: Session;
+		turns: Turn[];
+		/** Absent when the agent has no graph running. */
+		graph: GraphState | undefined;
+		context: ContextUsage;
+	} = $props();
 
 	const stats = $derived(inspectorStats(turns, graph, context, session));
 </script>
@@ -26,9 +32,11 @@
 	</div>
 
 	<div class="flex min-h-0 flex-1 scroll-fade-y scrollbar-thin flex-col gap-6 overflow-y-auto p-4">
-		<GraphPanel {graph} />
+		{#if graph}
+			<GraphPanel {graph} />
 
-		<div class="h-px bg-line"></div>
+			<div class="h-px bg-line"></div>
+		{/if}
 
 		<FilesPanel {turns} />
 

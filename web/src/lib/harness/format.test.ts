@@ -52,13 +52,13 @@ describe('formatRelative', () => {
 });
 
 describe('formatPercent', () => {
-	it('rounds to whole percent', () => {
-		expect(formatPercent(1, 3)).toBe('33%');
-		expect(formatPercent(2, 7)).toBe('29%');
+	it('rounds a fraction to whole percent', () => {
+		expect(formatPercent(1 / 3)).toBe('33%');
+		expect(formatPercent(2 / 7)).toBe('29%');
 	});
 
-	it('guards a zero whole', () => {
-		expect(formatPercent(5, 0)).toBe('0%');
+	it('handles an empty fraction', () => {
+		expect(formatPercent(0)).toBe('0%');
 	});
 });
 

@@ -8,7 +8,6 @@ import type { TraceLineStatus } from '#lib/components/ui/trace/index.js';
 export function traceStatus(status: PartStatus | TurnStatus): TraceLineStatus | undefined {
 	switch (status) {
 		case 'pending':
-		case 'queued':
 			return 'pending';
 		case 'running':
 		case 'streaming':
@@ -34,18 +33,14 @@ export function accentFor(kind: string): string {
 			return 'text-verify';
 		case 'terminal':
 			return 'text-running';
-		case 'plan':
-			return 'text-plan';
 		case 'subagent':
-			return 'text-system';
-		case 'tests':
-			return 'text-success';
-		case 'error':
-			return 'text-error';
-		case 'sources':
 			return 'text-system';
 		case 'diff':
 			return 'text-verify';
+		case 'error':
+			return 'text-error';
+		case 'permission':
+			return 'text-terra';
 		default:
 			return 'text-ink-secondary';
 	}

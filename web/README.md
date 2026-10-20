@@ -2,12 +2,12 @@
 
 A browser view of the Alnair agent runtime: SvelteKit, Tailwind v4, and
 shadcn-svelte components composed into the [AI Elements](https://www.shadcn-svelte.com/docs/ai-elements)
-patterns.
+patterns. It is meant as an alternative to the TUI for people who prefer a
+browser, not as a second window beside it.
 
-**Everything here is mock data.** There is no wiring to the Rust harness yet —
-the goal of this pass was the UI foundation, so the thread, the trace rows, the
-composer, and the inspector all render one scripted session from
-`src/lib/harness/mock.ts`.
+**There is no socket yet.** The UI renders scripted transcripts that are real
+wire frames, replayed through the same reducer the socket will feed, so the
+shapes below are the contract rather than a sketch of one.
 
 ```sh
 npm install
@@ -22,12 +22,43 @@ npm run dev
 | `npm run check`   | `svelte-check` — types and Svelte diagnostics, zero errors |
 | `npm run lint`    | Prettier check plus ESLint                                 |
 | `npm run format`  | Prettier write                                             |
-| `npm test`        | Vitest (pure logic only; no DOM)                           |
+| `npm test`        | Vitest — the reducer, segmenting, and formatting           |
+
+## The wire
+
+Alnair speaks the Agent Client Protocol over JSON-RPC. The web client is an ACP
+**client**, so the transport is a socket carrying `session/update` notifications
+and answering the agent's reverse requests. IPC is not an option: a browser
+cannot open a Unix socket or a Windows named pipe, and ACP is bidirectional —
+the agent calls back for permissions and file reads.
+
+Two type modules describe it, both transcribed from the Rust source rather than
+guessed:
+
+| Module         | Source of truth                                                           |
+| -------------- | ------------------------------------------------------------------------- |
+| `types/acp.ts` | `agent-client-protocol-schema` 0.11.4 (`client.rs`, `tool_call.rs`, …)    |
+| `types/ext.ts` | `alnair-shell/src/extensions/notification.rs` and the `alnair/*` handlers |
+
+One detail is easy to get wrong and is worth stating: **ACP structs are
+camelCase, Alnair's extension updates are snake_case.** serde's `rename_all` on
+an enum renames the variants, not their payload fields, so `graph_updated`
+carries `total_nodes` and `tokens_spent` while `tool_call` carries `toolCallId`.
+`types/ext.ts` follows the Rust names for that reason.
 
 ## The seam
 
-Components never touch transport. They read one interface,
-`SessionStore` in `src/lib/harness/session-store.svelte.ts`:
+Components never touch the wire. They read one interface, `SessionStore` in
+`src/lib/harness/session-store.svelte.ts`. Behind it sit two implementations:
+`FixtureTransport` (today) and the socket transport (next), both feeding the
+same reducer.
+
+```
+wire frame ──▶ reducer.ts ──▶ Acc ──▶ SessionStore ──▶ components
+```
+
+`reducer.ts` is the only module that knows what a frame looks like. It is pure
+and synchronous, so every rule below is unit-tested without a DOM.
 
 ```ts
 interface SessionStore {
@@ -35,13 +66,17 @@ interface SessionStore {
 	readonly sessions: Session[];
 	readonly turns: Turn[];
 	readonly models: ModelOption[];
-	readonly graph: GraphState;
+	readonly graph: GraphState | undefined;
 	readonly context: ContextUsage;
 	readonly activeSessionId: string;
 	readonly activeSession: Session;
 	readonly model: string;
 	readonly effort: string;
 	readonly busy: boolean;
+	readonly permission: PermissionRequest | undefined;
+	readonly plan: PlanArtifact | undefined;
+	readonly todos: TodoItem[];
+	readonly commands: AvailableCommand[];
 
 	selectSession(id: string): void;
 	setModel(id: string): void;
@@ -49,27 +84,65 @@ interface SessionStore {
 	send(text: string): void;
 	cancel(): void;
 	clear(): void;
+	answerPermission(optionId: string): void;
 }
 ```
 
-`MockSessionStore` implements it today; `provideSessionStore()` in
-`src/lib/harness/context.ts` puts one instance on Svelte's component context and
-`useSessionStore()` reads it. Wiring the harness means writing a second
-implementation over ACP session updates and swapping the one line in
-`src/routes/+layout.svelte` — no component changes.
+### View model ← wire
 
-`src/lib/harness/types.ts` is the view model, deliberately **not** the ACP types.
-The adapter's job is to map protocol events onto it:
+Every field below is produced by something the agent actually sends. Nothing is
+invented; where the wire carries less, the UI shows less.
 
-| View model     | Comes from                                      |
-| -------------- | ----------------------------------------------- |
-| `Turn`         | one prompt/response exchange                    |
-| `TurnPart`     | a message chunk, tool call, plan, or checkpoint |
-| `TodoItem`     | the agent's todo list for the turn              |
-| `PlanDocument` | the plan file the agent is working from         |
-| `GraphState`   | `GraphUpdated` notifications                    |
-| `ContextUsage` | token accounting for the session                |
-| `Session`      | the session list (`session/list`)               |
+| View model       | Wire source                                                           |
+| ---------------- | --------------------------------------------------------------------- |
+| `Turn`           | one `session/prompt` exchange, closed by its response                 |
+| `TurnStatus`     | `StopReason` (`cancelled`, `refusal`, …)                              |
+| `TextPart`       | `agent_message_chunk`                                                 |
+| `ReasoningPart`  | `agent_thought_chunk`                                                 |
+| `FileReadPart`   | `tool_call` kind `read` + a text block                                |
+| `ImageReadPart`  | `tool_call` kind `read` + an image block                              |
+| `FileEditPart`   | `tool_call` + a `diff` with `oldText`                                 |
+| `FileWritePart`  | `tool_call` + a `diff` without `oldText` (a new file)                 |
+| `TerminalPart`   | `tool_call` kind `execute`, or `task_backgrounded` / `task_completed` |
+| `SubagentPart`   | `subagent_spawned` → `subagent_progress` → `subagent_finished`        |
+| `PermissionPart` | `pending_interaction` with `kind: permission`                         |
+| `NoticePart`     | `retry_state`, `auto_compact_*`, `model_*`, `session_recap`           |
+| `TodoItem`       | the ACP `plan` update (which `todo_write` produces)                   |
+| `PlanArtifact`   | the `alnair/exit_plan_mode` reverse request                           |
+| `GraphState`     | `graph_updated` — counts, not a DAG                                   |
+| `ContextUsage`   | `auto_compact_*` and `model_changed`                                  |
+| `Session`        | an `alnair/session/list` row                                          |
+
+### What the UI deliberately does not show
+
+Four parts existed in the first pass and are gone, because nothing on the wire
+produces them: a `plan` row (the plan is an artifact, not a transcript part), a
+`tests` row (test results arrive as ordinary tool output), a `sources` row (web
+search returns tool content), and a `checkpoint` row (checkpoints are session
+state). Two were added because the wire has them: the permission card and the
+one-line system notice.
+
+The graph panel renders counts, the current node, and the budget — which is what
+`graph_updated` carries. It does not draw a DAG, because the wire does not send
+one.
+
+## Fixtures
+
+`src/lib/harness/fixtures.ts` holds scripted turns, each a list of frames with
+delays. `FixtureTransport` replays them on a timer, so the UI exercises
+streaming rather than a single state flip.
+
+| Turn         | Covers                                                                                          |
+| ------------ | ----------------------------------------------------------------------------------------------- |
+| `foundation` | reasoning, plan, bash, text read, image read, edit, write, subagent, graph badge, plan approval |
+| `permission` | a parked `request_permission` mid-turn                                                          |
+| `cancelled`  | a backgrounded task, a monitor line, `StopReason::Cancelled`                                    |
+| `failed`     | `retry_state` retrying → failed                                                                 |
+| `compaction` | `auto_compact_started` → `auto_compact_completed`                                               |
+
+The initial transcript folds three of them so the first paint shows a completed
+turn, a cancelled one, and one parked on a permission request — the three states
+the header has to distinguish.
 
 ## Layout
 
@@ -77,13 +150,20 @@ The adapter's job is to map protocol events onto it:
 src/
   routes/
     +layout.svelte        ModeWatcher + store provider
-    +page.svelte          three-pane shell
+    +page.svelte          three-pane shell, permission banner
     layout.css            design tokens, fonts, base layer
   lib/
-    harness/              types, mock data, store, formatting
+    harness/
+      types/acp.ts        the ACP wire, as emitted
+      types/ext.ts        Alnair's extension updates
+      types.ts            the view model
+      reducer.ts          wire → view model, pure
+      fixtures.ts         scripted transcripts
+      session-store.svelte.ts  the store and the fixture transport
+      mock.ts             session rows, catalog, initial transcript
     components/
-      chrome/             sidebar, thread header, graph chip, logo, theme toggle
-      thread/             thread, turn, markdown, and one row per part kind
+      chrome/             sidebar, thread header, plan + todo popovers, graph chip
+      thread/             thread, turn, markdown, one row per part kind
       composer/           input group, model picker, context meter
       inspector/          graph panel, files panel, activity stats
       ui/                 shadcn-svelte components (vendored)
@@ -93,10 +173,9 @@ src/
 ## Design tokens
 
 `src/routes/layout.css` carries the whole palette; components only ever use the
-token utilities, never raw hex. Two surfaces:
+token utilities, never raw hex.
 
-- **paper** (light) is white with a neutral gray chrome ramp; the olive / sage /
-  terra brand accents are the only chroma on the surface.
+- **paper** (light) is white with an achromatic gray chrome ramp.
 
   | Hex       | Role                                          |
   | --------- | --------------------------------------------- |
@@ -107,108 +186,78 @@ token utilities, never raw hex. Two surfaces:
   | `#d4d4d4` | strong border, focus ring                     |
   | `#7a8c3e` | brand olive: live work, selection             |
 
-  Like dark mode, the gray ramp is achromatic — the warm cream of the landing
-  site was dropped so the two themes share one neutral skeleton. `ink-tertiary`
-  is `#757575` rather than a lighter gray so small meta text keeps 4.5:1 on
-  white.
+  `ink-tertiary` is `#757575` rather than a lighter gray so small meta text
+  keeps 4.5:1 on white.
 
-- **well** (dark) is black with a neutral gray chrome ramp and one lime accent:
+- **well** (dark) is black with an achromatic gray ramp and one lime accent.
 
-  | Hex       | Role                                                 |
-  | --------- | ---------------------------------------------------- |
-  | `#000000` | ground — page, thread, sidebar                       |
-  | `#0a0a0a` | raised surface — sidebar, inspector, composer        |
-  | `#141414` | card and hover surface                               |
-  | `#262626` | border                                               |
-  | `#3d3d3d` | strong border, focus ring                            |
-  | `#A7D129` | the only chroma on the surface: live work, selection |
+  | Hex       | Role                                          |
+  | --------- | --------------------------------------------- |
+  | `#000000` | ground — page, thread, sidebar                |
+  | `#0a0a0a` | raised surface — sidebar, inspector, composer |
+  | `#141414` | card and hover surface                        |
+  | `#262626` | border                                        |
+  | `#3d3d3d` | strong border, focus ring                     |
+  | `#A7D129` | the only chroma on the surface                |
 
-  The gray ramp is deliberately **achromatic**. A green-tinted neutral makes a
-  dark UI read as murky and strains the eye across a long session; keeping the
-  chrome gray also lets the one lime accent stand out instead of competing with
-  a dozen muddy olive neighbours.
+  The ramp is deliberately **achromatic**: a green-tinted neutral makes a dark
+  UI read as murky across a long session, and it competes with the accents.
 
-Agent-turn accents stay **colourful** in both modes: they follow the TUI themes
-in `crates/codegen/alnair-pager-render/src/theme/` (AlnairDay / AlnairNight), so
-a row that is violet in the terminal is violet in the browser. Dark mode uses
-the night hues — one hue per step is what makes a long trace scannable.
+Agent-turn accents stay **colourful** in both modes, following the TUI themes in
+`crates/codegen/alnair-pager-render/src/theme/`.
 
-| Token       | Meaning                   | Light     | Dark      |
-| ----------- | ------------------------- | --------- | --------- |
-| `assistant` | agent reply               | `#7d4bc6` | `#bb9af7` |
-| `thinking`  | reasoning rows            | `#7d4bc6` | `#bb9af7` |
-| `tool`      | tool rows                 | `#626262` | `#a3a3a3` |
-| `system`    | subagents, sources, links | `#2f64d2` | `#7aa2f7` |
-| `success`   | passing tests             | `#378e23` | `#9ece6a` |
-| `error`     | failures                  | `#cd3048` | `#f7768e` |
-| `plan`      | plan rows                 | `#a8780a` | `#ffdb8d` |
-| `verify`    | diffs, checkpoints        | `#7850a0` | `#bb9af7` |
-| `running`   | live work                 | `#0f87a2` | `#7dcfff` |
+| Token       | Meaning          | Light     | Dark      |
+| ----------- | ---------------- | --------- | --------- |
+| `assistant` | agent reply      | `#7d4bc6` | `#bb9af7` |
+| `thinking`  | reasoning rows   | `#7d4bc6` | `#bb9af7` |
+| `tool`      | tool rows        | `#626262` | `#a3a3a3` |
+| `system`    | subagents, links | `#2f64d2` | `#7aa2f7` |
+| `success`   | success          | `#378e23` | `#9ece6a` |
+| `error`     | failures         | `#cd3048` | `#f7768e` |
+| `plan`      | plan affordances | `#a8780a` | `#ffdb8d` |
+| `verify`    | diffs            | `#7850a0` | `#bb9af7` |
+| `running`   | live work        | `#0f87a2` | `#7dcfff` |
 
 The app mark is `src/lib/assets/logo-white.svg`, inlined in
-`components/chrome/logo.svelte` and painted on `currentColor` so it themes.
-`src/lib/assets/favicon.svg` is the same art on the black ground.
-
-Fonts are self-hosted (`static/fonts/`, Geist Sans + Geist Mono) so the app makes
-no external requests. There is no telemetry and nothing loads from a CDN.
+`components/chrome/logo.svelte` on `currentColor` so it themes.
+`src/lib/assets/favicon.svg` is the same art on the black ground. Fonts are
+self-hosted in `static/fonts/`; nothing loads from a CDN.
 
 ## Component notes
 
-- **Trace** is the backbone. Every step — reasoning, tool, file, terminal, plan,
-  subagent, tests, sources, diff, error — is a `Trace.Root` line, so they share
-  one shape, one status vocabulary (`pending` / `running` / `error`), and the
-  continuous rule between steps. `groupParts()` in
-  `components/thread/segments.ts` batches consecutive steps into one `Trace.Root`
-  and breaks the run at text and checkpoints.
-
-### File tool rows
-
-A `write` or `read` part is not rendered as generic tool JSON. Each one has its
-own row, and each shows the **actual numbered lines** the agent saw or wrote:
-
-| Part         | Row                                                                                                                      |
-| ------------ | ------------------------------------------------------------------------------------------------------------------------ |
-| `file-read`  | `Read <dir>/<file>` · line range (`1–19 of 218`) · `CodeBlock` with line numbers starting at the real offset             |
-| `file-write` | `Wrote`/`Overwrote <file>` · `+N` for a new file · full content, numbered; `hiddenLines` renders a "N more lines" footer |
-| `file-edit`  | `Edited <file>` · `+N / −N` · per-hunk diff with **two number columns** (old and new)                                    |
-| `image-read` | `Read image <file>` · `720×400` · preview on a checkerboard with a metadata caption (`mime · size · bytes`)              |
-
-`file-edit` cannot use `CodeBlock.Content`'s built-in gutter, which is a single
-column. It builds the grid itself (old number, new number, sign, text) and
-highlights the after-side text in one pass, so a multi-line construct stays
-intact; removed lines have no place in that text and render plain, relying on
-the tint and the `−` to read as removed.
-
-### Header
-
-The header carries two popovers that read the same store the thread does:
-
-- **Plan** — appears only when the session has a `PlanDocument`; the trigger
-  shows the plan title, and the popover renders the plan's markdown (headings,
-  lists, tables, fenced code) with its path and age. Focus is moved to the
-  scroll container rather than the first focusable element, so the popover opens
-  at the top instead of jumping to a code block's copy button.
-- **Todo** — always present; the trigger shows `done/total` and the active item,
-  the popover lists every item with its status and optional detail.
-- **Message Scroller** owns the scroll behavior: the person's turn is the
-  `scrollAnchor`, `autoScroll` follows a streaming reply, and the floating button
-  appears only when there is something below.
-- **Bubble** has one extra variant, `paper`, for the person's turn. The variant
-  exists because the component paints its child through variant selectors, so an
-  extra class on `Bubble.Content` loses.
+- **Trace** is the backbone. Every step is a `Trace.Root` line, so they share one
+  shape and one status vocabulary. `groupParts()` batches consecutive steps into
+  one `Trace.Root` and breaks the run at text, notices, and permission cards.
+- **File rows** show the actual numbered lines. `file-edit` builds its own grid
+  (old number, new number, sign, text) because `CodeBlock`'s gutter is a single
+  column; it highlights the after-side text in one pass so a multi-line
+  construct stays intact, and removed lines render plain.
+- **The header** carries two popovers. _Todo_ reads the ACP `plan` update and
+  shows `done/total`. _Plan_ appears only while an `exit_plan_mode` request is
+  parked, and renders the artifact's markdown; focus moves to the scroll
+  container so it opens at the top instead of jumping to a code block's copy
+  button.
+- **Permission** has exactly one set of buttons, in the banner above the
+  composer. The in-thread card is a marker, not a control: two sets for one
+  request invites answering it twice.
+- **Bubble** has one extra variant, `paper`, for the person's turn, because the
+  component paints its child through variant selectors.
 - **Markdown** renders through `svelte-streamdown` with a theme re-pointed at our
-  tokens, and fenced code routes to `CodeBlock` so code gets line numbers and a
-  copy button. `markdown-lazy.svelte` splits it out of the first paint.
-- **The graph chip** and the inspector's graph panel read the same `GraphState`.
-  One state source, two renderers — the same rule the pager follows for
-  `GraphUpdated`.
+  tokens; fenced code routes to `CodeBlock`. `markdown-lazy.svelte` keeps it off
+  the first paint.
 
 ## What is not here yet
 
-- No harness connection, no persistence, no auth. The store is in memory and
-  resets on reload.
-- No responsive drawer for the session list below `md`; it is hidden instead.
-- Tool and terminal output are plain text; ANSI coloring is wired in
-  `highlighter.ts` but no mock part exercises it yet.
-- The inspector's file list is derived from the transcript rather than from
-  checkpoints, which is a stand-in until the adapter exposes real file state.
+- **The socket.** `FixtureTransport` is the only transport. The next step is a
+  `WebSocketTransport` against `alnair agent serve` (`ws://127.0.0.1:2419/ws`),
+  implementing the same interface.
+- **A `plan_approval` and `question` card.** `pending_interaction` can carry
+  those kinds; today the header shows "needs input" but only the permission kind
+  has a card.
+- **The prompt queue** (`alnair/queue/*`) and **slash commands** beyond the
+  advertised list.
+- **Session replay.** `alnair/session/updates` returns a stored transcript, and
+  `replay()` already folds one; the store does not call it yet.
+- No persistence, no auth, no responsive drawer below `md`.
+- Terminal output is plain text; ANSI colouring exists in `highlighter.ts` but
+  no fixture exercises it.

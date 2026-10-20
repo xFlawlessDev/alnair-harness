@@ -3,7 +3,8 @@ import type { TurnPart } from '#lib/harness/types.js';
 export type TurnSegment =
 	| { kind: 'trace'; parts: TurnPart[] }
 	| { kind: 'text'; part: Extract<TurnPart, { kind: 'text' }> }
-	| { kind: 'checkpoint'; part: Extract<TurnPart, { kind: 'checkpoint' }> };
+	| { kind: 'notice'; part: Extract<TurnPart, { kind: 'notice' }> }
+	| { kind: 'permission'; part: Extract<TurnPart, { kind: 'permission' }> };
 
 const TRACE_KINDS = new Set<TurnPart['kind']>([
 	'reasoning',
@@ -13,10 +14,7 @@ const TRACE_KINDS = new Set<TurnPart['kind']>([
 	'file-edit',
 	'image-read',
 	'terminal',
-	'plan',
 	'subagent',
-	'tests',
-	'sources',
 	'diff',
 	'error'
 ]);
@@ -24,7 +22,9 @@ const TRACE_KINDS = new Set<TurnPart['kind']>([
 /**
  * Consecutive trace parts share one `Trace.Root`, so the vertical rule between
  * steps stays continuous — the same shape the AI Elements Chat pattern uses.
- * Text and checkpoints break the run.
+ *
+ * Text breaks the run: it is the agent talking, not a step. Notices and
+ * permission cards break it too, because both need to stand on their own.
  */
 export function groupParts(parts: TurnPart[]): TurnSegment[] {
 	const segments: TurnSegment[] = [];
@@ -46,7 +46,8 @@ export function groupParts(parts: TurnPart[]): TurnSegment[] {
 		flush();
 
 		if (part.kind === 'text') segments.push({ kind: 'text', part });
-		else if (part.kind === 'checkpoint') segments.push({ kind: 'checkpoint', part });
+		else if (part.kind === 'notice') segments.push({ kind: 'notice', part });
+		else if (part.kind === 'permission') segments.push({ kind: 'permission', part });
 	}
 
 	flush();

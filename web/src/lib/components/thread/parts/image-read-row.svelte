@@ -9,7 +9,22 @@
 
 	const status = $derived(traceStatus(part.status));
 	const running = $derived(part.status === 'running' || part.status === 'pending');
-	const dimensions = $derived(`${part.width}×${part.height}`);
+
+	/**
+	 * The wire only carries the bytes; dimensions appear when the agent put
+	 * them in `_meta`, which is not required. So the caption lists what is
+	 * known and skips the rest rather than printing a guessed size.
+	 */
+	const dimensions = $derived(
+		part.width !== undefined && part.height !== undefined
+			? `${part.width}×${part.height}`
+			: undefined
+	);
+	const facts = $derived(
+		[part.mime, dimensions, part.bytes !== undefined ? formatBytes(part.bytes) : undefined].filter(
+			(value): value is string => value !== undefined
+		)
+	);
 </script>
 
 {#snippet line()}
@@ -24,7 +39,7 @@
 				<span class="text-ink">{fileName(part.path)}</span>
 			</span>
 		</Trace.Title>
-		<Trace.Description class="tabular">{dimensions}</Trace.Description>
+		<Trace.Description class="tabular">{dimensions ?? part.mime}</Trace.Description>
 		{#if part.durationMs}
 			<Trace.Description>{formatDuration(part.durationMs)}</Trace.Description>
 		{/if}
@@ -52,11 +67,12 @@
 				<figcaption
 					class="flex flex-wrap items-center gap-x-2 gap-y-0.5 border-t border-line px-2.5 py-1.5 font-mono text-[10.5px] text-ink-tertiary"
 				>
-					<span class="text-ink-secondary">{part.mime}</span>
-					<span class="text-ink-tertiary/40">·</span>
-					<span class="tabular">{dimensions}</span>
-					<span class="text-ink-tertiary/40">·</span>
-					<span class="tabular">{formatBytes(part.bytes)}</span>
+					{#each facts as fact, index (fact)}
+						{#if index > 0}
+							<span class="text-ink-tertiary/40">·</span>
+						{/if}
+						<span class="tabular" class:text-ink-secondary={index === 0}>{fact}</span>
+					{/each}
 				</figcaption>
 			</figure>
 		</Trace.CollapsibleContent>

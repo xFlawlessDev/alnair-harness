@@ -37,7 +37,7 @@
 							</Empty.Media>
 							<Empty.Title class="text-base">Nothing in this thread yet</Empty.Title>
 							<Empty.Description>
-								{session.cwd} · {session.branch}
+								{session.cwd}{session.branch ? ` · ${session.branch}` : ''}
 							</Empty.Description>
 						</Empty.Header>
 						<Empty.Content>

@@ -1,10 +1,12 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
+	import ShieldQuestionIcon from '@lucide/svelte/icons/shield-question';
 	import Composer from '#lib/components/composer/composer.svelte';
 	import Inspector from '#lib/components/inspector/inspector.svelte';
 	import SessionSidebar from '#lib/components/chrome/session-sidebar.svelte';
 	import ThreadHeader from '#lib/components/chrome/thread-header.svelte';
 	import Thread from '#lib/components/thread/thread.svelte';
+	import { Button } from '#lib/components/ui/button/index.js';
 	import * as Tooltip from '#lib/components/ui/tooltip/index.js';
 	import { useSessionStore } from '#lib/harness/context.js';
 	import { suggestions } from '#lib/harness/mock.js';
@@ -42,7 +44,7 @@
 				workspace={store.workspace}
 				graph={store.graph}
 				todos={store.todos}
-				plan={store.plan}
+				plan={store.plan ?? null}
 				{inspectorOpen}
 				oninspector={() => (inspectorOpen = !inspectorOpen)}
 			/>
@@ -56,6 +58,32 @@
 					onsuggest={(text) => store.send(text)}
 				/>
 			</div>
+
+			{#if store.permission}
+				{@const request = store.permission}
+				<div class="mx-auto w-full max-w-3xl px-6">
+					<div
+						class="mb-2 flex flex-wrap items-center gap-2 rounded-lg border border-terra/40 bg-terra/5 px-3 py-2"
+					>
+						<ShieldQuestionIcon class="size-3.5 shrink-0 text-terra" />
+						<p class="min-w-0 flex-1 truncate text-[12px] text-ink-secondary">
+							The agent is waiting for permission: <span class="font-mono">{request.title}</span>
+						</p>
+						<div class="flex shrink-0 gap-1.5">
+							{#each request.options as option (option.optionId)}
+								<Button
+									variant={option.kind.startsWith('allow') ? 'default' : 'outline'}
+									size="sm"
+									class="h-6 text-[11px]"
+									onclick={() => store.answerPermission(option.optionId)}
+								>
+									{option.name}
+								</Button>
+							{/each}
+						</div>
+					</div>
+				</div>
+			{/if}
 
 			<Composer
 				models={store.models}

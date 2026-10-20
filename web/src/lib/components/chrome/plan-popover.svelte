@@ -4,9 +4,13 @@
 	import { Button } from '#lib/components/ui/button/index.js';
 	import Markdown from '#lib/components/thread/markdown-lazy.svelte';
 	import { formatRelative } from '#lib/harness/format.js';
-	import type { PlanDocument } from '#lib/harness/types.js';
+	import type { PlanArtifact } from '#lib/harness/types.js';
 
-	let { plan }: { plan: PlanDocument } = $props();
+	/**
+	 * The plan the agent wants approved (`alnair/exit_plan_mode`). This is the
+	 * artifact, not the step tracker — the tracker is the todo popover.
+	 */
+	let { plan }: { plan: PlanArtifact } = $props();
 
 	let scroller: HTMLDivElement | null = $state(null);
 
@@ -44,11 +48,15 @@
 		<div class="flex items-center justify-between gap-3 border-b border-line px-3 py-2">
 			<div class="flex min-w-0 flex-col">
 				<p class="truncate text-[12px] font-medium">{plan.title}</p>
-				<p class="truncate font-mono text-[10px] text-ink-tertiary">{plan.path}</p>
+				{#if plan.path}
+					<p class="truncate font-mono text-[10px] text-ink-tertiary">{plan.path}</p>
+				{/if}
 			</div>
-			<span class="tabular shrink-0 font-mono text-[10px] text-ink-tertiary">
-				{formatRelative(plan.updatedAt)}
-			</span>
+			{#if plan.updatedAt}
+				<span class="tabular shrink-0 font-mono text-[10px] text-ink-tertiary">
+					{formatRelative(plan.updatedAt)}
+				</span>
+			{/if}
 		</div>
 		<div
 			bind:this={scroller}

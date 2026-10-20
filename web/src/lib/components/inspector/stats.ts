@@ -15,7 +15,7 @@ export interface InspectorStats {
 /** Everything the inspector shows, derived from the transcript. */
 export function inspectorStats(
 	turns: Turn[],
-	graph: GraphState,
+	graph: GraphState | undefined,
 	context: ContextUsage,
 	session: Session
 ): InspectorStats {
@@ -26,19 +26,35 @@ export function inspectorStats(
 		0
 	);
 
+	const facts = [
+		{ label: 'Model', value: session.modelId ?? 'not reported' },
+		{ label: 'Messages', value: String(session.numMessages) },
+		{ label: 'Source', value: session.source },
+		{ label: 'Window', value: `${formatTokens(context.used)} / ${formatTokens(context.limit)}` }
+	];
+
+	if (graph) {
+		facts.push({
+			label: 'Graph',
+			value: `${graph.achieved}/${graph.total} · v${graph.planVersion}`
+		});
+	}
+
 	return {
 		turns: turns.length,
 		parts: parts.length,
-		toolCalls: parts.filter((part) => part.kind === 'tool').length,
+		toolCalls: parts.filter(
+			(part) =>
+				part.kind === 'tool' ||
+				part.kind === 'file-read' ||
+				part.kind === 'file-write' ||
+				part.kind === 'file-edit' ||
+				part.kind === 'image-read'
+		).length,
 		terminals: parts.filter((part) => part.kind === 'terminal').length,
 		subagents: parts.filter((part) => part.kind === 'subagent').length,
 		errors: parts.filter((part) => part.kind === 'error').length,
 		reasoningMs,
-		facts: [
-			{ label: 'Model', value: session.model },
-			{ label: 'Tokens billed', value: formatTokens(session.tokens) },
-			{ label: 'Window', value: `${formatTokens(context.used)} / ${formatTokens(context.limit)}` },
-			{ label: 'Graph nodes', value: `${graph.nodes.length}` }
-		]
+		facts
 	};
 }

@@ -15,6 +15,7 @@
 	const status = $derived(failed ? 'error' : traceStatus(part.status));
 
 	const heading = $derived.by(() => {
+		if (part.backgrounded) return 'Backgrounded';
 		if (running) return 'Running';
 		if (failed) return 'Failed';
 		return 'Ran';
@@ -35,6 +36,9 @@
 				{#if part.durationMs}
 					<Trace.Description>{formatDuration(part.durationMs)}</Trace.Description>
 				{/if}
+				{#if part.backgrounded}
+					<Trace.Description class="text-running">task {part.taskId}</Trace.Description>
+				{/if}
 				{#if part.exitCode !== undefined}
 					<Trace.Description class={failed ? 'text-error' : undefined}>
 						exit {part.exitCode}
@@ -50,13 +54,21 @@
 			>
 				<CodeBlock.Header class="pb-1">
 					<CodeBlock.Title class="font-mono text-[11px] text-ink-tertiary">
-						{part.cwd}
+						{part.cwd ?? part.outputFile ?? 'output'}
 					</CodeBlock.Title>
 					<CodeBlock.Actions>
 						<CodeBlock.CopyButton value={part.output} />
 					</CodeBlock.Actions>
 				</CodeBlock.Header>
-				<CodeBlock.Content wrap class="max-h-72 text-ink-secondary" code={part.output} />
+				{#if part.output}
+					<CodeBlock.Content wrap class="max-h-72 text-ink-secondary" code={part.output} />
+				{:else}
+					<p class="px-1 pt-1 pb-2 text-[11.5px] text-ink-tertiary">
+						{part.backgrounded
+							? 'Running in the background; no output yet.'
+							: 'The command printed nothing.'}
+					</p>
+				{/if}
 			</CodeBlock.Root>
 		</Trace.CollapsibleContent>
 	</Trace.Collapsible>

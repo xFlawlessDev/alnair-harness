@@ -5,7 +5,9 @@
 	import { formatClock } from '#lib/harness/format.js';
 	import type { Turn } from '#lib/harness/types.js';
 	import Markdown from './markdown-lazy.svelte';
+	import NoticeRow from './parts/notice-row.svelte';
 	import PartView from './parts/part-view.svelte';
+	import PermissionRow from './parts/permission-row.svelte';
 	import { groupParts } from './segments.js';
 	import TurnMeta from './turn-meta.svelte';
 
@@ -13,7 +15,11 @@
 		turn,
 		streaming = false,
 		onretry
-	}: { turn: Turn; streaming?: boolean; onretry?: () => void } = $props();
+	}: {
+		turn: Turn;
+		streaming?: boolean;
+		onretry?: () => void;
+	} = $props();
 
 	const segments = $derived(groupParts(turn.parts));
 	const userText = $derived(
@@ -55,8 +61,10 @@
 							<PartView {part} />
 						{/each}
 					</Trace.Root>
-				{:else if segment.kind === 'checkpoint'}
-					<PartView part={segment.part} />
+				{:else if segment.kind === 'notice'}
+					<NoticeRow part={segment.part} />
+				{:else if segment.kind === 'permission'}
+					<PermissionRow part={segment.part} />
 				{:else if segment.part.text}
 					<Markdown content={segment.part.text} {streaming} />
 				{:else if streaming}
@@ -73,7 +81,11 @@
 			{/each}
 
 			{#if turn.status === 'cancelled'}
-				<p class="text-[11.5px] text-ink-tertiary italic">Stopped.</p>
+				<p class="text-[11.5px] text-ink-tertiary italic">Stopped by the user.</p>
+			{:else if turn.status === 'refused'}
+				<p class="text-[11.5px] text-terra italic">The agent declined to continue.</p>
+			{:else if turn.status === 'error'}
+				<p class="text-[11.5px] text-error italic">The turn ended with an error.</p>
 			{:else if !streaming}
 				<TurnMeta {turn} {onretry} />
 			{/if}

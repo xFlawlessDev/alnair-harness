@@ -5,7 +5,7 @@
 	import * as Tooltip from '#lib/components/ui/tooltip/index.js';
 	import type {
 		GraphState,
-		PlanDocument,
+		PlanArtifact,
 		Session,
 		TodoItem,
 		WorkspaceInfo
@@ -27,9 +27,11 @@
 	}: {
 		session: Session;
 		workspace: WorkspaceInfo;
-		graph: GraphState;
+		/** Absent when the agent has no graph running. */
+		graph: GraphState | undefined;
 		todos: TodoItem[];
-		plan: PlanDocument | null;
+		/** The artifact awaiting approval, if the agent asked for one. */
+		plan: PlanArtifact | null;
 		inspectorOpen: boolean;
 		oninspector: () => void;
 	} = $props();
@@ -62,20 +64,24 @@
 
 		<TodoPopover {todos} />
 
-		<span
-			class="ml-1 hidden items-center gap-1 font-mono text-[10.5px] whitespace-nowrap text-ink-tertiary lg:flex"
-		>
-			<GitBranchIcon class="size-3" />
-			{workspace.branch}
-			{#if workspace.ahead > 0}
-				<span class="text-olive">↑{workspace.ahead}</span>
-			{/if}
-			{#if workspace.behind > 0}
-				<span class="text-terra">↓{workspace.behind}</span>
-			{/if}
-		</span>
+		{#if workspace.branch}
+			<span
+				class="ml-1 hidden items-center gap-1 font-mono text-[10.5px] whitespace-nowrap text-ink-tertiary lg:flex"
+			>
+				<GitBranchIcon class="size-3" />
+				{workspace.branch}
+				{#if workspace.ahead > 0}
+					<span class="text-olive">↑{workspace.ahead}</span>
+				{/if}
+				{#if workspace.behind > 0}
+					<span class="text-terra">↓{workspace.behind}</span>
+				{/if}
+			</span>
+		{/if}
 
-		<GraphChip {graph} />
+		{#if graph}
+			<GraphChip {graph} />
+		{/if}
 
 		<ThemeToggle />
 

@@ -70,11 +70,6 @@
 							<CodeBlock.Line code={row} />
 						{/each}
 					</CodeBlock.Content>
-					{#if part.hiddenLines}
-						<CodeBlock.Footer class="justify-center text-[11px]">
-							{part.hiddenLines} more lines not shown
-						</CodeBlock.Footer>
-					{/if}
 				</CodeBlock.Root>
 			</Trace.CollapsibleContent>
 		</Trace.Collapsible>
