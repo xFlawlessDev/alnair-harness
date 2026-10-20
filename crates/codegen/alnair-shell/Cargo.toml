@@ -186,6 +186,9 @@ filetime = { workspace = true }
 tempfile = { workspace = true }
 alnair-memory = { workspace = true, features = [] }
 alnair-workspace = { workspace = true, features = ["test-support"] }
+# Drives the child-network restriction decision and its installation-failure
+# path without applying an irreversible kernel sandbox (AGENTS.md "Test seams").
+alnair-sandbox = { path = "../alnair-sandbox", default-features = false, features = ["test-support"] }
 # Feature-unification applies the signing seam to the lib when building tests, so
 # integration tests can inject a throwaway trusted key; production builds exclude
 # dev-deps and compile the seam out.

@@ -48,6 +48,10 @@ default = ["enforce"]
 ## above), and the enforce code is gated on `cfg(all(feature = "enforce", unix))`.
 ## On non-unix targets enabling this feature is a no-op (no kernel sandbox exists).
 enforce = []
+## Cross-crate test seams (AGENTS.md "Test seams"): lets a dependent's
+## `[dev-dependencies]` drive the child-network restriction decision and force an
+## installation failure without applying an irreversible kernel sandbox.
+test-support = []
 
 [dev-dependencies]
 serial_test = { workspace = true }

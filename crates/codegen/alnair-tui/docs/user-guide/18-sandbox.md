@@ -190,6 +190,11 @@ In practice, on Linux this means:
 
 - `web_search`, `web_fetch`, and the LLM API always have network access
 - `bash` commands like `curl`, `wget`, and `npm install` are blocked when `restrict_network` is enabled
+- **interactive terminals** (the persistent PTY shells behind the terminal tooling) are blocked by the same filter
+
+The filter is installed by one shared helper that both the piped-command path and the interactive-PTY path call, so the two can never drift. **It is Linux-only**: macOS has no `child_net` implementation, and on Windows interactive PTYs spawn exactly as before with no child-network filter. That is a platform limitation, not a setting.
+
+Interactive PTY creation is **fail-closed**. If `restrict_network` is active but the seccomp filter cannot be installed, creating the terminal fails with an error naming the filter, and the requested shell never runs — Alnair does not fall back to spawning an unfiltered PTY. The refusal happens before the child executes, so a rejected terminal cannot leave a partially-started process behind.
 
 ---
 

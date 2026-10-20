@@ -61,10 +61,44 @@ struct GlobalSandboxState {
     applied: bool,
 }
 pub fn should_restrict_child_network() -> bool {
+    #[cfg(feature = "test-support")]
+    if let Some(forced) = test_support::forced_restriction() {
+        return forced;
+    }
     RESTRICT_CHILD_NETWORK.load(Ordering::Relaxed)
 }
+
 pub fn should_auto_allow_bash() -> bool {
     AUTO_ALLOW_BASH.load(Ordering::Relaxed) && is_active()
+}
+
+/// Test seams for the child-network restriction decision.
+///
+/// `Sandbox::apply` is irreversible, so a test cannot turn the real restriction
+/// on by applying a sandbox. This module lets a dependent's `[dev-dependencies]`
+/// drive the decision instead. Compiled out unless the `test-support` feature is
+/// enabled, and never consulted in production.
+#[cfg(feature = "test-support")]
+pub mod test_support {
+    use std::sync::Mutex;
+
+    /// `None` = fall through to the real process state.
+    static FORCED: Mutex<Option<bool>> = Mutex::new(None);
+
+    /// Override [`super::should_restrict_child_network`] for the rest of the
+    /// process. Serialize callers; this is process-global state.
+    pub fn force_restriction(restricted: bool) {
+        *FORCED.lock().unwrap_or_else(|e| e.into_inner()) = Some(restricted);
+    }
+
+    /// Drop the override and return to the real process state.
+    pub fn clear_forced_restriction() {
+        *FORCED.lock().unwrap_or_else(|e| e.into_inner()) = None;
+    }
+
+    pub(crate) fn forced_restriction() -> Option<bool> {
+        *FORCED.lock().unwrap_or_else(|e| e.into_inner())
+    }
 }
 pub fn set_auto_allow_bash(enabled: bool) {
     AUTO_ALLOW_BASH.store(enabled, Ordering::Relaxed);

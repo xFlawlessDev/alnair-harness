@@ -908,15 +908,14 @@ fn spawn_with_argv(
                 .stdout(Stdio::piped())
                 .stderr(Stdio::piped());
 
+            // The ONE installation site for the async spawn path; the PTY path
+            // installs the same hook value from the same module. Never inline
+            // the pre_exec body here again — two copies drift.
             #[cfg(target_os = "linux")]
-            if alnair_sandbox::should_restrict_child_network() {
-                // SAFETY: single prctl syscall (async-signal-safe).
-                unsafe {
-                    let filter = alnair_sandbox::child_net::prebuilt_child_network_filter();
-                    cmd.pre_exec(move || {
-                        alnair_sandbox::child_net::install_child_network_filter(filter)
-                    });
-                }
+            if let Some(hook) = alnair_sandbox::child_net::child_network_pre_exec_hook() {
+                // SAFETY: the hook issues only prctl, which is
+                // async-signal-safe in a post-fork pre-exec context.
+                unsafe { cmd.pre_exec(hook) };
             }
         });
         // setsid: detach from TTY + new process group for tree teardown.

@@ -50,6 +50,177 @@ pub async fn require_pty(terminal_id: &str) -> Result<Arc<Mutex<PtySession>>, Te
         })
 }
 
+/// Everything the owned (restricted) spawn needs, kept separate from
+/// `CommandBuilder` because portable-pty builds its `std::process::Command`
+/// internally and exposes no pre-exec hook.
+struct PtyLaunch<'a> {
+    shell_path: &'a str,
+    shell_args: &'a [String],
+    cwd: Option<&'a str>,
+    env: &'a HashMap<String, String>,
+}
+
+/// Spawn the child for an interactive PTY.
+///
+/// With child-network restriction active on Linux this owns the spawn: the
+/// seccomp filter's `pre_exec` failure must abort *before* the target program
+/// executes, and portable-pty's `spawn_command` offers no hook. Everywhere else
+/// — and on Linux when no restriction is in effect — portable-pty's ceremony
+/// runs unchanged, so unrestricted behavior is byte-identical to before.
+fn spawn_pty_child(
+    slave: &dyn portable_pty::SlavePty,
+    master: &dyn portable_pty::MasterPty,
+    builder: CommandBuilder,
+    launch: &PtyLaunch<'_>,
+) -> Result<Box<dyn portable_pty::Child + Send + Sync>, TerminalExtError> {
+    #[cfg(target_os = "linux")]
+    if alnair_sandbox::child_net::child_network_restricted() {
+        return spawn_restricted_pty_child(master, launch).map_err(TerminalExtError::Internal);
+    }
+    let _ = launch;
+    slave
+        .spawn_command(builder)
+        .map_err(|e| TerminalExtError::Internal(format!("failed to spawn shell: {e}")))
+}
+
+/// Owned PTY spawn used only while child-network restriction is active.
+///
+/// Replicates portable-pty's unix `spawn_command` ceremony (signal reset,
+/// `setsid`, `TIOCSCTTY`, random-fd cleanup, umask) because that ceremony is
+/// private to the crate, and adds the shared seccomp installation as the final
+/// `pre_exec` step. A filter-installation failure is reported back through a
+/// pipe (async-signal-safe `write`) so the caller can name the real reason
+/// instead of a generic spawn error.
+#[cfg(target_os = "linux")]
+fn spawn_restricted_pty_child(
+    master: &dyn portable_pty::MasterPty,
+    launch: &PtyLaunch<'_>,
+) -> Result<Box<dyn portable_pty::Child + Send + Sync>, String> {
+    use std::os::unix::process::CommandExt;
+
+    let tty_path = master.tty_name().ok_or_else(|| {
+        "cannot install the child network filter: the PTY slave path is unavailable".to_string()
+    })?;
+
+    let open_slave = || {
+        std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(&tty_path)
+    };
+    let stdin = open_slave().map_err(|e| format!("failed to open pty slave for stdin: {e}"))?;
+    let stdout = open_slave().map_err(|e| format!("failed to open pty slave for stdout: {e}"))?;
+    let stderr = open_slave().map_err(|e| format!("failed to open pty slave for stderr: {e}"))?;
+
+    let mut cmd = std::process::Command::new(launch.shell_path);
+    cmd.args(launch.shell_args);
+    if let Some(dir) = launch.cwd {
+        cmd.current_dir(dir);
+    }
+    // portable-pty's `as_command` clears the environment and re-adds `SHELL`
+    // plus the builder's envs; mirror that so the child sees the same env.
+    cmd.env_clear();
+    cmd.env("SHELL", launch.shell_path);
+    cmd.envs(launch.env);
+    cmd.stdin(stdin).stdout(stdout).stderr(stderr);
+
+    let mut stage_fds = [0 as libc::c_int; 2];
+    // SAFETY: `pipe` writes two valid fds into the array on success.
+    if unsafe { libc::pipe(stage_fds.as_mut_ptr()) } != 0 {
+        return Err(format!(
+            "failed to create the spawn stage pipe: {}",
+            std::io::Error::last_os_error()
+        ));
+    }
+    // Non-blocking so a stuck read can never wedge PTY creation; the write end
+    // is closed by the parent right after `spawn`, so EOF is guaranteed.
+    // SAFETY: both fds are freshly created and owned by this function.
+    unsafe {
+        let flags = libc::fcntl(stage_fds[0], libc::F_GETFL);
+        if flags == -1 || libc::fcntl(stage_fds[0], libc::F_SETFL, flags | libc::O_NONBLOCK) == -1 {
+            libc::close(stage_fds[0]);
+            libc::close(stage_fds[1]);
+            return Err(format!(
+                "failed to configure the spawn stage pipe: {}",
+                std::io::Error::last_os_error()
+            ));
+        }
+    }
+    /// Owns a raw fd and closes it on drop so early returns cannot leak.
+    struct RawFdGuard(libc::c_int);
+    impl Drop for RawFdGuard {
+        fn drop(&mut self) {
+            // SAFETY: the guard owns this fd exclusively.
+            unsafe { libc::close(self.0) };
+        }
+    }
+    let stage_read = RawFdGuard(stage_fds[0]);
+    let stage_write = RawFdGuard(stage_fds[1]);
+    let stage_write_fd = stage_write.0;
+
+    // SAFETY: every call below is async-signal-safe (signal/sigprocmask/setsid/
+    // ioctl/close/umask/prctl/write), which is what a post-fork pre-exec
+    // context requires.
+    unsafe {
+        cmd.pre_exec(move || {
+            for signo in &[
+                libc::SIGCHLD,
+                libc::SIGHUP,
+                libc::SIGINT,
+                libc::SIGQUIT,
+                libc::SIGTERM,
+                libc::SIGALRM,
+            ] {
+                libc::signal(*signo, libc::SIG_DFL);
+            }
+            let empty_set: libc::sigset_t = std::mem::zeroed();
+            libc::sigprocmask(libc::SIG_SETMASK, &empty_set, std::ptr::null_mut());
+
+            if libc::setsid() == -1 {
+                return Err(std::io::Error::last_os_error());
+            }
+            #[allow(clippy::cast_lossless)]
+            if libc::ioctl(0, libc::TIOCSCTTY as _, 0) == -1 {
+                return Err(std::io::Error::last_os_error());
+            }
+            // Install BEFORE the fd sweep: `close_random_fds` closes every fd
+            // above 2, which would take the stage pipe with it and leave the
+            // parent unable to name the filter as the failure reason. `close`
+            // is not in the blocked syscall set, so ordering it after the
+            // filter is still legal.
+            //
+            // The one shared installation routine. On failure it records the
+            // stage so the parent can name the filter as the reason, then
+            // aborts the exec — the child never runs the target program.
+            alnair_sandbox::child_net::install_and_stage(Some(stage_write_fd))?;
+
+            portable_pty::unix::close_random_fds();
+            Ok(())
+        });
+    }
+
+    let spawned = cmd.spawn();
+    drop(stage_write);
+
+    match spawned {
+        Ok(child) => Ok(Box::new(child)),
+        Err(e) => {
+            let mut buf = [0u8; 1];
+            // SAFETY: `stage_read` is a valid owned fd; the buffer is one byte.
+            let staged = unsafe { libc::read(stage_read.0, buf.as_mut_ptr().cast(), buf.len()) };
+            if staged == 1 && buf[0] == STAGE_FILTER_FAILED {
+                Err(alnair_sandbox::child_net::installation_failure_message(&e))
+            } else {
+                Err(format!("failed to spawn shell: {e}"))
+            }
+        }
+    }
+}
+
+/// Stage byte the child writes when the seccomp filter could not be installed.
+#[cfg(target_os = "linux")]
+const STAGE_FILTER_FAILED: u8 = b'F';
+
 pub async fn create_pty(
     shell: Option<&str>,
     cwd: Option<&str>,
@@ -95,10 +266,17 @@ pub async fn create_pty(
     cmd.env("LANG", "en_US.UTF-8");
     cmd.env("LC_ALL", "en_US.UTF-8");
 
-    let child = pair
-        .slave
-        .spawn_command(cmd)
-        .map_err(|e| TerminalExtError::Internal(format!("failed to spawn shell: {e}")))?;
+    let child = spawn_pty_child(
+        pair.slave.as_ref(),
+        pair.master.as_ref(),
+        cmd,
+        &PtyLaunch {
+            shell_path: &shell_path,
+            shell_args: &shell_args,
+            cwd,
+            env: &env,
+        },
+    )?;
 
     let reader = pair
         .master
@@ -699,7 +877,38 @@ mod tests {
         }
     }
 
+    // Every test below spawns a PTY and therefore consults the process-global
+    // child-network restriction flag. Serialize them so a test that forces the
+    // flag (or forces an installation failure) cannot leak into a sibling that
+    // is mid-spawn.
+    const PTY_CHILD_NET: &str = "pty_child_net";
+
+    /// Restores the restriction decision and the forced-failure switch on drop,
+    /// including when an assertion panics — otherwise one failing test would
+    /// poison every later one in the same binary.
+    struct ChildNetOverride {
+        fail_install: bool,
+    }
+
+    impl ChildNetOverride {
+        fn apply(restriction: bool, fail_install: bool) -> Self {
+            alnair_sandbox::test_support::force_restriction(restriction);
+            alnair_sandbox::child_net::force_installation_failure(fail_install);
+            Self { fail_install }
+        }
+    }
+
+    impl Drop for ChildNetOverride {
+        fn drop(&mut self) {
+            alnair_sandbox::test_support::clear_forced_restriction();
+            if self.fail_install {
+                alnair_sandbox::child_net::force_installation_failure(false);
+            }
+        }
+    }
+
     #[tokio::test]
+    #[serial_test::serial(PTY_CHILD_NET)]
     async fn long_running_command_emits_balanced_started_then_ended_pair() {
         tokio::task::LocalSet::new()
             .run_until(async {
@@ -734,6 +943,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial_test::serial(PTY_CHILD_NET)]
     async fn idle_shell_emits_no_busy_notifications() {
         tokio::task::LocalSet::new()
             .run_until(async {
@@ -748,6 +958,196 @@ mod tests {
                 );
 
                 close_pty(&pty_id).await.expect("close pty");
+            })
+            .await;
+    }
+
+    /// Decoded `output` notifications for `pty_id`, oldest first.
+    fn decoded_output(notifications: &RecordedNotifications, pty_id: &str) -> Vec<u8> {
+        use base64::Engine as _;
+        notifications
+            .borrow()
+            .iter()
+            .filter(|(method, params)| {
+                method == NOTIFICATION_METHOD
+                    && params["terminalId"] == pty_id
+                    && params["type"] == "output"
+            })
+            .filter_map(|(_, params)| {
+                params["data"]
+                    .as_str()
+                    .and_then(|d| base64::engine::general_purpose::STANDARD.decode(d).ok())
+            })
+            .flatten()
+            .collect()
+    }
+
+    /// Poll the decoded PTY output until `needle` appears or the deadline passes.
+    async fn wait_for_output(
+        notifications: &RecordedNotifications,
+        pty_id: &str,
+        needle: &str,
+        deadline: Duration,
+    ) -> String {
+        let started = tokio::time::Instant::now();
+        loop {
+            let text = String::from_utf8_lossy(&decoded_output(notifications, pty_id)).to_string();
+            if text.contains(needle) {
+                return text;
+            }
+            if started.elapsed() > deadline {
+                return text;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+    }
+
+    /// Run `command` in a fresh PTY and return everything the shell printed.
+    ///
+    /// Drives the real `create_pty` entry point; the only test-only input is the
+    /// restriction decision itself, which cannot be flipped by applying an
+    /// irreversible kernel sandbox.
+    async fn run_command_in_pty(command: &str) -> String {
+        let (gateway, notifications) = recording_gateway();
+        let env = HashMap::from([("ENV".to_string(), String::new())]);
+        let pty_id = create_pty(
+            Some("/bin/sh"),
+            None,
+            env,
+            24,
+            80,
+            None,
+            gateway,
+            TargetClientId::None,
+        )
+        .await
+        .expect("create pty");
+
+        write_pty_input(&pty_id, format!("{command}\n").as_bytes())
+            .await
+            .expect("write command");
+        // The PTY echoes whatever is typed, so a plain `echo __DONE__` matches
+        // the echo before the command has even run. Splitting the literal makes
+        // the echoed form (`__DO""NE__`) differ from the printed form, so a
+        // match can only come from the shell actually executing the sentinel.
+        write_pty_input(&pty_id, b"echo __DO\"\"NE__\n")
+            .await
+            .expect("write sentinel");
+
+        let output =
+            wait_for_output(&notifications, &pty_id, "__DONE__", Duration::from_secs(20)).await;
+        close_pty(&pty_id).await.expect("close pty");
+        output
+    }
+
+    /// Restricted: the seccomp filter is really installed, so an egress attempt
+    /// inside the PTY is denied by the kernel rather than by test logic.
+    #[tokio::test]
+    #[serial_test::serial(PTY_CHILD_NET)]
+    async fn restricted_pty_denies_network_egress() {
+        tokio::task::LocalSet::new()
+            .run_until(async {
+                let _guard = ChildNetOverride::apply(true, false);
+                // A marker the command would create if it ever ran past the
+                // denied connect. Its absence proves the block, not a crash.
+                let output = run_command_in_pty(
+                    "python3 -c 'import socket;\
+                     socket.create_connection((\"127.0.0.1\", 1), timeout=2)' 2>&1 \
+                     || echo __EGRESS_DENIED__",
+                )
+                .await;
+                drop(_guard);
+
+                assert!(
+                    output.contains("__EGRESS_DENIED__"),
+                    "restricted PTY must deny egress; got: {output}"
+                );
+                // EPERM surfaces as "Operation not permitted" from Python.
+                assert!(
+                    output.to_lowercase().contains("permitted")
+                        || output.contains("PermissionError")
+                        || output.contains("EPERM"),
+                    "the denial must be the kernel's EPERM, not a Python-side error; got: {output}"
+                );
+            })
+            .await;
+    }
+
+    /// Unrestricted: the same PTY still spawns a shell and streams real output.
+    #[tokio::test]
+    #[serial_test::serial(PTY_CHILD_NET)]
+    async fn unrestricted_pty_runs_normally() {
+        tokio::task::LocalSet::new()
+            .run_until(async {
+                let _guard = ChildNetOverride::apply(false, false);
+                let output = run_command_in_pty("echo __PTY_OK__").await;
+                drop(_guard);
+
+                assert!(
+                    output.contains("__PTY_OK__"),
+                    "unrestricted PTY must run the command; got: {output}"
+                );
+            })
+            .await;
+    }
+
+    /// Fail-closed: when the filter cannot be installed, `create_pty` returns an
+    /// error naming the filter, and the command never produces its side effect.
+    #[tokio::test]
+    #[serial_test::serial(PTY_CHILD_NET)]
+    async fn refused_pty_creation_never_runs_the_command() {
+        use std::os::unix::fs::PermissionsExt;
+
+        tokio::task::LocalSet::new()
+            .run_until(async {
+                let dir = tempfile::TempDir::new().expect("tempdir");
+                let marker = dir.path().join("child-ran");
+                // A real executable that records its own execution. `create_pty`
+                // spawns this as the "shell", so `marker` existing proves the
+                // child actually executed — the side effect the refusal must
+                // prevent.
+                let script = dir.path().join("would-be-shell");
+                std::fs::write(
+                    &script,
+                    format!("#!/bin/sh\ntouch '{}'\nexec /bin/sh\n", marker.display()),
+                )
+                .expect("write script");
+                std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755))
+                    .expect("chmod script");
+
+                let _guard = ChildNetOverride::apply(true, true);
+
+                let (gateway, _notifications) = recording_gateway();
+                let env = HashMap::from([("ENV".to_string(), String::new())]);
+                let result = create_pty(
+                    Some(script.to_str().expect("utf8 path")),
+                    None,
+                    env,
+                    24,
+                    80,
+                    None,
+                    gateway,
+                    TargetClientId::None,
+                )
+                .await;
+
+                drop(_guard);
+
+                let err = result.expect_err("refused PTY creation must not report success");
+                let msg = err.to_string();
+                assert!(
+                    msg.contains("seccomp filter could not be installed"),
+                    "the error must name the filter as the reason; got: {msg}"
+                );
+                assert!(
+                    msg.contains("refusing to spawn an unfiltered child"),
+                    "the error must state the fail-closed policy; got: {msg}"
+                );
+                // The decisive observation: the child never executed.
+                assert!(
+                    !marker.exists(),
+                    "the target command must not run when the filter is refused"
+                );
             })
             .await;
     }
