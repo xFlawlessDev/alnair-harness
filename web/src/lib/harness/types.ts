@@ -434,6 +434,36 @@ export interface QuestionRequest {
 	mode: 'default' | 'plan';
 }
 
+/* ------------------------------------------------------- mention & command */
+
+/**
+ * A file or directory the `@` menu can insert.
+ *
+ * Source: `alnair/fs/list`, whose `FsListNode` carries `name`, `path`, `type`
+ * (`file` | `directory`), and optional `size`. The menu lists one directory at
+ * a time, so a directory row is a drill-down rather than an insertable mention.
+ */
+export interface FileEntry {
+	name: string;
+	/** Path relative to the workspace root, as the agent reports it. */
+	path: string;
+	type: 'file' | 'directory';
+	size?: number;
+}
+
+/**
+ * A slash command the agent advertised. Source: ACP
+ * `available_commands_update`, whose `AvailableCommand` carries `name`,
+ * `description`, and an optional `input.hint`.
+ */
+export interface SlashCommand {
+	/** Without the leading slash. */
+	name: string;
+	description: string;
+	/** Placeholder for the argument, e.g. `<path>`. */
+	hint?: string;
+}
+
 /** One question's answer, in the shape the agent reads back. */
 export interface QuestionAnswer {
 	/** Labels in the order the user picked them. */

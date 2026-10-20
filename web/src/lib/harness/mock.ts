@@ -29,7 +29,15 @@ import type { ExtSessionUpdate } from './types/ext.js';
 import type { AskUserQuestionRequest } from './types/ext.js';
 import type { SessionUpdate } from './types/acp.js';
 import type { AlnairSessionRow } from './types/ext.js';
-import type { ContextUsage, ModelOption, PlanArtifact, Session, WorkspaceInfo } from './types.js';
+import type {
+	ContextUsage,
+	FileEntry,
+	ModelOption,
+	PlanArtifact,
+	Session,
+	SlashCommand,
+	WorkspaceInfo
+} from './types.js';
 
 /** Fixed clock so screenshots and hydration stay stable. */
 export const MOCK_NOW = new Date('2026-10-20T09:41:12Z');
@@ -352,3 +360,56 @@ export const suggestions = [
 	'Show the diff of the last checkpoint',
 	'Why is gn-verify still pending?'
 ];
+
+/* ------------------------------------------------------- mention & command */
+
+/**
+ * Slash commands as the agent advertises them: ACP `AvailableCommand` carries
+ * `name`, `description`, and an optional `input.hint`. This is the builtin set
+ * the runtime registers, trimmed to the ones a web client can act on.
+ */
+export const commands: SlashCommand[] = [
+	{ name: 'goal', description: 'Run the objective as a goal', hint: '<objective>' },
+	{ name: 'graph', description: 'Decompose the objective into a DAG', hint: '<objective>' },
+	{ name: 'swarm', description: 'Fan out over a list of items', hint: '<task>' },
+	{ name: 'plan', description: 'Enter plan mode' },
+	{ name: 'compact', description: 'Compact the conversation' },
+	{ name: 'model', description: 'Switch the model', hint: '<model>' },
+	{ name: 'clear', description: 'Clear the thread' },
+	{ name: 'rewind', description: 'Rewind to an earlier turn', hint: '<turn>' },
+	{ name: 'review', description: 'Review the working tree' },
+	{ name: 'memory', description: 'Browse and toggle memory' },
+	{ name: 'mcp', description: 'Manage MCP servers' },
+	{ name: 'terminal-setup', description: 'Per-terminal keyboard recipe' }
+];
+
+/**
+ * One directory as `alnair/fs/list` returns it: `name`, `path`, `type`.
+ * The menu fetches a directory at a time, so this stands in for a workspace.
+ */
+export const workspaceFiles: FileEntry[] = [
+	{ name: 'crates', path: 'crates', type: 'directory' },
+	{ name: 'web', path: 'web', type: 'directory' },
+	{ name: 'docs', path: 'docs', type: 'directory' },
+	{ name: '.alnair', path: '.alnair', type: 'directory' },
+	{ name: 'AGENTS.md', path: 'AGENTS.md', type: 'file', size: 12_480 },
+	{ name: 'Cargo.toml', path: 'Cargo.toml', type: 'file', size: 8_214 },
+	{ name: 'README.md', path: 'README.md', type: 'file', size: 4_920 },
+	{ name: 'plan.md', path: 'plan.md', type: 'file', size: 2_110 }
+];
+
+/** A nested listing, so drilling into a directory shows something. */
+export const filesByDirectory: Record<string, FileEntry[]> = {
+	web: [
+		{ name: 'src', path: 'web/src', type: 'directory' },
+		{ name: 'static', path: 'web/static', type: 'directory' },
+		{ name: 'package.json', path: 'web/package.json', type: 'file', size: 1_880 },
+		{ name: 'README.md', path: 'web/README.md', type: 'file', size: 9_640 },
+		{ name: 'vite.config.ts', path: 'web/vite.config.ts', type: 'file', size: 640 }
+	],
+	crates: [
+		{ name: 'codegen', path: 'crates/codegen', type: 'directory' },
+		{ name: 'common', path: 'crates/common', type: 'directory' },
+		{ name: 'build', path: 'crates/build', type: 'directory' }
+	]
+};

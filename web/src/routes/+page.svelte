@@ -10,7 +10,7 @@
 	import { Button } from '#lib/components/ui/button/index.js';
 	import * as Tooltip from '#lib/components/ui/tooltip/index.js';
 	import { useSessionStore } from '#lib/harness/context.js';
-	import { suggestions } from '#lib/harness/mock.js';
+	import { commands, filesByDirectory, suggestions, workspaceFiles } from '#lib/harness/mock.js';
 
 	const store = useSessionStore();
 
@@ -111,6 +111,9 @@
 					access: store.access
 				}}
 				busy={store.busy}
+				{commands}
+				files={workspaceFiles}
+				onbrowse={(path) => filesByDirectory[path] ?? []}
 				onsend={(text) => store.send(text)}
 				oncancel={() => store.cancel()}
 				onmodel={(id) => store.setModel(id)}
