@@ -3142,7 +3142,17 @@ mod tests {
 
         // A `show_search_hint: false` picker (command palette / arg-picker family):
         // the cursor must track focus (`search_active`), not render always-on.
-        let theme = Theme::current();
+        //
+        // A CONCRETE theme, not `Theme::current()`: the terminal-native theme
+        // sets `text_primary = Color::Reset`, which is also what an untouched
+        // cell holds — so the cursor probe below could never tell them apart
+        // and the assertion would fail for a reason unrelated to the behaviour.
+        let theme = Theme::alnairnight();
+        assert_ne!(
+            theme.text_primary,
+            Color::Reset,
+            "precondition: the cursor probe needs a concrete cursor colour"
+        );
         let config = cfg(false, false);
         let area = Rect::new(0, 0, 60, 16);
 

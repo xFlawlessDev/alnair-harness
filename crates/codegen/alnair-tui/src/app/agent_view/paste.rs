@@ -2503,22 +2503,32 @@ pub(super) mod paste_key_tests {
     }
     #[test]
     fn agent_completion_inserts_unreadable_file_url_as_path_text() {
+        // A `file://` URL whose target cannot be decoded as a local path is not
+        // a drop target, and the paste falls through to plain text.
+        //
+        // The fixture has to be decodable on the HOST: `url::Url::to_file_path`
+        // rejects a POSIX-shaped `file:///…` on Windows (no drive letter), so
+        // the original `/definitely/missing/...` literal only exercised the
+        // "unreadable path" branch on Unix — on Windows it never reached the
+        // path branch at all. Build a host-absolute URL that is still missing.
+        let missing = std::env::temp_dir()
+            .join("alnair-definitely-missing")
+            .join("xai-primary-paste.png");
+        let url = url::Url::from_file_path(&missing).expect("host-absolute url");
         let mut agent = make_agent();
         agent.set_active_pane(ActivePane::Prompt, true);
         let ctx = agent_completion_ctx(&agent, None);
         let completion = agent.complete_clipboard_attachment_paste(
             ctx,
             crate::app::actions::ProbedAttachment::NoRaster,
-            Some("file:///definitely/missing/xai-primary-paste.png".to_owned()),
+            Some(url.to_string()),
         );
         assert_eq!(
             completion,
             crate::app::actions::ClipboardPasteCompletion::Handled
         );
-        assert_eq!(
-            agent.prompt.text(),
-            "/definitely/missing/xai-primary-paste.png "
-        );
+        // The unreadable target degrades to its PATH text.
+        assert_eq!(agent.prompt.text(), format!("{} ", missing.display()));
         assert!(agent.prompt.images.is_empty());
     }
     #[test]

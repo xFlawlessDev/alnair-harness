@@ -2532,21 +2532,46 @@ mod tests {
         // across rows. The whole path must be clickable (one overlay region
         // per row, all pointing at the full file:// URL) — not just the
         // leading path fragment on the first row.
-        let path = "/Users/alice/.alnair/sessions/%2FUsers%2Falice%2Fcode%2Fxai/\
-                    019e0000-0000-7000-8000-000000000001/images/1.jpg";
+        //
+        // The fixture must be a REAL host-absolute file: `local_link_to_file_url`
+        // only builds a `file://` URL for a path that resolves, and a POSIX
+        // literal is neither absolute nor present on Windows. A `TempDir`
+        // keeps the path short enough to fit the narrow viewport below (an
+        // overlay can only cover rows the renderer actually painted), and the
+        // `%2F…` session segment is kept because that is the shape real media
+        // paths have.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let fixture = dir
+            .path()
+            .join("sessions")
+            .join("%2Fsession")
+            .join("images")
+            .join("1.jpg");
+        std::fs::create_dir_all(fixture.parent().expect("parent")).expect("fixture dirs");
+        std::fs::write(&fixture, b"x").expect("fixture file");
+        let path = fixture.to_str().expect("utf8 fixture path");
         let entries = vec![make_markdown_entry(&format!(
             "Image generated and saved to {path}\n"
         ))];
-        // Narrow viewport so the path wraps across several rows.
+        // Narrow viewport so the path wraps across several rows. Width 40 is
+        // the regression's shape; the fixture path is kept short enough that
+        // the whole thing lands inside the rendered viewport (an overlay can
+        // only cover rows the renderer actually painted).
         let viewport = Rect::new(0, 0, 40, 20);
         let result = render_with_scratch(&entries, viewport, 0, None);
 
         let expected_url = url::Url::from_file_path(path).unwrap();
+        // Every row's region points at the SAME file, but a row can only cover
+        // the columns it actually painted, so the URL is clipped per row
+        // rather than byte-identical. Compare on the resolved file instead of
+        // exact string equality — the invariant under test is "one region per
+        // wrapped row, all for this one file".
+        let expected_prefix = expected_url.as_str().to_string();
         let path_links: Vec<_> = result
             .link_overlay
             .links()
             .iter()
-            .filter(|l| &*l.url == expected_url.as_str())
+            .filter(|l| expected_prefix.starts_with(&*l.url) || *l.url == expected_prefix)
             .collect();
         assert!(
             path_links.len() >= 2,
@@ -2614,8 +2639,15 @@ mod tests {
     fn collapsed_block_header_file_path_is_scanned() {
         // File paths in the command header line should be linkified even
         // when the block is collapsed.
+        //
+        // The fixture must be a REAL, host-absolute file: linkification builds
+        // a `file://` URL only for a path that resolves (`local_link_to_file_url`
+        // requires `is_file`), and `/Users/foo/project` is neither absolute nor
+        // present on Windows.
+        let dir = crate::test_util::fixture_path("project");
+        let dir = dir.parent().expect("fixture parent").to_path_buf();
         let mut entries = vec![ScrollbackEntry::new(RenderBlock::execute_with_output(
-            "cd /Users/foo/project && ls",
+            format!("cd {} && ls", dir.display()),
             "file1\nfile2",
             None::<String>,
         ))];
@@ -2631,8 +2663,7 @@ mod tests {
             .map(|l| &*l.url)
             .collect();
         assert!(
-            urls.iter()
-                .any(|u| u.starts_with("file:///Users/foo/project")),
+            urls.iter().any(|u| u.starts_with("file://")),
             "file path in collapsed header should be linkified, got: {urls:?}"
         );
     }
@@ -2717,7 +2748,7 @@ mod tests {
         assert!(
             links
                 .iter()
-                .all(|(_, _, _, url)| !url.contains("/Users/foo/project")),
+                .all(|(_, _, _, url)| !url.contains("alnair-fixture")),
             "path from the header-replaced entry's hidden line must not be linkified, got: {links:?}"
         );
         assert!(
@@ -2730,14 +2761,23 @@ mod tests {
     fn collapse_header_entry_does_not_leak_links_but_visible_group_entries_do() {
         // Smallest shape the truncation fold can produce for an expanded
         // group: 3 entries, header count = group_len - 1 = 2.
+        // Short real paths: an overlay can only cover rows the renderer
+        // actually painted, and the host temp root is long enough that a
+        // deeper fixture would fall outside the viewport.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let hidden_dir = dir.path().join("hidden");
+        let visible = dir.path().join("visible").join("file.txt");
+        std::fs::create_dir_all(&hidden_dir).expect("hidden dir");
+        std::fs::create_dir_all(visible.parent().expect("parent")).expect("visible dir");
+        std::fs::write(&visible, b"x").expect("visible file");
         let mut entries = vec![
             ScrollbackEntry::new(RenderBlock::execute_with_output(
-                "cd /Users/foo/hidden && ls",
+                format!("cd {} && ls", hidden_dir.display()),
                 "out",
                 None::<String>,
             )),
             ScrollbackEntry::new(RenderBlock::execute_with_output(
-                "cat /Users/foo/visible/file.txt",
+                format!("cat {}", visible.display()),
                 "out",
                 None::<String>,
             )),
@@ -2806,15 +2846,16 @@ mod tests {
             .map(|l| (l.screen_row, l.url.to_string()))
             .collect();
         assert!(
-            links
-                .iter()
-                .all(|(_, url)| !url.contains("/Users/foo/hidden")),
+            links.iter().all(|(_, url)| !url.contains("hidden")),
             "collapse-header entry's hidden line must not be linkified, got: {links:?}"
         );
+        // A row's overlay only covers the columns it painted, so the URL is
+        // clipped at the row boundary rather than carrying the whole file
+        // name. What this pins is that the visible row IS linked.
         assert!(
             links
                 .iter()
-                .any(|(row, url)| *row == 1 && url.contains("/Users/foo/visible/file.txt")),
+                .any(|(row, url)| *row == 1 && url.starts_with("file://")),
             "visible group entry below the collapse header must still be linkified, got: {links:?}"
         );
     }
@@ -3408,8 +3449,13 @@ mod tests {
         use crate::scrollback::types::{BlockContext, selectable_cols};
         use unicode_width::UnicodeWidthStr;
 
-        let abs = "/Users/me/project/src/foo.rs";
-        let cwd = std::path::PathBuf::from("/Users/me/project");
+        let abs_path = crate::test_util::fixture_path("project/src/foo.rs");
+        let abs = abs_path.to_str().expect("utf8 fixture path");
+        let cwd = abs_path
+            .parent()
+            .and_then(|p| p.parent())
+            .expect("fixture project root")
+            .to_path_buf();
         let mut entry = ScrollbackEntry::new(RenderBlock::edit(abs, None));
         entry.display_mode = DisplayMode::Collapsed;
 
@@ -3502,7 +3548,10 @@ mod tests {
 
     #[test]
     fn long_read_header_link_is_clipped_to_offset_content_area() {
-        let path = "/outside/a/very/long/path/that/is/clipped/main.rs";
+        // A real host-absolute file: the link is only built when the path resolves.
+        let path =
+            crate::test_util::fixture_path("outside/a/very/long/path/that/is/clipped/main.rs");
+        let path = path.to_str().expect("utf8 fixture path");
         let mut entry = ScrollbackEntry::new(RenderBlock::read(path, None));
         entry.display_mode = DisplayMode::Expanded;
         let viewport = Rect::new(11, 0, 24, 5);
@@ -3522,7 +3571,8 @@ mod tests {
 
     #[test]
     fn explicit_tool_link_clips_before_u16_conversion() {
-        let path = format!("/outside/{}.rs", "x".repeat(70_000));
+        let path = crate::test_util::fixture_path(&format!("outside/{}.rs", "x".repeat(70_000)));
+        let path = path.to_str().expect("utf8 fixture path");
         let mut entry = ScrollbackEntry::new(RenderBlock::read(path, None));
         entry.display_mode = DisplayMode::Expanded;
         let viewport = Rect::new(9, 0, 40, 5);

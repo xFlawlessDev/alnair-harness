@@ -136,6 +136,32 @@ mod shell_suggestion_key_tests {
     use crate::views::suggestion_controller::{CompletionItemParsed, SuggestionSource};
     use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
+    /// Bash-mode Tab completion is gated on the SHELL understanding POSIX
+    /// (`alnair_config::shell::has_unix_utilities`), not on the OS: Unix always
+    /// qualifies, Windows only under Git Bash.
+    ///
+    /// These tests drive the keystroke through the real router, so on a
+    /// PowerShell/cmd host they would assert a meaning Tab deliberately does
+    /// not have there. They return early instead — loudly, so a skip never
+    /// reads as coverage.
+    fn completion_available() -> bool {
+        alnair_config::shell::has_unix_utilities()
+    }
+
+    /// Early-return (with a visible reason) when this host routes Tab to
+    /// focus-cycling instead of shell completion.
+    macro_rules! require_completion {
+        () => {
+            if !completion_available() {
+                eprintln!(
+                    "skipped on this host: bash-mode Tab completion needs a POSIX-compatible \
+                     shell; Tab is focus-cycling here (PowerShell/cmd)"
+                );
+                return;
+            }
+        };
+    }
+
     fn key(code: KeyCode) -> KeyEvent {
         KeyEvent::new(code, KeyModifiers::NONE)
     }
@@ -317,6 +343,7 @@ mod shell_suggestion_key_tests {
     /// candidate insta-accepts instead — see the terminal-Tab tests below).
     #[test]
     fn tab_opens_dropdown_without_ghost() {
+        require_completion!();
         let mut agent = bash_agent("ls | gr");
         agent.prompt.suggestions.dropdown.items =
             vec![item("grep", Some(5..7)), item("grip", Some(5..7))];
@@ -337,6 +364,7 @@ mod shell_suggestion_key_tests {
     /// fetch — no env flag, no AI, dropdown-scale limit.
     #[test]
     fn tab_without_items_fires_deterministic_fetch() {
+        require_completion!();
         let mut agent = bash_agent_always_on("cat no");
         let outcome = agent.handle_prompt_key_for_test(&key(KeyCode::Tab));
         assert!(matches!(outcome, InputOutcome::Changed));
@@ -365,6 +393,7 @@ mod shell_suggestion_key_tests {
     /// RPC, one landing that runs the Tab semantics once.
     #[test]
     fn repeat_tab_fires_single_fetch_while_pending() {
+        require_completion!();
         let mut agent = bash_agent_always_on("cat no");
         let _ = agent.handle_prompt_key_for_test(&key(KeyCode::Tab));
         let _ = agent.handle_prompt_key_for_test(&key(KeyCode::Tab));
@@ -385,6 +414,7 @@ mod shell_suggestion_key_tests {
     /// completing over the old candidate set.
     #[test]
     fn tab_with_stale_items_refetches() {
+        require_completion!();
         let mut agent = bash_agent_always_on("cat no");
         agent.prompt.suggestions.dropdown.items = vec![file_item("cat notes.md", "notes.md", 4..6)];
         agent.prompt.suggestions.dropdown.generation = 7;
@@ -404,6 +434,7 @@ mod shell_suggestion_key_tests {
     /// focus-cycling fallthrough.
     #[test]
     fn tab_on_empty_bash_draft_falls_through_to_focus_scrollback() {
+        require_completion!();
         let mut agent = bash_agent_always_on("");
         let outcome = agent.handle_prompt_key_for_test(&key(KeyCode::Tab));
         assert!(matches!(
@@ -417,6 +448,7 @@ mod shell_suggestion_key_tests {
     /// completion — the surface is bash-mode-only.
     #[test]
     fn tab_in_normal_mode_does_not_fetch() {
+        require_completion!();
         let mut agent = super::test_fixtures::make_agent();
         agent.prompt.textarea.insert_str("cat no");
 
@@ -434,6 +466,7 @@ mod shell_suggestion_key_tests {
     /// dropdown flash — and the accept re-fetch keeps the pipeline alive.
     #[test]
     fn tab_single_token_candidate_accepts_without_dropdown_flash() {
+        require_completion!();
         let mut agent = bash_agent("cat no");
         agent.prompt.suggestions.dropdown.items = vec![file_item("cat notes.md", "notes.md", 4..6)];
 
@@ -448,6 +481,7 @@ mod shell_suggestion_key_tests {
     /// direct deterministic fetch instead of a debounce.
     #[test]
     fn tab_single_candidate_accepts_and_kicks_fetch_always_on() {
+        require_completion!();
         let mut agent = bash_agent_always_on("cat no");
         agent.prompt.suggestions.dropdown.items = vec![file_item("cat notes.md", "notes.md", 4..6)];
 
@@ -470,6 +504,7 @@ mod shell_suggestion_key_tests {
     /// terminal Tab semantics apply to token completions only.
     #[test]
     fn tab_single_history_item_opens_dropdown() {
+        require_completion!();
         let mut agent = bash_agent("git st");
         agent.prompt.suggestions.dropdown.items =
             vec![history_item("git status --porcelain", 0..6)];
@@ -486,6 +521,7 @@ mod shell_suggestion_key_tests {
     /// plain-opens instead, sole match or not.
     #[test]
     fn tab_sole_rangeless_path_row_opens_dropdown_never_accepts() {
+        require_completion!();
         let mut agent = bash_agent("ls | gr");
         agent.prompt.suggestions.dropdown.items = vec![item("grep", None)];
 
@@ -499,6 +535,7 @@ mod shell_suggestion_key_tests {
     /// file row) forces plain-open too — no insta-accept, no fill.
     #[test]
     fn tab_mixed_rangeless_and_ranged_rows_open_dropdown() {
+        require_completion!();
         let mut agent = bash_agent("ls | gr");
         agent.prompt.suggestions.dropdown.items = vec![
             item("grep", None),
@@ -516,6 +553,7 @@ mod shell_suggestion_key_tests {
     /// plain-opens so the user sees every candidate, history included.
     #[test]
     fn tab_mixed_file_and_history_items_opens_dropdown() {
+        require_completion!();
         let mut agent = bash_agent("cat no");
         agent.prompt.suggestions.dropdown.items = vec![
             history_item("cat notes.md --verbose", 0..6),
@@ -532,6 +570,7 @@ mod shell_suggestion_key_tests {
     /// not a command) — Tab plain-opens.
     #[test]
     fn tab_whole_line_history_items_open_dropdown_not_fill() {
+        require_completion!();
         let mut agent = bash_agent("git st");
         agent.prompt.suggestions.dropdown.items = vec![
             history_item("git status --porcelain-A", 0..6),
@@ -550,6 +589,7 @@ mod shell_suggestion_key_tests {
     /// dropdown.
     #[test]
     fn tab_fills_common_prefix_then_opens_dropdown_on_refresh() {
+        require_completion!();
         let mut agent = bash_agent("cat al");
         agent.prompt.suggestions.dropdown.items = vec![
             file_item("cat alpha_one.txt", "alpha_one.txt", 4..6),
@@ -598,6 +638,7 @@ mod shell_suggestion_key_tests {
     /// fetch (no debounce to ride on).
     #[test]
     fn tab_fill_kicks_deterministic_fetch_always_on() {
+        require_completion!();
         let mut agent = bash_agent_always_on("cat al");
         agent.prompt.suggestions.dropdown.items = vec![
             file_item("cat alpha_one.txt", "alpha_one.txt", 4..6),
@@ -655,6 +696,7 @@ mod shell_suggestion_key_tests {
     /// second Tab rides the normal open-dropdown handling.
     #[test]
     fn tab_fill_clipping_paste_chip_opens_dropdown_without_refetch() {
+        require_completion!();
         // Two candidates whose shared range (chip bytes 0..2, "li") fills
         // to "lima_" — a valid Fill decision over an unwritable span.
         let (mut agent, text) = chip_agent(vec![
@@ -686,6 +728,7 @@ mod shell_suggestion_key_tests {
     /// refetch the same set. The probe degrades to showing the candidate.
     #[test]
     fn tab_insta_accept_clipping_paste_chip_opens_dropdown_without_refetch() {
+        require_completion!();
         let (mut agent, text) = chip_agent(vec![file_item("lima_one.txt", "lima_one.txt", 0..2)]);
 
         let outcome = agent.handle_prompt_key_for_test(&key(KeyCode::Tab));
@@ -796,6 +839,7 @@ mod shell_suggestion_key_tests {
     /// the same keystroke in bash mode debounces a request.
     #[test]
     fn pipeline_fires_only_in_bash_mode() {
+        require_completion!();
         let mut agent = super::test_fixtures::make_agent();
         agent.prompt.suggestions.enabled = true;
 
@@ -826,6 +870,7 @@ mod shell_suggestion_key_tests {
     /// dismissal path), and the draft survives.
     #[test]
     fn esc_closes_tab_fetched_dropdown() {
+        require_completion!();
         let mut agent = bash_agent_always_on("git st");
         let _ = agent.handle_prompt_key_for_test(&key(KeyCode::Tab));
         let generation = agent.prompt.suggestions.generation();
@@ -856,6 +901,7 @@ mod shell_suggestion_key_tests {
     /// the landing response for the pre-edit text is stale.
     #[test]
     fn typing_invalidates_tab_state_always_on() {
+        require_completion!();
         let mut agent = bash_agent_always_on("cat no");
         agent.prompt.suggestions.dropdown.items = vec![file_item("cat notes.md", "notes.md", 4..6)];
         let gen_before = agent.prompt.suggestions.generation();
@@ -881,6 +927,7 @@ mod shell_suggestion_key_tests {
     /// the clicked cursor instead of completing the old one.
     #[test]
     fn prompt_click_invalidates_cached_items_before_tab() {
+        require_completion!();
         use crate::app::agent_view::AgentPane;
         use crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
         let mut agent = bash_agent_always_on("cat no");

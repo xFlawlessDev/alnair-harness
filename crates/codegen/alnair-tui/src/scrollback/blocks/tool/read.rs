@@ -520,8 +520,12 @@ mod tests {
 
     #[test]
     fn expanded_shows_relative_when_under_cwd_preamble_absolute() {
-        let abs = "/Users/me/project/src/main.rs";
-        let cwd = std::path::PathBuf::from("/Users/me/project");
+        // Host-absolute root: `/Users/…` is not absolute on Windows, so the
+        // relative-vs-absolute split under test would never trigger there.
+        let root = crate::test_util::absolute_fixture_root();
+        let abs_path = root.join("src").join("main.rs");
+        let abs = abs_path.to_str().expect("utf8 fixture path");
+        let cwd = root.clone();
         let block = ReadToolCallBlock::new(abs).with_content("hello".into(), 1);
         let mut ctx = make_ctx();
         ctx.mode = DisplayMode::Expanded;
@@ -533,7 +537,10 @@ mod tests {
             .iter()
             .map(|s| s.content.as_ref())
             .collect();
-        assert_eq!(header, "Read src/main.rs");
+        assert_eq!(
+            header,
+            format!("Read {}", crate::test_util::native("src/main.rs"))
+        );
 
         let preamble = block.preamble(&ctx).unwrap();
         let preamble_text: String = preamble
@@ -542,7 +549,7 @@ mod tests {
             .flat_map(|l| l.spans.iter())
             .map(|s| s.content.as_ref())
             .collect();
-        assert_eq!(preamble_text, "Read /Users/me/project/src/main.rs");
+        assert_eq!(preamble_text, format!("Read {abs}"));
     }
 
     #[test]
@@ -597,20 +604,27 @@ mod tests {
     fn expanded_header_selection_matches_relative_path() {
         use crate::scrollback::types::derive_selection_text;
 
-        let block = ReadToolCallBlock::new("/Users/me/project/src/main.rs");
+        let root = crate::test_util::absolute_fixture_root();
+        let abs = root.join("src").join("main.rs");
+        let block = ReadToolCallBlock::new(abs.to_str().expect("utf8 fixture path"));
         let mut ctx = make_ctx();
         ctx.mode = DisplayMode::Expanded;
-        ctx.cwd = Some(std::path::PathBuf::from("/Users/me/project"));
+        ctx.cwd = Some(root);
         let header = &block.output(&ctx).lines[0];
-        assert_eq!(derive_selection_text(header), "src/main.rs");
+        assert_eq!(
+            derive_selection_text(header),
+            crate::test_util::native("src/main.rs")
+        );
     }
 
     #[test]
     fn header_link_url_is_absolute_for_collapsed_and_expanded() {
-        let abs = "/Users/me/project/src/main.rs";
+        let root = crate::test_util::absolute_fixture_root();
+        let abs_path = root.join("src").join("main.rs");
+        let abs = abs_path.to_str().expect("utf8 fixture path");
         let block = ReadToolCallBlock::new(abs);
         let mut ctx = make_ctx();
-        ctx.cwd = Some(std::path::PathBuf::from("/Users/me/project"));
+        ctx.cwd = Some(root);
 
         let collapsed = block.output(&ctx);
         let url = collapsed.lines[0].link_url.as_ref().expect("link_url");
@@ -625,7 +639,7 @@ mod tests {
         let expanded = block.output(&ctx);
         assert_eq!(
             expanded.lines[0].content.spans[1].content.as_ref(),
-            "src/main.rs"
+            crate::test_util::native("src/main.rs")
         );
         assert_eq!(expanded.lines[0].link_url.as_deref(), Some(url.as_ref()));
     }

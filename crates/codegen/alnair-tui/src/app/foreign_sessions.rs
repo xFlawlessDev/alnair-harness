@@ -609,8 +609,11 @@ mod tests {
 
     #[tokio::test]
     async fn async_gate_supports_bundled_and_user_skill_locations() {
+        // Probe on the NORMALISED tail rather than a `/`-joined literal: the
+        // gate builds its candidate paths with `Path::join`, so on Windows the
+        // separator is `\` and a `/`-only `contains` would never match.
         let enabled = gated_sources_async_with(compat_all(), Path::new("/alnair"), |path| {
-            let path = path.to_string_lossy();
+            let path = path.to_string_lossy().replace('\\', "/");
             std::future::ready(
                 path.contains("bundled/skills/resume-claude")
                     || path.contains("skills/resume-codex")

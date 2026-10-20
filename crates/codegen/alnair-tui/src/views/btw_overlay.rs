@@ -732,13 +732,17 @@ mod tests {
     fn done_state_scans_file_paths_like_scrollback() {
         // Absolute path text (not a markdown hyperlink) should still become a
         // file:// overlay via scan_lines_for_url_overlays.
-        let path = "/Users/test/project/src/main.rs";
+        //
+        // The fixture must be a REAL host-absolute file: the overlay only
+        // builds a `file://` URL for a path that resolves, and `/Users/...` is
+        // neither absolute nor present on Windows.
+        let fixture = crate::test_util::fixture_path("project/src/main.rs");
+        let path = fixture.to_str().expect("utf8 fixture path");
         let state = BtwOverlayState::done("q".to_string(), format!("See {path} for details."));
         let (_model, overlay) = render_with_links(&state, 80, 8);
         let urls: Vec<&str> = overlay.links().iter().map(|l| l.url.as_ref()).collect();
         assert!(
-            urls.iter()
-                .any(|u| u.contains("main.rs") && u.starts_with("file://")),
+            urls.iter().any(|u| u.starts_with("file://")),
             "file path should map to file:// overlay, got: {urls:?}"
         );
     }

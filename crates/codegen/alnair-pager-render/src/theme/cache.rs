@@ -304,6 +304,13 @@ pub fn test_lock() -> &'static Mutex<()> {
 pub fn pin_theme() -> std::sync::MutexGuard<'static, ()> {
     let guard = test_lock().lock().unwrap_or_else(|e| e.into_inner());
     set(ThemeKind::AlnairNight);
+    // Clear the terminal-native lock: another test's `reset_for_test` /
+    // `set_terminal_native_lock` leaves it engaged, and under it
+    // `Theme::current()` returns the terminal-default palette where most
+    // accents collapse onto `Color::Reset` — which silently defeats any
+    // assertion that distinguishes two accent slots. Pinning a theme must pin
+    // the WHOLE resolution, not just the kind.
+    set_terminal_native_lock(false);
     // Color level is a write-once `OnceLock`; tests run without a TTY so it
     // resolves to `TrueColor` anyway. Pin it explicitly (best-effort: ignore the
     // already-initialized `Err`) so the measure path that reads it stays fixed.

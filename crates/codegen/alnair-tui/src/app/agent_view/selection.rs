@@ -1493,7 +1493,7 @@ mod tests {
             .ranges
             .iter()
             .flat_map(|range| &range.lines)
-            .find(|line| line.text == "src/lib.rs")
+            .find(|line| line.text == crate::test_util::native("src/lib.rs"))
             .expect("child-relative Read header")
             .clone();
         let content_width = rendered
@@ -1522,14 +1522,17 @@ mod tests {
                 |source| source(line.block_line_idx),
             )
             .flatten();
-        assert_eq!(source_text.as_deref(), Some("src/lib.rs"));
+        assert_eq!(
+            source_text.as_deref(),
+            Some(crate::test_util::native("src/lib.rs").as_str())
+        );
         {
             let child = parent.subagent_views.get(&child_id).expect("active child");
             let entry = child.scrollback.get(0).expect("child Read entry");
             let cached = entry.cached_output_ref();
             assert_eq!(
                 derive_selection_text(&cached.lines[line.block_line_idx]),
-                "src/lib.rs",
+                crate::test_util::native("src/lib.rs"),
                 "copy helper must not rebuild the child cache against parent cwd"
             );
         }
@@ -1556,7 +1559,10 @@ mod tests {
         };
         assert_eq!(
             parent.reconstruct_drag_copy(&drag),
-            Some(("src/lib.rs".to_string(), SelectionKind::Linear))
+            Some((
+                crate::test_util::native("src/lib.rs"),
+                SelectionKind::Linear
+            ))
         );
     }
 

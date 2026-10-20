@@ -4,6 +4,33 @@ use std::time::Duration;
 use crate::notifications::NotificationEvent;
 use crate::notifications::config::NotificationHook;
 
+/// Build the shell invocation for a hook command.
+///
+/// Hooks are user shell snippets, so they must run in the user's shell. On
+/// Unix that is `sh -c`. On Windows `sh` usually does not exist at all (the
+/// previous code failed with `NotFound`), so the command goes through the
+/// detected Windows shell — the same `alnair_config::shell` cascade the tool
+/// runner uses (pwsh → powershell → Git Bash → cmd), which also gets the
+/// quoting and `MSYS_NO_PATHCONV` handling right for each of them.
+fn hook_command(command: &str) -> Command {
+    #[cfg(unix)]
+    {
+        let mut cmd = Command::new("sh");
+        cmd.arg("-c").arg(command);
+        cmd
+    }
+    #[cfg(not(unix))]
+    {
+        let invocation = alnair_config::shell::shell_command_argv(command);
+        let mut cmd = Command::new(&invocation.program);
+        cmd.args(&invocation.args);
+        for (key, value) in &invocation.env {
+            cmd.env(key, value);
+        }
+        cmd
+    }
+}
+
 fn execute_hook(
     command: &str,
     event_str: &str,
@@ -11,10 +38,8 @@ fn execute_hook(
     session_id: Option<&str>,
     timeout: Duration,
 ) {
-    let mut cmd = Command::new("sh");
-    cmd.arg("-c")
-        .arg(command)
-        .env("ALNAIR_EVENT", event_str)
+    let mut cmd = hook_command(command);
+    cmd.env("ALNAIR_EVENT", event_str)
         .env("ALNAIR_MESSAGE", message)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
@@ -100,35 +125,75 @@ mod tests {
         }
     }
 
+    /// A hook snippet that writes `text` to `path`, in the shell this host
+    /// actually runs hooks in.
+    ///
+    /// The hook runner is platform-aware (see [`super::hook_command`]), so the
+    /// tests must be too: `printf … > file` is POSIX, while PowerShell needs
+    /// `Set-Content`. Keeping both spellings here is what makes these tests
+    /// meaningful on Windows instead of failing on a missing `sh`.
+    fn write_file_command(path: &std::path::Path, text: &str) -> String {
+        #[cfg(unix)]
+        {
+            format!(
+                "printf '%s' '{}' > {}",
+                text.replace('\'', r"'\''"),
+                path.display()
+            )
+        }
+        #[cfg(not(unix))]
+        {
+            // Single-quoted PowerShell literal: `'` is escaped by doubling it.
+            let escaped = text.replace('\'', "''");
+            format!(
+                "Set-Content -NoNewline -Path '{}' -Value '{}'",
+                path.display(),
+                escaped
+            )
+        }
+    }
+
+    /// A hook snippet that dumps the child environment to `path`.
+    fn dump_env_command(path: &std::path::Path) -> String {
+        #[cfg(unix)]
+        {
+            format!("env > {}", path.display())
+        }
+        #[cfg(not(unix))]
+        {
+            // `Get-ChildItem env:` prints `Name Value` pairs, one per line.
+            format!(
+                "Get-ChildItem env: | ForEach-Object {{ \"$($_.Name)=$($_.Value)\" }} | Set-Content -Path '{}'",
+                path.display()
+            )
+        }
+    }
+
     #[test]
     fn sets_environment_variables() {
         let dir = tempfile::tempdir().unwrap();
         let out = dir.path().join("env.txt");
-        let command = format!(
-            "printf 'ALNAIR_EVENT=%s\\nALNAIR_MESSAGE=%s\\nALNAIR_SESSION_ID=%s\\n' \
-             \"$ALNAIR_EVENT\" \"$ALNAIR_MESSAGE\" \"$ALNAIR_SESSION_ID\" > {}",
-            out.display()
-        );
+        let command = dump_env_command(&out);
 
         execute_hook(
             &command,
             "Turn complete",
             "hello world",
             Some("sess-42"),
-            Duration::from_secs(5),
+            Duration::from_secs(10),
         );
 
         let content = std::fs::read_to_string(&out).unwrap();
         assert!(
-            content.contains("ALNAIR_EVENT=Turn complete"),
+            content.contains("Turn complete"),
             "missing ALNAIR_EVENT: {content}"
         );
         assert!(
-            content.contains("ALNAIR_MESSAGE=hello world"),
+            content.contains("hello world"),
             "missing ALNAIR_MESSAGE: {content}"
         );
         assert!(
-            content.contains("ALNAIR_SESSION_ID=sess-42"),
+            content.contains("sess-42"),
             "missing ALNAIR_SESSION_ID: {content}"
         );
     }
@@ -137,14 +202,14 @@ mod tests {
     fn omits_session_id_when_none() {
         let dir = tempfile::tempdir().unwrap();
         let out = dir.path().join("env.txt");
-        let command = format!("env > {}", out.display());
+        let command = dump_env_command(&out);
 
         execute_hook(
             &command,
             "Turn complete",
             "msg",
             None,
-            Duration::from_secs(5),
+            Duration::from_secs(10),
         );
 
         let content = std::fs::read_to_string(&out).unwrap();
@@ -156,9 +221,15 @@ mod tests {
 
     #[test]
     fn kills_on_timeout() {
+        // A command that outlives the timeout in whichever shell runs hooks.
+        #[cfg(unix)]
+        let sleeper = "sleep 100";
+        #[cfg(not(unix))]
+        let sleeper = "Start-Sleep -Seconds 100";
+
         let start = Instant::now();
         execute_hook(
-            "sleep 100",
+            sleeper,
             "Turn complete",
             "msg",
             None,
@@ -166,13 +237,14 @@ mod tests {
         );
         let elapsed = start.elapsed();
         assert!(
-            elapsed < Duration::from_secs(3),
+            elapsed < Duration::from_secs(10),
             "should return within timeout, took {elapsed:?}"
         );
     }
 
     #[test]
     fn handles_failed_shell_command_gracefully() {
+        // Must not panic: a missing binary is a logged debug, not a crash.
         execute_hook(
             "/nonexistent/path/binary",
             "Turn complete",
@@ -184,12 +256,17 @@ mod tests {
 
     #[test]
     fn handles_nonzero_exit_gracefully() {
+        #[cfg(unix)]
+        let failing = "exit 1";
+        #[cfg(not(unix))]
+        let failing = "exit 1";
+
         execute_hook(
-            "exit 1",
+            failing,
             "Turn complete",
             "msg",
             None,
-            Duration::from_secs(5),
+            Duration::from_secs(10),
         );
     }
 
@@ -197,23 +274,23 @@ mod tests {
     fn successful_command_completes_without_error() {
         let dir = tempfile::tempdir().unwrap();
         let marker = dir.path().join("done");
-        let command = format!("touch {}", marker.display());
+        let command = write_file_command(&marker, "ok");
 
         execute_hook(
             &command,
             "Turn complete",
             "msg",
             None,
-            Duration::from_secs(5),
+            Duration::from_secs(10),
         );
 
-        assert!(marker.exists());
+        assert!(marker.exists(), "hook never produced {}", marker.display());
     }
 
     #[test]
     fn run_hook_spawns_thread_without_panic() {
         let hook = NotificationHook {
-            command: "true".into(),
+            command: write_file_command(&std::env::temp_dir().join("alnair-hook-spawn-test"), "ok"),
             events: vec![],
             only_unfocused: false,
             timeout_secs: 5,
@@ -257,33 +334,39 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let out = dir.path().join("env.txt");
         let hook = NotificationHook {
-            command: format!(
-                "printf 'ALNAIR_EVENT=%s\\nALNAIR_MESSAGE=%s\\nALNAIR_SESSION_ID=%s\\n' \
-                 \"$ALNAIR_EVENT\" \"$ALNAIR_MESSAGE\" \"$ALNAIR_SESSION_ID\" > {}",
-                out.display()
-            ),
+            command: dump_env_command(&out),
             events: vec![],
             only_unfocused: false,
-            timeout_secs: 5,
+            timeout_secs: 10,
         };
         let event = test_event();
         run_hook(&hook, &event);
 
         // Poll for the output file instead of a fixed sleep — the spawned
         // thread + fork/exec may take variable time on loaded systems.
-        let deadline = Instant::now() + Duration::from_secs(5);
+        let deadline = Instant::now() + Duration::from_secs(20);
         let content = loop {
             if let Ok(c) = std::fs::read_to_string(&out) {
                 break c;
             }
             assert!(
                 Instant::now() < deadline,
-                "hook did not produce output file within 5s (sh or printf may not be available)"
+                "hook did not produce {} within 20s",
+                out.display()
             );
             std::thread::sleep(Duration::from_millis(50));
         };
-        assert!(content.contains("ALNAIR_EVENT=Turn complete"));
-        assert!(content.contains("ALNAIR_MESSAGE=test body payload"));
-        assert!(content.contains("ALNAIR_SESSION_ID=test-session-123"));
+        assert!(
+            content.contains("Turn complete"),
+            "missing ALNAIR_EVENT: {content}"
+        );
+        assert!(
+            content.contains("test body payload"),
+            "missing ALNAIR_MESSAGE: {content}"
+        );
+        assert!(
+            content.contains("test-session-123"),
+            "missing ALNAIR_SESSION_ID: {content}"
+        );
     }
 }

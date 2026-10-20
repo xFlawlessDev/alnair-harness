@@ -14,6 +14,18 @@ use crate::key;
 use crate::views::prompt_widget::PromptEvent;
 use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 
+/// Whether bash-mode Tab completion may consume the keystroke here.
+///
+/// The completion stack's tokenizer and re-quoting are POSIX
+/// (`alnair_shell::extensions::suggest::shell_token`), so the gate is the
+/// SHELL's capability, not the OS: Unix always qualifies, Windows only under
+/// Git Bash (`alnair_config::shell::has_unix_utilities`). Under PowerShell or
+/// `cmd.exe` Tab keeps its legacy focus-cycling meaning instead of completing
+/// against a tokenizer that would misread the line.
+fn shell_tab_completion_supported() -> bool {
+    alnair_config::shell::has_unix_utilities()
+}
+
 impl AgentView {
     pub fn prompt_history_loading(&self) -> bool {
         self.session.prompt_history_loading && self.prompt.text().is_empty()
@@ -307,16 +319,20 @@ impl AgentView {
                     }
                     _ => {}
                 }
-            } else if cfg!(not(windows))
-                && key!(Tab).matches(key)
+            } else if key!(Tab).matches(key)
                 && self.prompt_input_mode == PromptInputMode::Bash
                 && !self.prompt.text().is_empty()
+                && shell_tab_completion_supported()
             {
-                // Priority 5: terminal-like Tab in bash mode — always on.
-                // Windows keeps the legacy focus-cycling Tab instead: the
-                // completion stack's tokenizer/quoting is POSIX-only (see
-                // the shell crate's `shell_token`), so the keystroke must
-                // not be eaten by a surface that emits misparsed lines.
+                // Priority 5: terminal-like Tab in bash mode — always on where
+                // the completion stack can be trusted.
+                //
+                // The stack's tokenizer/quoting is POSIX (`shell_token`), so it
+                // is gated on the shell actually understanding POSIX rather
+                // than on the OS: Unix always qualifies, and Windows qualifies
+                // only under Git Bash. PowerShell/cmd would otherwise have the
+                // keystroke eaten by a surface that emits misparsed lines.
+                //
                 // Usable candidates complete now (insta-accept / fill /
                 // dropdown, per `tab_decision`); `Nothing` (none fetched, or
                 // outdated by an edit or cursor move) fires a deterministic

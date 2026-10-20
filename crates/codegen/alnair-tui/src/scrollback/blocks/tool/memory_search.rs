@@ -303,15 +303,30 @@ impl BlockContent for MemorySearchToolCallBlock {
 fn shorten_path(path: &str) -> &str {
     let memory_root = alnair_config::alnair_home().join("memory");
     let memory_prefix = memory_root.display().to_string();
+    // Compare through `Path` rather than string prefixes: on Windows the
+    // rendered path uses `\`, so a `/`-only split would leave the separator in
+    // the label and never match the root.
+    let path_native = std::path::Path::new(path);
+    if let Ok(rest) = path_native.strip_prefix(&memory_root)
+        && let Some(rel) = rest.to_str()
+    {
+        let rel = rel.trim_start_matches(['/', '\\']);
+        if let Some((_, after)) = rel.split_once(['/', '\\']) {
+            return after;
+        }
+        // Re-borrow the trimmed slice out of `rel` (which borrows `path`).
+        let start = path.len() - rel.len();
+        return &path[start..];
+    }
     if let Some(rest) = path.strip_prefix(&memory_prefix) {
-        let rest = rest.strip_prefix('/').unwrap_or(rest);
-        if let Some(after_slash) = rest.find('/') {
-            return &rest[after_slash + 1..];
+        let rest = rest.trim_start_matches(['/', '\\']);
+        if let Some(after) = rest.split_once(['/', '\\']).map(|(_, a)| a) {
+            return after;
         }
         return rest;
     }
-    // Fallback: strip to filename
-    path.rsplit('/').next().unwrap_or(path)
+    // Fallback: strip to filename, on either separator.
+    path.rsplit(['/', '\\']).next().unwrap_or(path)
 }
 
 pub fn parse_memory_results(output: &str) -> Vec<MemoryResult> {

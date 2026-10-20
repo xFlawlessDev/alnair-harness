@@ -102,16 +102,19 @@ const PATH_SEGMENT: &str = r"[a-zA-Z0-9_@.%][a-zA-Z0-9._+@%\-]*";
 const PATH_SEGMENT_SPACED: &str =
     r"[a-zA-Z0-9_@.%][a-zA-Z0-9._+@%\-]*(?: [a-zA-Z0-9._+@%\-]+)+\.[a-zA-Z0-9][a-zA-Z0-9._+@%\-]*";
 
-/// Relative file path (`images/1.png`, `.alnair/x.txt`) — one or more `/`-joined
-/// directory segments plus a filename that has an extension. No leading `/`
-/// or `~` (those are the absolute forms). The required extension keeps
-/// slashed prose ("and/or", "TCP/IP") out; the caller still gates on the file
-/// existing under `cwd`.
+/// Relative file path (`images/1.png`, `.alnair/x.txt`) — one or more
+/// separator-joined directory segments plus a filename that has an extension.
+/// No leading `/`, `~`, or drive letter (those are the absolute forms). The
+/// required extension keeps slashed prose ("and/or", "TCP/IP") out; the caller
+/// still gates on the file existing under `cwd`.
+///
+/// The separator is `[\\/]`, not `/`: a Windows transcript prints
+/// `src\main.rs`, and a `/`-only pattern would leave those unlinkified.
 fn relative_file_path_regex() -> &'static regex::Regex {
     static RE: OnceLock<regex::Regex> = OnceLock::new();
     RE.get_or_init(|| {
         let pat = format!(
-            r"(?:{seg}/)+[a-zA-Z0-9_@%+\-]+(?:\.[a-zA-Z0-9_@%+\-]+)+",
+            r"(?:{seg}[\\/])+[a-zA-Z0-9_@%+\-]+(?:\.[a-zA-Z0-9_@%+\-]+)+",
             seg = PATH_SEGMENT,
         );
         regex::Regex::new(&pat).expect("relative file path regex")
@@ -121,8 +124,15 @@ fn relative_file_path_regex() -> &'static regex::Regex {
 fn file_path_regex() -> &'static regex::Regex {
     static RE: OnceLock<regex::Regex> = OnceLock::new();
     RE.get_or_init(|| {
-        // Absolute (`/Users/me/x.md`) or home-relative (`~/Desktop/x.md`) paths.
-        // Leading `~` is expanded to $HOME when building the `file://` URL.
+        // Absolute (`/Users/me/x.md`, `C:\Users\me\x.md`) or home-relative
+        // (`~/Desktop/x.md`) paths. Leading `~` is expanded to $HOME when
+        // building the `file://` URL.
+        //
+        // Two roots, both separator-agnostic (`[\\/]`):
+        // - POSIX / home-relative: `~?/`
+        // - Windows drive: `[A-Za-z]:[\\/]` — the trailing separator is what
+        //   keeps this from claiming a URL scheme's prefix (`https:` has no
+        //   slash after the colon), so URLs stay the URL finder's business.
         //
         // The *final* segment may include internal spaces when it looks like a
         // filename with an extension (tutor report: `…/Demo App.app`
@@ -131,7 +141,7 @@ fn file_path_regex() -> &'static regex::Regex {
         // Alternation prefers the spaced form first so it wins over the shorter
         // no-space prefix at the same start position.
         let pat = format!(
-            r"~?/(?:{seg}/)+(?:{spaced}|{seg})",
+            r"(?:~?/|[a-zA-Z]:[\\/])(?:{seg}[\\/])+(?:{spaced}|{seg})",
             seg = PATH_SEGMENT,
             spaced = PATH_SEGMENT_SPACED,
         );

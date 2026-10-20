@@ -1078,8 +1078,11 @@ fn switch_model_without_session_creates_the_deferred_session() {
     let mut app = test_app_with_agent();
     let id = AgentId(0);
     app.agents.get_mut(&id).unwrap().session.session_id = None;
-    // Harness cwd is `/tmp` (a non-project dir); arm the picker gate the way
-    // startup leaves it (the harness pre-marks it shown for other tests).
+    // Point at the host scratch root, which every platform classifies as a
+    // non-project dir (a hard-coded `/tmp` is only that on Unix), then arm the
+    // picker gate the way startup leaves it (the harness pre-marks it shown for
+    // other tests).
+    app.cwd = crate::test_util::non_project_dir();
     app.project_picker_shown = false;
     assert!(app.needs_project_picker());
 

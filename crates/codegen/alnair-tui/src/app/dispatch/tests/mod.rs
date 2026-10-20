@@ -602,7 +602,9 @@ fn two_agent_app_with_bg_task() -> AppView {
 }
 fn project_picker_app() -> AppView {
     let mut app = test_app();
-    app.cwd = PathBuf::from("/tmp");
+    // The host's own scratch root: `is_project_dir` excludes each platform's
+    // temp space, so a hard-coded `/tmp` is only a non-project dir on Unix.
+    app.cwd = crate::test_util::non_project_dir();
     app.project_picker_shown = false;
     app
 }

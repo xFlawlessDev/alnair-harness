@@ -78,3 +78,64 @@ impl Drop for EnvVarGuard {
         }
     }
 }
+
+/// Rewrite a POSIX-style path literal into this host's native separators.
+///
+/// The product deliberately renders paths with the OS separator (a Windows
+/// user expects `src\main.rs`), so assertions written against `src/main.rs`
+/// only hold on Unix. Tests that care about the *shape* of a header — not the
+/// separator policy — build the expected string through this helper so the
+/// same assertion is meaningful on every platform.
+///
+/// A literal is written POSIX-style because `/` reads as a path in every
+/// review; the conversion happens at the assertion, where the platform
+/// dependence actually lives.
+pub fn native(path: &str) -> String {
+    if cfg!(windows) {
+        path.replace('/', "\\")
+    } else {
+        path.to_string()
+    }
+}
+
+/// An absolute directory that exists on every platform, for fixtures that must
+/// build a real `file://` URL.
+///
+/// `url::Url::from_file_path` rejects a POSIX-looking path on Windows (there is
+/// no drive letter), so a test that asserts on a link URL needs a root the host
+/// considers absolute. A temp dir is used because it is also guaranteed to
+/// exist and to be writable, which several of these fixtures need.
+pub fn absolute_fixture_root() -> std::path::PathBuf {
+    std::env::temp_dir().join("alnair-fixture").join("project")
+}
+
+/// A directory the workspace classifier treats as NOT a project, on any host.
+///
+/// `is_project_dir` excludes each platform's own scratch space (`/tmp` on
+/// Unix, `%TEMP%` on Windows), so a hard-coded `/tmp` fixture is only
+/// meaningful on Unix: on Windows it is not a real directory, the classifier
+/// takes a different branch, and the assertion flips. This returns the host's
+/// own scratch root, which every platform classifies the same way.
+pub fn non_project_dir() -> std::path::PathBuf {
+    std::env::temp_dir()
+}
+
+/// Create `<temp>/alnair-fixture/<rel>` and return its absolute path.
+///
+/// Scrollback linkification only produces a `file://` URL for a path that
+/// RESOLVES to an existing file (`local_link_to_file_url` checks `is_file`), so
+/// a test asserting on a link has to own a real file. Building the fixture from
+/// the host temp root also keeps it absolute on Windows, where a POSIX literal
+/// like `/Users/foo/project` is neither absolute nor present.
+///
+/// The directory is created under `std::env::temp_dir()` rather than a
+/// `TempDir` because these fixtures are shared by helpers that build entries
+/// before the test body; the OS reclaims it and the content is trivial.
+pub fn fixture_path(rel: &str) -> std::path::PathBuf {
+    let path = std::env::temp_dir().join("alnair-fixture").join(rel);
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    let _ = std::fs::write(&path, "fixture\n");
+    path
+}

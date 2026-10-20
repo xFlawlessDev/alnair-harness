@@ -1674,15 +1674,19 @@
             agent_client_protocol::ModelInfo::new(model_id, "Alnair 4.5".to_string()),
         );
 
-        // Type "/model ki" and position cursor at end (in args).
-        pw.textarea.insert_str("/model ki");
+        // Type a PARTIAL arg that actually matches the catalog entry: arg
+        // suggestions rank on `match_text`, which for `/model` is the model's
+        // display NAME ("Alnair 4.5"). A query of "ki" cannot match it, so the
+        // dropdown would stay closed and this test would fail before reaching
+        // the behaviour it pins (in-place replacement of the arg range).
+        pw.textarea.insert_str("/model Aln");
         pw.refresh_slash(&models);
 
         let snap = pw.slash_snapshot();
         assert!(snap.open, "arg suggestions should be open");
         assert!(snap.args_range.is_some());
 
-        // Accept arg completion → should replace "ki" with "Alnair 4.5".
+        // Accept arg completion → should replace "Aln" with the full name.
         pw.accept_slash_completion(&models);
         let text = pw.textarea.text().to_string();
         assert!(
@@ -1691,6 +1695,10 @@
             text
         );
         assert!(text.starts_with("/model "));
+        assert!(
+            !text.contains("/model Aln "),
+            "the typed prefix must be replaced, not appended to: {text:?}"
+        );
     }
 
     #[test]

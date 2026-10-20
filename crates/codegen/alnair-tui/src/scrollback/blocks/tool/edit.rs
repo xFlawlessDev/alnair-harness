@@ -1457,7 +1457,11 @@ mod tests {
             None,
         );
         let text: String = header.spans.iter().map(|s| s.content.as_ref()).collect();
-        assert_eq!(text, "Edit src/main.rs");
+        // The header renders the path with the host's separator.
+        assert_eq!(
+            text,
+            format!("Edit {}", crate::test_util::native("src/main.rs"))
+        );
     }
 
     #[test]
@@ -1577,8 +1581,12 @@ mod tests {
 
     #[test]
     fn expanded_shows_relative_when_under_cwd_preamble_absolute() {
-        let abs = "/Users/me/project/src/foo.rs";
-        let cwd = Path::new("/Users/me/project");
+        // A host-absolute root: `url::Url::from_file_path` and `strip_prefix`
+        // both need a real absolute path, and `/Users/…` is not one on Windows.
+        let root = crate::test_util::absolute_fixture_root();
+        let abs = root.join("src").join("foo.rs");
+        let abs = abs.to_str().expect("utf8 fixture path");
+        let cwd = root.as_path();
         let block = EditToolCallBlock::new(abs, vec![]);
         let theme = Theme::current();
         let header = block.header_line(
@@ -1591,7 +1599,10 @@ mod tests {
             None,
         );
         let text: String = header.spans.iter().map(|s| s.content.as_ref()).collect();
-        assert_eq!(text, "Edit src/foo.rs");
+        assert_eq!(
+            text,
+            format!("Edit {}", crate::test_util::native("src/foo.rs"))
+        );
 
         let mut ctx = test_ctx();
         ctx.mode = DisplayMode::Expanded;
@@ -1603,7 +1614,7 @@ mod tests {
             .flat_map(|l| l.spans.iter())
             .map(|s| s.content.as_ref())
             .collect();
-        assert_eq!(preamble_text, "Edit /Users/me/project/src/foo.rs");
+        assert_eq!(preamble_text, format!("Edit {abs}"));
     }
 
     #[test]
@@ -1622,8 +1633,10 @@ mod tests {
 
     #[test]
     fn header_link_url_is_absolute_file_url_for_all_surfaces() {
-        let abs = "/Users/me/project/src/foo.rs";
-        let cwd = Path::new("/Users/me/project");
+        let root = crate::test_util::absolute_fixture_root();
+        let abs_path = root.join("src").join("foo.rs");
+        let abs = abs_path.to_str().expect("utf8 fixture path");
+        let cwd = root.as_path();
         let block = EditToolCallBlock::new(abs, vec![]);
         let url = block.path_link_url(Some(cwd)).expect("file url");
         assert!(url.starts_with("file://"), "got {url}");
@@ -1643,7 +1656,7 @@ mod tests {
         let expanded = block.output(&ctx);
         assert_eq!(
             expanded.lines[0].content.spans[1].content.as_ref(),
-            "src/foo.rs"
+            crate::test_util::native("src/foo.rs")
         );
         assert_eq!(expanded.lines[0].link_url.as_deref(), Some(url.as_ref()));
     }

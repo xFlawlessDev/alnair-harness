@@ -9900,7 +9900,7 @@ pub(crate) mod tests {
     fn needs_project_picker_false_when_disabled() {
         let mut app = test_app();
         app.project_picker_shown = false;
-        app.cwd = std::path::PathBuf::from("/tmp");
+        app.cwd = crate::test_util::non_project_dir();
         app.project_picker_disabled = true;
         assert!(!app.needs_project_picker());
     }
@@ -9908,7 +9908,7 @@ pub(crate) mod tests {
     fn needs_project_picker_false_when_already_shown() {
         let mut app = test_app();
         app.project_picker_shown = true;
-        app.cwd = std::path::PathBuf::from("/tmp");
+        app.cwd = crate::test_util::non_project_dir();
         app.project_picker_disabled = false;
         assert!(!app.needs_project_picker());
     }
@@ -9917,7 +9917,7 @@ pub(crate) mod tests {
         let mut app = test_app();
         app.project_picker_shown = false;
         app.project_picker_disabled = false;
-        app.cwd = std::path::PathBuf::from("/tmp");
+        app.cwd = crate::test_util::non_project_dir();
         assert!(app.needs_project_picker());
     }
     /// Chat mode hides the welcome picker's source filter, so `f` must not

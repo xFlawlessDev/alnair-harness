@@ -3139,6 +3139,13 @@ fn suggestions_landing_after_bash_exit_are_dropped() {
 /// immediately and the drill-down refetch rides out with the dispatch.
 #[test]
 fn tab_fetch_landing_insta_accepts_single_candidate_always_on() {
+    // Bash-mode Tab completion is gated on a POSIX-compatible shell (see
+    // `shell_tab_completion_supported`); on PowerShell/cmd Tab stays
+    // focus-cycling, so this path is unreachable there.
+    if !alnair_config::shell::has_unix_utilities() {
+        eprintln!("skipped on this host: bash-mode Tab completion needs a POSIX shell");
+        return;
+    }
     use crate::views::suggestion_controller::{
         CompletionItemParsed, SuggestResponseParsed, SuggestionSource as ShellSuggestionSource,
     };
@@ -3220,6 +3227,12 @@ fn tab_fetch_landing_insta_accepts_single_candidate_always_on() {
 /// none on Tab fetches); whole-line sets must keep plain-open semantics.
 #[test]
 fn tab_fetch_landing_opens_dropdown_for_ambiguous_set_always_on() {
+    // Same shell gate as `tab_fetch_landing_insta_accepts_…`: this drives the
+    // POSIX-only Tab completion path.
+    if !alnair_config::shell::has_unix_utilities() {
+        eprintln!("skipped on this host: bash-mode Tab completion needs a POSIX shell");
+        return;
+    }
     use crate::views::suggestion_controller::{
         CompletionItemParsed, GhostSuggestionParsed, SuggestResponseParsed,
         SuggestionSource as ShellSuggestionSource,

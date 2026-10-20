@@ -2683,7 +2683,8 @@ fn set_theme_emits_persist_setting_with_correct_payload() {
     with_theme_test_env(|| {
         let mut app = test_app_with_agent();
         assert_eq!(app.current_ui.theme, None);
-        crate::theme::cache::set(crate::theme::ThemeKind::AlnairNight);
+        // NOTE: no `pin_theme()` here — `with_theme_test_env` already holds the
+        // same non-reentrant theme mutex, so taking it again would deadlock.
         let effects = dispatch(Action::SetTheme("alnairday".into()), &mut app);
         assert_eq!(effects.len(), 1);
         match &effects[0] {

@@ -1480,9 +1480,15 @@ mod tests {
     #[test]
     fn background_block_gutter_uses_block_background_fill() {
         // Background blocks own the gutter via the existing full-area fill, so
-        // the no-bg clear must not run for them. Concrete theme so bg_light !=
-        // bg_base (Theme::current() quantizes both to Reset in the test env).
-        let theme = Theme::alnairnight();
+        // the no-bg clear must not run for them.
+        //
+        // The assertion compares against `Theme::current()`, not the raw
+        // `Theme::alnairnight()`: the renderer paints with `Theme::current()`,
+        // which applies `windows_contrast_boost` on Windows (nudging `bg_light`
+        // 36 → 64) and quantizes to the detected color level. Comparing the
+        // un-adapted palette against adapted output only holds on Unix.
+        let _theme_guard = crate::theme::cache::pin_theme();
+        let theme = Theme::current();
         assert_ne!(
             theme.bg_light, theme.bg_base,
             "test premise: block bg must differ from base bg"

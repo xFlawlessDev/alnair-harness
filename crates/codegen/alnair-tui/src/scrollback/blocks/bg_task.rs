@@ -461,8 +461,10 @@ mod tests {
 
     #[test]
     fn preamble_uses_primary_text_color_for_description() {
-        // Pin theme to avoid races with parallel tests that call `cache::set`.
-        crate::theme::cache::set(crate::theme::ThemeKind::AlnairNight);
+        // `pin_theme` takes the shared theme lock (a bare `cache::set` here
+        // raced every other test that reads `Theme::current()`), and pins the
+        // concrete AlnairNight palette.
+        let _theme_guard = crate::theme::cache::pin_theme();
         let block =
             BgTaskBlock::started("ls", "t1").with_description(Some("List the files".into()));
         let text = block.preamble(&test_ctx()).expect("preamble");

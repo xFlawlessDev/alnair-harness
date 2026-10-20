@@ -2721,6 +2721,16 @@ mod command_palette_vim_input_tests {
         use ratatui::buffer::Buffer;
         use ratatui::layout::Rect;
 
+        // A CONCRETE theme: the terminal-native theme sets
+        // `text_primary = Color::Reset`, which is also an untouched cell's
+        // colour, so the inverse-video probe below could not distinguish them.
+        let theme = crate::theme::Theme::alnairnight();
+        assert_ne!(
+            theme.text_primary,
+            ratatui::style::Color::Reset,
+            "precondition: the cursor probe needs a concrete cursor colour"
+        );
+
         let render_palette_search_row = |search_active: bool| -> (bool, String) {
             let mut agent = make_agent();
             open_command_palette(&mut agent);
@@ -2729,9 +2739,8 @@ mod command_palette_vim_input_tests {
             }
             let area = Rect::new(0, 0, 80, 24);
             let mut buf = Buffer::empty(area);
-            agent.draw_active_modal(area, &mut buf, crate::theme::Theme::current(), false);
+            agent.draw_active_modal(area, &mut buf, theme, false);
 
-            let theme = crate::theme::Theme::current();
             let search_bar = match agent.active_modal.as_ref() {
                 Some(ActiveModal::CommandPalette { state, .. }) => {
                     state
