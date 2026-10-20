@@ -69,9 +69,13 @@
 			</Button>
 		</header>
 
-		<!-- The body grows with the section but never past the viewport: the
-		     list scrolls instead, so a long section cannot push the header off. -->
-		<div class="flex max-h-[min(38rem,78dvh)] min-h-0 flex-1">
+		<!--
+			The body is a fixed height so switching tabs never resizes the
+			dialog. It is sized for the largest section and capped to the
+			viewport; a longer section scrolls, a shorter one leaves calm space
+			below rather than snapping the frame smaller under the pointer.
+		-->
+		<div class="flex h-[min(32rem,78dvh)] min-h-0">
 			<!-- Rail: the registry's own categories, in its render order. It
 			     narrows on small screens and the label truncates rather than
 			     wrapping, so the pane never squeezes the settings text. -->
@@ -215,7 +219,7 @@
 													<span
 														class="tabular w-8 shrink-0 text-right font-mono text-[11px] text-ink-secondary"
 													>
-														{value}%
+														{value}{setting.kind.suffix ?? ''}
 													</span>
 												</div>
 											{:else}
