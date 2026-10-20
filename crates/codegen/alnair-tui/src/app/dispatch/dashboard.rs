@@ -678,6 +678,10 @@ pub(super) fn dispatch_dashboard_open_location_picker(app: &mut AppView) -> Vec<
         // Gate on the dashboard being the *foreground* view (not merely
         // `app.dashboard.is_some()`, which stays true for the rest of the
         // session once the dashboard has been opened even once).
+        //
+        // The tab strip's `+…` chip does NOT bypass this: it opens the
+        // dashboard first (`dispatch_open_location_picker_for_tabs`), so the
+        // picker always runs with its host view present.
         app.show_toast("Open the dashboard (/dashboard) to change location");
         return vec![];
     }

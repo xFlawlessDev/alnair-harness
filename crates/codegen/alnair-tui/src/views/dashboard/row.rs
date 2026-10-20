@@ -1502,6 +1502,7 @@ mod tests {
             activity: RosterActivity::Dormant,
             resident: false,
             last_change_unix_ms,
+            viewed_at: None,
             origin: RosterOrigin::default(),
         }
     }

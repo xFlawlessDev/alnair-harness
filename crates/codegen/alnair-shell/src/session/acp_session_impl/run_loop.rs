@@ -345,6 +345,9 @@ pub(super) async fn run_session(
                    .chat_state_handle.get_last_model_metadata(). await; let _ = responds_to
                    .send(id); } SessionCommand::GetSessionInfo { responds_to } => { let info =
                    session.build_session_info(). await; let _ = responds_to.send(info); }
+                   SessionCommand::RecordView { viewed_at, respond_to } => { let ok = session
+                   .record_view(viewed_at); let _ = respond_to
+                   .send(if ok { Ok(()) } else { Err(std::io::Error::other("session persistence channel closed")) }); }
                    SessionCommand::BackgroundForegroundCommand { tool_call_id, respond_to } => {
                    let result = session.agent.borrow().tool_bridge()
                    .background_foreground_command(& tool_call_id). await; let _ = respond_to

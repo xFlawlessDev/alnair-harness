@@ -125,6 +125,14 @@ pub enum ActionId {
     DashboardToggleAutoApprove,
     DashboardOpenLocationPicker,
     DashboardToggleWorktree,
+
+    // Session tabs. All `When::Always`: the strip is visible on every surface.
+    TabNext,
+    TabPrev,
+    TabClose,
+    TabReopen,
+    /// Jump to tab N (1-based in the chord, 0-based in the payload).
+    TabSelect(u8),
 }
 /// When an action is available / visible.
 ///

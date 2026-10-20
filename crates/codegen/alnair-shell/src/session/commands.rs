@@ -227,6 +227,15 @@ pub enum SessionCommand {
     GetSessionInfo {
         responds_to: oneshot::Sender<SessionInfoData>,
     },
+    /// Record that the user has now seen this session (`alnair/session/view`).
+    ///
+    /// Routed through the actor so the write rides the session's own
+    /// persistence path rather than a second writer racing it. Monotonic, and
+    /// deliberately not activity — see `SummaryPatch::record_view`.
+    RecordView {
+        viewed_at: chrono::DateTime<chrono::Utc>,
+        respond_to: oneshot::Sender<std::io::Result<()>>,
+    },
     /// Compacts the current session, saving on the context window
     CompactSession {
         /// Optional user-provided context to guide the compaction

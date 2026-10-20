@@ -4238,7 +4238,14 @@ fn dashboard_action_for_id(
         | ActionId::DashboardOverlayExit
         | ActionId::DashboardOverlayPrev
         | ActionId::DashboardOverlayNext
-        | ActionId::DashboardOverlayStop => None,
+        | ActionId::DashboardOverlayStop
+        // Tab actions are global (`When::Always`) and are dispatched by the
+        // AppView, never by the dashboard's own input loop.
+        | ActionId::TabNext
+        | ActionId::TabPrev
+        | ActionId::TabClose
+        | ActionId::TabReopen
+        | ActionId::TabSelect(_) => None,
     }
 }
 

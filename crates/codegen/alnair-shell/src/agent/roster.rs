@@ -68,6 +68,12 @@ pub struct RosterEntry {
     pub resident: bool,
     /// Best-effort last-change timestamp (unix millis). Used for sort order.
     pub last_change_unix_ms: i64,
+    /// Server-side "last viewed" watermark, if the session has one.
+    ///
+    /// Clients compute unread as `last_change_unix_ms > viewed_at`; a `None`
+    /// here is a session that predates the field and reads as unread once.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub viewed_at: Option<chrono::DateTime<chrono::Utc>>,
     pub origin: RosterOrigin,
 }
 
@@ -118,6 +124,10 @@ pub(crate) fn merge_roster(
         if entry.activity != RosterActivity::Working {
             entry.last_change_unix_ms = summary.last_change_unix_ms();
         }
+        // The watermark belongs to the summary even for a resident row: a
+        // resident row's own `last_change` is "now", so without this the client
+        // could never tell that it has already been read.
+        entry.viewed_at = summary.viewed_at;
     }
 
     // Remaining summaries have no resident row: emit them as dormant.
@@ -133,6 +143,7 @@ pub(crate) fn merge_roster(
         activity: RosterActivity::Dormant,
         resident: false,
         last_change_unix_ms: summary.last_change_unix_ms(),
+        viewed_at: summary.viewed_at,
         origin: RosterOrigin::Local,
     }));
 
@@ -174,6 +185,7 @@ mod merge_roster_tests {
             activity,
             resident: true,
             last_change_unix_ms,
+            viewed_at: None,
             origin: RosterOrigin::Local,
         }
     }

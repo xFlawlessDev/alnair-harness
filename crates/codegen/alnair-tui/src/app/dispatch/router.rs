@@ -188,6 +188,17 @@ pub(crate) fn dispatch(action: Action, app: &mut AppView) -> Vec<Effect> {
         Action::LoadSession(session_id, session_cwd, chat_kind) => {
             dispatch_load_session(app, session_id, session_cwd, chat_kind)
         }
+        Action::SwitchToTab(index) => super::tabs::dispatch_switch_to_tab(app, index),
+        Action::SwitchToTabId(session_id) => {
+            super::tabs::dispatch_switch_to_tab_id(app, &session_id)
+        }
+        Action::CloseTab => super::tabs::dispatch_close_tab(app),
+        Action::ReopenTab => super::tabs::dispatch_reopen_tab(app),
+        Action::CycleTab(forward) => super::tabs::dispatch_cycle_tab(app, forward),
+        Action::RecordSessionView(session_id) => {
+            vec![Effect::RecordSessionView { session_id }]
+        }
+        Action::TabOpenLocationPicker => super::tabs::dispatch_open_location_picker_for_tabs(app),
         Action::NewSessionWithId(session_id) => dispatch_new_session_with_id(app, session_id),
         Action::StartupForkSession {
             parent_session_id,

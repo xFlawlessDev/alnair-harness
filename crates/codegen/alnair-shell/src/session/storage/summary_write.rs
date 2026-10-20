@@ -91,6 +91,18 @@ pub(crate) struct SummaryPatch {
     /// automatic LLM title generation so it never clobbers a title the user
     /// set via `/rename`. Ignored when `generated_title` is also set.
     pub generated_title_if_absent: Option<String>,
+    /// New "last viewed" watermark, merged monotonically.
+    ///
+    /// Usually set together with [`Self::record_view`] by the
+    /// `alnair/session/view` handler.
+    pub viewed_at: Option<DateTime<Utc>>,
+    /// Mark this patch as a *view*, not activity.
+    ///
+    /// A view must not advance `updated_at`: `last_change_unix_ms()` falls back
+    /// to it, so bumping it on every focus would re-sort the leader roster and
+    /// make the tab strip jump. Set this whenever the only thing the patch
+    /// carries is `viewed_at`.
+    pub record_view: bool,
 }
 
 impl Summary {
@@ -161,7 +173,21 @@ impl Summary {
                 absent_title_applied = true;
             }
         }
-        self.updated_at = now;
+        if let Some(viewed) = patch.viewed_at {
+            // Monotonic: two clients marking the same session read can never
+            // push the watermark backwards, so an older in-flight write loses.
+            self.viewed_at = Some(
+                self.viewed_at
+                    .map_or(viewed, |existing| existing.max(viewed)),
+            );
+        }
+        // A view is not activity. `last_change_unix_ms()` falls back to
+        // `updated_at`, so bumping it here would re-sort every roster (and the
+        // tab strip) each time a window gains focus. The patch opts in to the
+        // normal bump by leaving `record_view` false.
+        if !(patch.record_view && patch.viewed_at.is_some()) {
+            self.updated_at = now;
+        }
         absent_title_applied
     }
 
@@ -241,6 +267,7 @@ fn write_summary_atomic(summary_path: &Path, summary: &Summary) -> io::Result<()
 mod tests {
     use super::*;
     use crate::session::info::Info;
+    use crate::session::persistence::default_model_id;
     use crate::session::storage::StorageAdapter;
     use crate::session::storage::jsonl::JsonlStorageAdapter;
     use std::sync::Arc;
@@ -252,6 +279,107 @@ mod tests {
             id: acp::SessionId::new("concurrent-summary-test"),
             cwd: "/test".into(),
         }
+    }
+
+    fn sample_summary() -> Summary {
+        let info = Info {
+            id: acp::SessionId::new("view-watermark-test"),
+            cwd: "/test".into(),
+        };
+        Summary::new(&info, default_model_id()).expect("summary")
+    }
+
+    /// A view must NOT be activity.
+    ///
+    /// `last_change_unix_ms()` falls back to `updated_at`, so bumping it here
+    /// would re-sort the leader roster (and the tab strip) every time a window
+    /// gains focus. This is the regression guard for that class.
+    #[test]
+    fn view_mark_does_not_move_updated_at() {
+        let mut summary = sample_summary();
+        let before = summary.updated_at;
+        let viewed = Utc::now() + chrono::Duration::seconds(5);
+
+        summary.apply_patch(
+            &SummaryPatch {
+                viewed_at: Some(viewed),
+                record_view: true,
+                ..Default::default()
+            },
+            Utc::now(),
+        );
+
+        assert_eq!(
+            summary.updated_at, before,
+            "a read must not advance updated_at (it is the roster sort key)"
+        );
+        assert_eq!(summary.viewed_at, Some(viewed));
+    }
+
+    /// A normal metadata patch still bumps `updated_at`.
+    #[test]
+    fn ordinary_patch_still_bumps_updated_at() {
+        let mut summary = sample_summary();
+        let before = summary.updated_at;
+        let later = before + chrono::Duration::seconds(30);
+        summary.apply_patch(
+            &SummaryPatch {
+                generated_title: Some("Renamed".into()),
+                ..Default::default()
+            },
+            later,
+        );
+        assert_eq!(summary.updated_at, later);
+    }
+
+    /// Two clients marking the same session read must never push the watermark
+    /// backwards, however their writes interleave.
+    #[test]
+    fn view_watermark_is_monotonic() {
+        let mut summary = sample_summary();
+        let newer = Utc::now() + chrono::Duration::seconds(60);
+        let older = Utc::now() - chrono::Duration::seconds(60);
+
+        summary.apply_patch(
+            &SummaryPatch {
+                viewed_at: Some(newer),
+                record_view: true,
+                ..Default::default()
+            },
+            Utc::now(),
+        );
+        summary.apply_patch(
+            &SummaryPatch {
+                viewed_at: Some(older),
+                record_view: true,
+                ..Default::default()
+            },
+            Utc::now(),
+        );
+
+        assert_eq!(
+            summary.viewed_at,
+            Some(newer),
+            "a stale writer must not lower the watermark"
+        );
+    }
+
+    /// The field survives a disk round-trip, and an old summary without it
+    /// loads as `None` (the documented soft migration).
+    #[test]
+    fn viewed_at_round_trips_and_legacy_files_load_as_none() {
+        let mut summary = sample_summary();
+        let viewed = Utc::now();
+        summary.viewed_at = Some(viewed);
+        let json = serde_json::to_string(&summary).unwrap();
+        let back: Summary = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.viewed_at, Some(viewed));
+
+        // A summary written before the field existed.
+        let mut value: serde_json::Value = serde_json::from_str(&json).unwrap();
+        value.as_object_mut().unwrap().remove("viewed_at");
+        let legacy: Summary = serde_json::from_value(value).unwrap();
+        assert_eq!(legacy.viewed_at, None);
     }
 
     /// Regression guard for the `/resume` "frozen `last_active_at`" lost-update

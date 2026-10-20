@@ -643,6 +643,15 @@ pub struct PagerArgs {
     /// Run standalone even when leader mode is configured.
     #[arg(long, conflicts_with = "leader", hide = true)]
     pub no_leader: bool,
+    /// Do not attach to the most recent session for this directory on startup.
+    ///
+    /// Bare `alnair` joins the newest live session whose cwd is this one when a
+    /// leader roster is available; this flag keeps the welcome screen instead.
+    /// It is a no-op without a leader (the roster is the only source), so it is
+    /// deliberately not `conflicts_with = "no_leader"`: `--no-leader
+    /// --no-attach` is a valid, non-contradictory pair.
+    #[arg(long = "no-attach")]
+    pub no_attach: bool,
     /// Initial prompt for the interactive session, e.g. `alnair "fix the bug"` or `alnair --worktree=feat "create this feature"`.
     #[arg(
         value_name = "PROMPT",
@@ -802,6 +811,22 @@ impl PagerArgs {
             .as_deref()
             .map(str::trim)
             .filter(|s| !s.is_empty())
+    }
+
+    /// Whether a bare launch may join the newest session for this directory.
+    ///
+    /// `raw_config` is the effective config when every layer parsed; `None`
+    /// (a partially-broken config) falls back to the default. `--no-attach`
+    /// wins over the config, and `--no-leader` disables it implicitly (the
+    /// roster is the only source of candidates, and a non-leader process never
+    /// fetches one).
+    pub fn auto_attach_enabled(&self, raw_config: Option<&toml::Value>) -> bool {
+        if self.no_attach || self.no_leader {
+            return false;
+        }
+        raw_config
+            .and_then(alnair_shell::util::config::auto_attach_from_toml_opt)
+            .unwrap_or(true)
     }
 }
 #[cfg(test)]
@@ -1088,6 +1113,32 @@ mod tests {
         assert_eq!(args.initial_prompt(), Some("spaced"));
         let blank = PagerArgs::try_parse_from(["alnair", "   "]).expect("blank prompt parses");
         assert_eq!(blank.initial_prompt(), None);
+    }
+    /// `--no-attach` and `--no-leader` are a valid pair: the former is already a
+    /// no-op without a roster, so a clap conflict would only annoy the user.
+    #[test]
+    fn no_attach_parses_alone_and_with_no_leader() {
+        let alone = PagerArgs::try_parse_from(["alnair", "--no-attach"]).expect("parses");
+        assert!(alone.no_attach);
+        assert!(!alone.no_leader);
+        let pair =
+            PagerArgs::try_parse_from(["alnair", "--no-leader", "--no-attach"]).expect("parses");
+        assert!(pair.no_attach && pair.no_leader);
+        assert!(!pair.auto_attach_enabled(None));
+    }
+    #[test]
+    fn auto_attach_defaults_on_and_honours_flag_and_config() {
+        let bare = PagerArgs::try_parse_from(["alnair"]).expect("parses");
+        assert!(
+            bare.auto_attach_enabled(None),
+            "absent config means enabled"
+        );
+        let cfg: toml::Value = toml::from_str("[cli]\nauto_attach = false").unwrap();
+        assert!(!bare.auto_attach_enabled(Some(&cfg)));
+        let cfg_on: toml::Value = toml::from_str("[cli]\nauto_attach = true").unwrap();
+        assert!(bare.auto_attach_enabled(Some(&cfg_on)));
+        let off = PagerArgs::try_parse_from(["alnair", "--no-attach"]).expect("parses");
+        assert!(!off.auto_attach_enabled(Some(&cfg_on)), "the flag wins");
     }
     #[test]
     fn subcommand_takes_precedence_over_positional_prompt() {

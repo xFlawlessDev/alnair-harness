@@ -1147,5 +1147,105 @@ pub fn default_actions(mouse_reporting_toggle_enabled: bool) -> Vec<ActionDef> {
         },
     ]);
 
+    // Session tab chords.
+    //
+    // `Ctrl+Tab` is NOT the primary: without the kitty keyboard protocol the
+    // wire byte is a plain CR, so on VTE, Apple Terminal, screen, and tmux with
+    // `extended-keys off` it arrives as `Tab` — which is already
+    // `FocusPrompt`/`FocusScrollback`. `Ctrl+PageUp/Down` carries no such
+    // ambiguity, so it is the primary everywhere; the Tab variants are added
+    // only where the protocol actually delivers them.
+    let tab_chords_available = ctx.kitty_skip_reason().is_none();
+    actions.push(ActionDef {
+        id: ActionId::TabNext,
+        label: "tab",
+        description: "Next session tab",
+        default_key: key!(PageDown, CONTROL),
+        alt_keys: if tab_chords_available {
+            vec![key!(Tab, CONTROL)]
+        } else {
+            vec![]
+        },
+        category: Category::Session,
+        context: When::Always,
+        hint_priority: None,
+        hint_key_display: None,
+        requires_confirmation: false,
+        long_help: Some(
+            "Moves to the next session tab, wrapping at the end.\nCtrl+PageDown works in every terminal; Ctrl+Tab is offered only where the terminal can report it as a distinct chord.",
+        ),
+    });
+    actions.push(ActionDef {
+        id: ActionId::TabPrev,
+        label: "tab",
+        description: "Previous session tab",
+        default_key: key!(PageUp, CONTROL),
+        alt_keys: if tab_chords_available {
+            vec![key!(BackTab, CONTROL)]
+        } else {
+            vec![]
+        },
+        category: Category::Session,
+        context: When::Always,
+        hint_priority: None,
+        hint_key_display: None,
+        requires_confirmation: false,
+        long_help: Some(
+            "Moves to the previous session tab, wrapping at the start.\nCtrl+PageUp is the guaranteed chord; Ctrl+Shift+Tab is added where the terminal reports it.",
+        ),
+    });
+    actions.push(ActionDef {
+        id: ActionId::TabClose,
+        label: "close tab",
+        description: "Close the active session tab",
+        default_key: key!('w', ALT),
+        alt_keys: vec![],
+        category: Category::Session,
+        context: When::Always,
+        hint_priority: None,
+        hint_key_display: None,
+        requires_confirmation: false,
+        long_help: Some(
+            "Closes the active tab. The session itself keeps running — a tab is a view, not a session. Alt+Shift+T reopens it.\nCtrl+W is the dashboard's worktree toggle and is deliberately left alone.",
+        ),
+    });
+    actions.push(ActionDef {
+        id: ActionId::TabReopen,
+        label: "reopen tab",
+        description: "Reopen the last closed session tab",
+        default_key: key!('T', ALT),
+        alt_keys: vec![],
+        category: Category::Session,
+        context: When::Always,
+        hint_priority: None,
+        hint_key_display: None,
+        requires_confirmation: false,
+        long_help: Some(
+            "Reopens the most recently closed session tab at the position it had.\nThe reopen stack holds the last 25 closed tabs, newest first.\nReopening activates the tab and clears its close guard.",
+        ),
+    });
+    // Alt+1..9. On macOS with "Option as Meta" disabled, Option+1 arrives as
+    // `¡` and never reaches us — the digits are a convenience, not the only
+    // route to a tab (Ctrl+PageDown cycles).
+    for n in 1..=9u8 {
+        actions.push(ActionDef {
+            id: ActionId::TabSelect(n - 1),
+            label: "tab N",
+            description: "Jump to session tab N",
+            // Built directly: `key!` only accepts a char literal.
+            default_key: crate::input::key::KeyShortcut::new(
+                crossterm::event::KeyCode::Char(char::from(b'0' + n)),
+                crossterm::event::KeyModifiers::ALT,
+            ),
+            alt_keys: vec![],
+            category: Category::Session,
+            context: When::Always,
+            hint_priority: None,
+            hint_key_display: None,
+            requires_confirmation: false,
+            long_help: None,
+        });
+    }
+
     actions
 }

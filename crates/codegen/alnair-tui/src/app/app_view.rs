@@ -561,6 +561,34 @@ pub struct AppView {
     pub auth_return_view: Option<ActiveView>,
     /// Per-agent views (keyed by AgentId).
     pub agents: IndexMap<AgentId, AgentView>,
+    /// The session tab strip's model.
+    ///
+    /// Tabs are keyed by `session_id`, not `AgentId`: the id survives a client
+    /// restart, which is what lets two processes share one list. Every tab also
+    /// carries its own cwd, so a global strip never has to guess which repo a
+    /// chip belongs to.
+    pub tabs: crate::app::tabs::SessionTabs,
+    /// Hit rects from the last strip render, for mouse routing.
+    pub tab_hit_rects: crate::views::tab_strip::TabStripRendered,
+    /// `[tabs] enabled` from config; false hides the strip entirely.
+    pub tabs_enabled: bool,
+    /// Which scope the shared store file was last read/written with.
+    pub tabs_scope: crate::app::tabs::store::TabScope,
+    /// `(mtime, len)` of the shared tab file at the last successful read.
+    /// `None` means "never read", which forces one read on the first tick.
+    pub tab_store_stamp: Option<(std::time::SystemTime, u64)>,
+    /// Sessions this process closed, so an in-flight async write cannot revive
+    /// them. In-process only: the file lock already prevents cross-process
+    /// resurrection.
+    pub cancelled_tabs: std::collections::HashSet<String>,
+    /// Session id whose view watermark still needs to be sent.
+    pub pending_view_mark: Option<String>,
+    /// Whether the terminal window currently holds focus.
+    ///
+    /// The view watermark is only sent while focused: a background client has
+    /// not actually been read by anyone, and marking on its behalf would clear
+    /// the `●` another terminal is showing.
+    pub window_focused: bool,
     /// Monotonically increasing counter for agent ID allocation.
     /// Never reuse IDs after `shift_remove` to avoid collisions.
     pub next_agent_id: usize,
@@ -655,6 +683,27 @@ pub struct AppView {
     /// `alnair/sessions/list` polls and `alnair/sessions/changed` broadcasts.
     /// Empty in non-leader mode, which naturally gates roster rendering.
     pub leader_roster: Vec<crate::app::roster::RosterEntry>,
+    /// A bare pager launch that may join the newest session for its cwd.
+    ///
+    /// Armed once by `event_loop::run` (only for an unadorned launch under a
+    /// leader) and consumed by the first [`TaskResult::RosterLoaded`]. Held
+    /// here rather than in the event loop so the decision — including the
+    /// "is it still safe to attach" guards — stays unit-testable.
+    ///
+    /// [`TaskResult::RosterLoaded`]: crate::app::actions::TaskResult::RosterLoaded
+    pub startup_auto_attach: Option<crate::app::session_startup::AutoAttach>,
+    /// Agent id created by the auto-attach, if any.
+    ///
+    /// Only used by the load-failure path: a session that vanished between the
+    /// roster snapshot and `session/load` must fall back to Welcome silently
+    /// (the user never asked for that session), and this marker is how the
+    /// failure handler knows the agent was ours to discard.
+    pub startup_auto_attach_agent: Option<AgentId>,
+    /// Roster activity of the auto-attach target, captured when it was picked.
+    ///
+    /// `Working` / `NeedsInput` mean the client joined a turn another client is
+    /// driving; `handle_session_loaded` turns that into a one-shot notice.
+    pub startup_auto_attach_activity: Option<crate::app::roster::RosterActivity>,
     /// Local on-disk session list (dormant/idle sessions) surfaced on the
     /// dashboard when NOT in leader mode. There is no live leader roster to
     /// poll outside leader mode, so we fetch the same `alnair/session/list` the
@@ -1025,6 +1074,14 @@ impl AppView {
             active_view: ActiveView::Welcome,
             auth_return_view: None,
             agents: IndexMap::new(),
+            tabs: crate::app::tabs::SessionTabs::new(),
+            tab_hit_rects: crate::views::tab_strip::TabStripRendered::default(),
+            tabs_enabled: true,
+            tabs_scope: crate::app::tabs::store::TabScope::Global,
+            tab_store_stamp: None,
+            cancelled_tabs: std::collections::HashSet::new(),
+            pending_view_mark: None,
+            window_focused: true,
             next_agent_id: 0,
             models,
             registry: ActionRegistry::defaults(),
@@ -1157,6 +1214,9 @@ impl AppView {
             usage_visible: true,
             leader_mode: false,
             leader_roster: Vec::new(),
+            startup_auto_attach: None,
+            startup_auto_attach_agent: None,
+            startup_auto_attach_activity: None,
             dashboard_local_sessions: Vec::new(),
             dashboard_sessions_loading: false,
             shared_prompt_queues: std::collections::HashMap::new(),
@@ -1262,6 +1322,142 @@ impl AppView {
     pub fn remove_roster_entry(&mut self, sid: &str) {
         self.leader_roster.retain(|e| e.session_id != sid);
     }
+
+    /// Consume the armed auto-attach against the freshly-loaded roster.    ///
+    /// Returns `None` (and clears the marker) unless this is still an
+    /// untouched Welcome: an explicit startup intent, an initial prompt, a
+    /// deferred post-auth action, or a session that already opened all mean
+    /// the user asked for something else, and attaching would override it.
+    ///
+    /// On a hit the caller records [`Self::startup_auto_attach_agent`] and
+    /// [`Self::startup_auto_attach_activity`] before dispatching the load.
+    pub fn take_startup_auto_attach_choice(
+        &mut self,
+    ) -> Option<crate::app::session_startup::AutoAttachChoice> {
+        let armed = self.startup_auto_attach.take()?;
+        if !matches!(self.active_view, ActiveView::Welcome)
+            || !self.deferred_startup.is_empty()
+            || !self.agents.is_empty()
+        {
+            return None;
+        }
+        let choice =
+            crate::app::session_startup::pick_auto_attach(&self.leader_roster, &armed.cwd, true);
+        if let Some(ref choice) = choice {
+            self.startup_auto_attach_activity = Some(choice.activity);
+        }
+        choice
+    }
+    /// Status of a tab, for the strip's glyph.
+    ///
+    /// Locally-hosted sessions answer from their own `AgentView` (the most
+    /// precise source: an in-flight permission prompt is only visible there).
+    /// Everything else — a session another client hosts, or one that is on disk
+    /// only — answers from the leader roster, which is server-authoritative.
+    ///
+    /// Unread is deliberately NOT computed here from local state: two clients
+    /// would disagree. It comes from the shared `viewed_at` watermark (see
+    /// [`Self::tab_is_unread`]).
+    pub fn tab_status(&self, session_id: &str) -> crate::views::tab_strip::TabStatus {
+        use crate::views::tab_strip::TabStatus;
+        if let Some(agent) = self.agent_for_session(session_id) {
+            if !agent.permission_queue.is_empty() {
+                return TabStatus::Permission;
+            }
+            if agent.question_view.is_some() {
+                return TabStatus::Question;
+            }
+            if agent.session.state.is_turn_running() {
+                return TabStatus::Running;
+            }
+        }
+        // Roster activity beats unread: "it is working right now" is both more
+        // urgent and more useful than "it changed since you looked", and the
+        // local branch above already prefers the live turn state.
+        match self
+            .leader_roster
+            .iter()
+            .find(|e| e.session_id == session_id)
+            .map(|e| e.activity)
+        {
+            Some(crate::app::roster::RosterActivity::Working) => return TabStatus::Running,
+            Some(crate::app::roster::RosterActivity::NeedsInput) => return TabStatus::Permission,
+            _ => {}
+        }
+        if self.tab_is_unread(session_id) {
+            return TabStatus::Unread;
+        }
+        TabStatus::Idle
+    }
+
+    /// Whether the session changed since this user last looked at it.
+    ///
+    /// Server-authoritative: `last_change_unix_ms > viewed_at`. A session with
+    /// no watermark (written before the field existed) reads as unread once,
+    /// which self-corrects the first time it is viewed.
+    pub fn tab_is_unread(&self, session_id: &str) -> bool {
+        let Some(entry) = self
+            .leader_roster
+            .iter()
+            .find(|e| e.session_id == session_id)
+        else {
+            return false;
+        };
+        let Some(viewed) = entry.viewed_at else {
+            return true;
+        };
+        entry.last_change_unix_ms > viewed.timestamp_millis()
+    }
+
+    /// `repo ⎇ branch` detail for a chip, or `None` when unknown.
+    ///
+    /// Only rendered when the strip spans multiple repos; the caller decides.
+    pub fn tab_repo_detail(&self, session_id: &str) -> Option<String> {
+        let repo = self
+            .agent_for_session(session_id)
+            .map(|a| a.session.cwd.clone())
+            .or_else(|| {
+                self.leader_roster
+                    .iter()
+                    .find(|e| e.session_id == session_id)
+                    .map(|e| std::path::PathBuf::from(&e.cwd))
+            })?;
+        let name = repo
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_else(|| repo.to_string_lossy().into_owned());
+        let branch = self
+            .agent_for_session(session_id)
+            .and_then(|a| a.current_branch.clone());
+        Some(match branch {
+            Some(branch) => format!("{name} \u{2387} {branch}"),
+            None => name,
+        })
+    }
+
+    /// The locally-hosted agent that owns `session_id`, if any.
+    pub fn agent_for_session(&self, session_id: &str) -> Option<&AgentView> {
+        self.agents.values().find(|a| {
+            a.session
+                .session_id
+                .as_ref()
+                .is_some_and(|sid| sid.0.as_ref() == session_id)
+        })
+    }
+
+    /// Session id of a subagent view currently taken over fullscreen, if any.
+    ///
+    /// The strip hides itself then: a fullscreen subagent owns the screen and a
+    /// tab row would both steal a line and imply the tab is what you see.
+    pub fn active_subagent_fullscreen(&self) -> Option<&str> {
+        let ActiveView::Agent(id) = self.active_view else {
+            return None;
+        };
+        self.agents
+            .get(&id)
+            .and_then(|a| a.active_subagent.as_deref())
+    }
+
     /// The roster source the dashboard renders alongside locally-hosted
     /// agents. In leader mode this is the live leader roster (FleetView). With
     /// no leader there is nothing to poll, so we fall back to the local
@@ -1649,6 +1845,22 @@ impl AppView {
         }
         if let Event::Mouse(mouse) = ev {
             self.last_mouse_pos = Some((mouse.column, mouse.row));
+            // The tab strip is chrome shared by every surface, so it claims the
+            // click before the view's own hit-testing sees it.
+            if matches!(mouse.kind, MouseEventKind::Down(MouseButton::Left))
+                && let Some(target) = self.tab_hit_rects.hit(mouse.column, mouse.row)
+            {
+                use crate::views::tab_strip::TabHitTarget;
+                return match target {
+                    TabHitTarget::Tab(session_id) => {
+                        InputOutcome::Action(Action::SwitchToTabId(session_id))
+                    }
+                    TabHitTarget::NewSession => InputOutcome::Action(Action::NewSession),
+                    TabHitTarget::NewSessionElsewhere => {
+                        InputOutcome::Action(Action::TabOpenLocationPicker)
+                    }
+                };
+            }
             let is_mouse_action = matches!(
                 mouse.kind,
                 MouseEventKind::Down(MouseButton::Left)
@@ -2116,6 +2328,14 @@ impl AppView {
                 git_ref: None,
             },
             ActionId::OpenDashboard => Action::OpenDashboard,
+            // Session tabs. The strip is global, so these work from every
+            // surface — including a focused prompt, where `Ctrl+PageDown`
+            // would otherwise be swallowed by the scrollback pager.
+            ActionId::TabNext => Action::CycleTab(true),
+            ActionId::TabPrev => Action::CycleTab(false),
+            ActionId::TabClose => Action::CloseTab,
+            ActionId::TabReopen => Action::ReopenTab,
+            ActionId::TabSelect(n) => Action::SwitchToTab(n as usize),
             _ => return InputOutcome::Unchanged,
         };
         if def.requires_confirmation {
@@ -3266,6 +3486,33 @@ impl AppView {
         let dev_fps_rows = self.dev_fps_rows();
         let fps_overlay = self.fps_hud.overlay(dev_fps_rows);
         let foreign_resume_hint = self.foreign_resume_hint().cloned();
+        // Tab strip inputs are resolved BEFORE the draw closure: the closure
+        // already holds a partial borrow of `self`, so status/title lookups
+        // (which walk `agents` and the roster) cannot run inside it.
+        let tab_strip_visible = self.tabs_enabled
+            && !self.tabs.is_empty()
+            && !self.screen_mode.is_minimal()
+            && self.active_subagent_fullscreen().is_none();
+        let tab_chips: Vec<crate::views::tab_strip::TabChipInput> = if tab_strip_visible {
+            self.tabs
+                .tabs()
+                .iter()
+                .map(|tab| crate::views::tab_strip::TabChipInput {
+                    title: self
+                        .agent_for_session(&tab.session_id)
+                        .map(crate::views::session_title::entry_title)
+                        .or_else(|| tab.title.clone())
+                        .unwrap_or_else(|| tab.display_title()),
+                    status: self.tab_status(&tab.session_id),
+                    detail: self.tab_repo_detail(&tab.session_id),
+                    cwd: tab.cwd.clone(),
+                    session_id: tab.session_id.clone(),
+                })
+                .collect()
+        } else {
+            Vec::new()
+        };
+        let tab_active = self.tabs.active_index();
         let Self {
             active_view,
             agents,
@@ -3274,6 +3521,7 @@ impl AppView {
             cursor,
             pending_action,
             pending_notification_escapes,
+            tab_hit_rects,
             ..
         } = self;
         let notif_escapes = pending_notification_escapes.take();
@@ -3313,6 +3561,39 @@ impl AppView {
                 } else {
                     (None, full_area)
                 };
+            // Session tab strip: one row carved off the top, so Welcome, Agent,
+            // and Dashboard all share it. Drawn before the view body so a
+            // shorter view area never overpaints it.
+            let view_area = if !tab_chips.is_empty()
+                && view_area.height > crate::views::agent::SHORT_TERMINAL_ROWS
+            {
+                let strip = ratatui::layout::Rect {
+                    x: view_area.x,
+                    y: view_area.y,
+                    width: view_area.width,
+                    height: 1,
+                };
+                let theme = crate::theme::Theme::current();
+                let params = crate::views::tab_strip::TabStripParams {
+                    chips: &tab_chips,
+                    active: tab_active,
+                };
+                *tab_hit_rects = crate::views::tab_strip::render_tab_strip(
+                    strip,
+                    f.buffer_mut(),
+                    &theme,
+                    &params,
+                );
+                ratatui::layout::Rect {
+                    x: view_area.x,
+                    y: view_area.y + 1,
+                    width: view_area.width,
+                    height: view_area.height.saturating_sub(1),
+                }
+            } else {
+                *tab_hit_rects = Default::default();
+                view_area
+            };
             if view_area.height > 0 {
                 match *active_view {
                     ActiveView::Welcome => {
@@ -4428,6 +4709,14 @@ pub(crate) mod tests {
             active_view: ActiveView::Welcome,
             auth_return_view: None,
             agents: indexmap::IndexMap::new(),
+            tabs: crate::app::tabs::SessionTabs::new(),
+            tab_hit_rects: crate::views::tab_strip::TabStripRendered::default(),
+            tabs_enabled: true,
+            tabs_scope: crate::app::tabs::store::TabScope::Global,
+            tab_store_stamp: None,
+            cancelled_tabs: std::collections::HashSet::new(),
+            pending_view_mark: None,
+            window_focused: true,
             next_agent_id: 0,
             models: ModelState::default(),
             registry: ActionRegistry::defaults(),
@@ -4560,6 +4849,9 @@ pub(crate) mod tests {
             usage_visible: true,
             leader_mode: true,
             leader_roster: Vec::new(),
+            startup_auto_attach: None,
+            startup_auto_attach_agent: None,
+            startup_auto_attach_activity: None,
             dashboard_local_sessions: Vec::new(),
             dashboard_sessions_loading: false,
             shared_prompt_queues: std::collections::HashMap::new(),

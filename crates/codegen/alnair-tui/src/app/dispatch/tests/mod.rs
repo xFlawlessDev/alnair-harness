@@ -1,5 +1,6 @@
 //! Tests for the dispatch module tree: shared fixtures and per-domain test modules.
 mod auth;
+mod auto_attach;
 mod billing;
 mod dashboard;
 mod jump;
@@ -12,6 +13,7 @@ mod router;
 mod session;
 mod settings;
 mod status;
+mod tabs;
 mod task_result;
 mod transcript;
 mod turn;
@@ -64,6 +66,14 @@ fn test_app() -> AppView {
         active_view: ActiveView::Welcome,
         auth_return_view: None,
         agents: IndexMap::new(),
+        tabs: crate::app::tabs::SessionTabs::new(),
+        tab_hit_rects: crate::views::tab_strip::TabStripRendered::default(),
+        tabs_enabled: true,
+        tabs_scope: crate::app::tabs::store::TabScope::Global,
+        tab_store_stamp: None,
+        cancelled_tabs: std::collections::HashSet::new(),
+        pending_view_mark: None,
+        window_focused: true,
         next_agent_id: 0,
         models: ModelState::default(),
         registry: crate::actions::ActionRegistry::defaults(),
@@ -198,6 +208,9 @@ fn test_app() -> AppView {
         usage_visible: true,
         leader_mode: true,
         leader_roster: Vec::new(),
+        startup_auto_attach: None,
+        startup_auto_attach_agent: None,
+        startup_auto_attach_activity: None,
         dashboard_local_sessions: Vec::new(),
         dashboard_sessions_loading: false,
         shared_prompt_queues: std::collections::HashMap::new(),

@@ -90,6 +90,87 @@ alnair --resume <session-id>
 
 Run `alnair --resume` without an ID to resume the most recent session for the current directory.
 
+### Automatic attach from a second terminal
+
+A bare `alnair` — no `--resume`, no initial prompt, no `--worktree` — joins the
+newest live session whose working directory is exactly the one you launched
+from. That is what makes a second terminal "the same session" without typing an
+ID: both terminals are clients of one leader, and the second attaches as a
+viewer rather than taking the turn over.
+
+The rules, in order:
+
+- Only sessions that share this directory are candidates. A leader serves every
+  repo you have open, so the directory match is what keeps three terminals in
+  three repos from collapsing into one.
+- Dormant (on-disk, not running) and dead sessions are skipped. Sessions already
+  running a turn are **not** skipped — watching them is the point.
+- The most recently changed candidate wins.
+
+When the attach lands on a turn another terminal is driving, the status bar
+shows a `viewer` chip until that turn ends, and a one-line notice explains why
+you are there. If the session disappears between the roster snapshot and the
+attach, you land on the welcome screen with a toast instead of an error.
+
+Turn it off with `--no-attach`, or permanently with:
+
+```toml
+[cli]
+auto_attach = false
+```
+
+`--no-leader` also disables it: without a leader there is no roster to pick
+from.
+
+### Session tabs
+
+A one-line strip at the top of the screen lists the sessions you have open. It
+is a *view* list, not a session list: closing a tab never ends the session, and
+the session keeps running (and keeps its history) either way.
+
+| Chord | Action |
+|---|---|
+| `Ctrl+PageDown` | Next tab |
+| `Ctrl+PageUp` | Previous tab |
+| `Alt+1` … `Alt+9` | Jump to tab N |
+| `Alt+W` | Close the active tab |
+| `Alt+Shift+T` | Reopen the last closed tab |
+
+`Ctrl+PageUp/Down` is the guaranteed pair: it works in every terminal. `Ctrl+Tab`
+is also accepted where the terminal can report it as a distinct chord (kitty
+keyboard protocol); elsewhere it arrives as a plain Tab and moves focus instead,
+so it is not advertised there. On macOS, `Alt+1`..`Alt+9` require "Option as
+Meta" to be enabled in your terminal profile.
+
+Each chip shows a status glyph: `·` idle, `▸` running, `!` waiting on a
+permission, `?` waiting on a question, `●` changed since you last looked. The
+`●` marker comes from a server-side "last viewed" watermark, so two terminals
+agree on what is unread — a client never guesses it locally.
+
+The right edge carries `+` (new session in the current location) and `+…` (pick
+a different directory first, then create there).
+
+#### Tab scope and multiple repositories
+
+By default the strip is **global**: it lists every session the leader hosts, so
+two terminals in different repositories show the same strip. When it spans more
+than one repository each chip gains a `repo ⎇ branch` label; with a single repo
+the label is hidden.
+
+```toml
+[tabs]
+enabled = true      # set false to hide the strip
+scope = "global"    # or "cwd" for one strip per directory
+```
+
+`scope = "cwd"` is the opt-out for users who want each terminal focused on one
+directory. Note that it makes two terminals show *different* strips — that is
+the trade-off, not a bug.
+
+The scope is also recorded inside the shared tab file
+(`~/.alnair/run/pager_tabs.json`). If your config and the file disagree, the
+file wins, because it is what the other client already agreed on.
+
 ### From the Welcome Screen
 
 When you launch `alnair`, the welcome screen lists recent sessions for the current directory. Select one to resume it.

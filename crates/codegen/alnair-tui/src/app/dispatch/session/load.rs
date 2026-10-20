@@ -874,6 +874,32 @@ pub(in crate::app::dispatch) fn handle_session_loaded(
             app.models = Some(m).into();
             agent.session.models = app.models.clone();
         }
+        // The tab now knows this session's title and directory; refresh it
+        // WITHOUT moving the cursor (another window may be the active one).
+        // Collected here and applied after the `agent` borrow ends.
+        let tab_refresh = Some((
+            hydrate_sid.to_string(),
+            crate::views::session_title::entry_title(agent),
+            agent.session.cwd.clone(),
+        ));
+        // An auto-attach that joined a turn another client is driving says so
+        // once: the viewer chip in the status bar covers the ongoing state, but
+        // the user never asked for this session and deserves a reason.
+        if app.startup_auto_attach_agent == Some(agent_id) {
+            app.startup_auto_attach_agent = None;
+            let joined_running = matches!(
+                app.startup_auto_attach_activity.take(),
+                Some(
+                    crate::app::roster::RosterActivity::Working
+                        | crate::app::roster::RosterActivity::NeedsInput
+                )
+            );
+            if joined_running {
+                agent.scrollback.push_block(RenderBlock::system(
+                    "Attached as viewer \u{2014} another client is driving this turn.",
+                ));
+            }
+        }
         let deferred = crate::app::dispatch::session::lifecycle::apply_deferred_model_switch(
             agent,
             app.cli_effort_token.as_deref(),
@@ -959,6 +985,9 @@ pub(in crate::app::dispatch) fn handle_session_loaded(
         });
         notify_session_ready(&app.notification_service, agent);
         crate::memory_release::release_retained_memory_with("session-load-replay");
+        if let Some((sid, title, cwd)) = tab_refresh {
+            super::super::tabs::refresh_tab(app, &sid, Some(title), Some(cwd));
+        }
         return effects;
     }
     vec![]
@@ -969,6 +998,21 @@ pub(in crate::app::dispatch) fn handle_session_load_failed(
     session_id: acp::SessionId,
     error: String,
 ) -> Vec<Effect> {
+    // An auto-attach is not something the user asked for: the session can
+    // vanish between the roster snapshot and the load. Fall back to Welcome
+    // with a toast instead of leaving a failed agent view on screen.
+    if app.startup_auto_attach_agent == Some(agent_id) {
+        app.startup_auto_attach_agent = None;
+        app.startup_auto_attach_activity = None;
+        app.agents.shift_remove(&agent_id);
+        app.active_view = crate::app::app_view::ActiveView::Welcome;
+        tracing::warn!(
+            session = % session_id.0, error = % error,
+            "auto-attach failed; staying on the welcome screen"
+        );
+        app.show_toast("Couldn't attach to the recent session for this directory");
+        return vec![];
+    }
     tracing::error!(
         agent = ? agent_id, session = ? session_id, error = % error,
         "Session load failed"

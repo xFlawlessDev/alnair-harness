@@ -375,6 +375,13 @@ fn unsupported_leader_flags(flags: &ConnectFlags) -> Vec<&'static str> {
     if !flags.permission_rules.is_empty() {
         out.push("--allow/--deny permission rules");
     }
+    // `todo_gate` is consumed only by the direct-spawn `agent_config` below;
+    // the leader builds its own config at startup. `--reasoning-effort` is
+    // NOT here: it reaches sessions client-side through
+    // `AppView::cli_effort_token` → `apply_deferred_model_switch`.
+    if flags.todo_gate {
+        out.push("--todo-gate");
+    }
     out
 }
 

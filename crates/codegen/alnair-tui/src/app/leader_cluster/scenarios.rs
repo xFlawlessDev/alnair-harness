@@ -388,3 +388,182 @@ fn find_session_updates_file(sid: &str) -> Option<PathBuf> {
     }
     None
 }
+
+/// A bare launch joins the newest live session for its cwd.
+///
+/// Mirrors what `event_loop::run` arms for an unadorned `alnair`: one
+/// `Effect::FetchRoster`, then the roster decides. The join is a `session/load`,
+/// so the turn is NOT re-driven — the sentinel appears exactly once per client.
+#[test]
+#[ignore = "leader-cluster: needs single-process isolation (process-global env + alnair_home OnceLock in the shared lib test binary); run: cargo test -p alnair-tui --lib -- app::leader_cluster --ignored --test-threads=1"]
+#[serial_test::serial(ALNAIR_SHARE_DIR)]
+fn auto_attach_joins_recent_session_for_cwd() {
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    tokio::task::LocalSet::new().block_on(&rt, async {
+        let mut cluster = PagerLeaderCluster::start().await;
+        let mut a = cluster.client("cluster-attach-a", false).await;
+
+        cluster.server.set_response(format!("{T1} seed turn."));
+        let sid = a.new_session().await;
+        a.run_turn("go", T1).await;
+
+        // A bare second client: arm the attach, fetch the roster, and let the
+        // production `RosterLoaded` path pick the session.
+        let mut b = cluster.client("cluster-attach-b", false).await;
+        b.app.startup_auto_attach = Some(crate::app::session_startup::AutoAttach {
+            cwd: b.app.cwd.clone(),
+        });
+        b.act(Action::FetchRoster);
+        b.pump_until("auto-attach loads the session", |app| {
+            matches!(app.active_view, crate::app::app_view::ActiveView::Agent(_))
+                && app.agents.values().any(|agent| {
+                    agent.session.session_id.is_some() && !agent.session.loading_replay
+                })
+        })
+        .await;
+
+        b.pump_until("replay reaches the attached client", move |app| {
+            app.agents
+                .values()
+                .any(|agent| agent_message_text(agent).contains(T1))
+        })
+        .await;
+        assert_eq!(
+            occurrences(&agent_message_text(b.agent_for_session(&sid)), T1),
+            1,
+            "an attach must replay the transcript exactly once"
+        );
+        assert_eq!(
+            occurrences(&agent_message_text(a.agent_for_session(&sid)), T1),
+            1,
+            "attaching must not re-drive the turn on the driver"
+        );
+        assert_eq!(
+            cluster.inference_request_count(),
+            1,
+            "a join must never issue a second inference request"
+        );
+        assert!(
+            b.app.startup_auto_attach.is_none(),
+            "the attach marker is one-shot"
+        );
+
+        a.sever();
+        b.sever();
+    });
+}
+
+/// Two clients share one tab strip through the locked store.
+///
+/// The strip is client-side state backed by `pager_tabs.json`, so this checks
+/// the seam that makes it shared: A opens three sessions, B reads the same file
+/// and sees the same ids, then B closes one and A sees two.
+#[test]
+#[ignore = "leader-cluster: needs single-process isolation (process-global env + alnair_home OnceLock in the shared lib test binary); run: cargo test -p alnair-tui --lib -- app::leader_cluster --ignored --test-threads=1"]
+#[serial_test::serial(ALNAIR_SHARE_DIR)]
+fn two_clients_share_tab_strip() {
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    tokio::task::LocalSet::new().block_on(&rt, async {
+        let mut cluster = PagerLeaderCluster::start().await;
+        let mut a = cluster.client("cluster-tabs-a", false).await;
+
+        cluster.server.set_response(format!("{T1} tab seed."));
+        let first = a.new_session().await;
+        a.run_turn("go", T1).await;
+
+        // Two more sessions so the strip has something to share.
+        a.act(Action::NewSession);
+        a.pump_until("second session", |app| app.tabs.len() == 2)
+            .await;
+        a.act(Action::NewSession);
+        a.pump_until("third session", |app| app.tabs.len() == 3)
+            .await;
+
+        let ids = a.app.tabs.session_ids();
+        assert_eq!(ids.len(), 3, "A tracks three tabs");
+        assert!(ids.contains(&first), "the first session is one of them");
+
+        // B sees the same list: the store is the agreement between clients.
+        let mut b = cluster.client("cluster-tabs-b", false).await;
+        b.app.tabs = crate::app::tabs::SessionTabs::from_parts(
+            crate::app::tabs::store::load()
+                .list(
+                    crate::app::tabs::store::TabScope::Global,
+                    &a.app.cwd.to_string_lossy(),
+                )
+                .tabs
+                .clone(),
+            None,
+        );
+        assert_eq!(
+            b.app.tabs.session_ids(),
+            ids,
+            "both clients must see the same tabs in the same order"
+        );
+
+        // B closes one; A observes the shrink on its next reload.
+        let closed = ids[0].clone();
+        b.app.tabs.set_active(0);
+        b.act(Action::CloseTab);
+        b.pump_once();
+
+        a.app.tab_store_stamp = None; // force a re-read
+        let reloaded = crate::app::tabs::store::load()
+            .list(
+                crate::app::tabs::store::TabScope::Global,
+                &a.app.cwd.to_string_lossy(),
+            )
+            .tabs
+            .clone();
+        assert_eq!(reloaded.len(), 2, "the close reached the shared file");
+        assert!(
+            !reloaded.iter().any(|t| t.session_id == closed),
+            "the closed tab is gone for everyone"
+        );
+
+        a.sever();
+        b.sever();
+    });
+}
+#[test]
+#[ignore = "leader-cluster: needs single-process isolation (process-global env + alnair_home OnceLock in the shared lib test binary); run: cargo test -p alnair-tui --lib -- app::leader_cluster --ignored --test-threads=1"]
+#[serial_test::serial(ALNAIR_SHARE_DIR)]
+fn auto_attach_ignores_sessions_from_another_cwd() {
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    tokio::task::LocalSet::new().block_on(&rt, async {
+        let mut cluster = PagerLeaderCluster::start().await;
+        let mut a = cluster.client("cluster-other-cwd-a", false).await;
+
+        cluster.server.set_response(format!("{T1} seed turn."));
+        let _sid = a.new_session().await;
+        a.run_turn("go", T1).await;
+
+        let elsewhere = tempfile::tempdir().expect("tempdir");
+        let mut b = cluster.client("cluster-other-cwd-b", false).await;
+        b.app.startup_auto_attach = Some(crate::app::session_startup::AutoAttach {
+            cwd: elsewhere.path().to_path_buf(),
+        });
+        b.act(Action::FetchRoster);
+        b.pump_until("roster lands", |app| !app.leader_roster.is_empty())
+            .await;
+        b.pump_once();
+        assert!(
+            matches!(b.app.active_view, crate::app::app_view::ActiveView::Welcome),
+            "a launch in another repo must not be pulled into this one"
+        );
+        assert!(b.app.agents.is_empty(), "no agent may be created");
+        assert!(b.app.startup_auto_attach.is_none(), "one shot");
+
+        a.sever();
+        b.sever();
+    });
+}

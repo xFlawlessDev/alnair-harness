@@ -511,6 +511,20 @@ impl SessionActor {
             ))
             .await;
     }
+    /// Record that the user has now seen this session.
+    ///
+    /// Queued to the persistence actor, which owns every summary write: it
+    /// serializes with the actor's own writes through the file lock, so a view
+    /// mark can never race a turn's summary update. Monotonic, and not
+    /// activity — `record_view` leaves `updated_at` alone so a read never
+    /// re-sorts the roster.
+    pub(super) fn record_view(&self, viewed_at: chrono::DateTime<chrono::Utc>) -> bool {
+        self.notifications
+            .persistence_tx
+            .send(PersistenceMsg::RecordView { viewed_at })
+            .is_ok()
+    }
+
     /// Shared by `/session-info`, `/context`, and `GetSessionInfo`.
     pub(super) async fn build_session_info(&self) -> SessionInfoData {
         let config = self.chat_state_handle.get_sampling_config().await;

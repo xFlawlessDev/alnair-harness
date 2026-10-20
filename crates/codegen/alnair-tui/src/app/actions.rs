@@ -125,6 +125,20 @@ pub enum Action {
     },
     /// Send the current prompt text to the agent.
     SendPrompt(String),
+    /// Activate the session tab at this index (0-based).
+    SwitchToTab(usize),
+    /// Activate the tab for this session id, if it is one.
+    SwitchToTabId(String),
+    /// Close the active tab. The session keeps running.
+    CloseTab,
+    /// Reopen the most recently closed tab.
+    ReopenTab,
+    /// Move the tab cursor forward (`true`) or backward.
+    CycleTab(bool),
+    /// Send the server-side "viewed" watermark for a session.
+    RecordSessionView(String),
+    /// Open the location picker so `+` can create in another repository.
+    TabOpenLocationPicker,
     /// Submit a clicked follow-up suggestion chip as a LITERAL model prompt.
     /// The suggestion text is server/model-controlled, so it must bypass
     /// slash-command and exit-alias resolution (a `/always-approve` or `/quit`
@@ -1373,6 +1387,11 @@ pub enum Effect {
     /// `alnair/sessions/list`. Only issued in leader mode while the
     /// dashboard is open.
     FetchRoster,
+    /// Record the viewed watermark for a session (`alnair/session/view`).
+    ///
+    /// Fire-and-forget: a failure only means the `●` marker stays until the
+    /// next attempt, which is why the client never guesses one locally.
+    RecordSessionView { session_id: String },
     /// Fetch the local on-disk session list (dormant/idle sessions) for the
     /// dashboard via `alnair/session/list` — the non-leader fallback for the
     /// FleetView roster. Issued while the dashboard is open and NOT in leader
@@ -2033,6 +2052,20 @@ pub enum TaskResult {
     /// Leader session roster loaded via `alnair/sessions/list`.
     RosterLoaded {
         sessions: Vec<crate::app::roster::RosterEntry>,
+    },
+    /// The viewed watermark was persisted. The `●` marker clears on the next
+    /// roster read that reflects it, not on this result.
+    SessionViewRecorded {
+        session_id: String,
+    },
+    /// The viewed watermark could not be persisted.
+    ///
+    /// Silent in the UI on purpose: the marker simply stays until the next
+    /// successful attempt, and nagging about a cosmetic state is worse than a
+    /// stale dot.
+    SessionViewFailed {
+        session_id: String,
+        error: String,
     },
     /// Leader session roster fetch failed (silent — no error modal).
     RosterFailed {

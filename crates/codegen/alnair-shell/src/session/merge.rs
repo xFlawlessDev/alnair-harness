@@ -357,6 +357,7 @@ mod tests {
             agent_name: None,
             sandbox_profile: None,
             reasoning_effort: None,
+            viewed_at: None,
         }
     }
 

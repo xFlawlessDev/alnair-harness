@@ -759,6 +759,28 @@ pub(crate) fn execute(
                     }
                 });
         }
+        Effect::RecordSessionView { session_id } => {
+            // Fire-and-forget: the `●` marker clears on the next roster poll,
+            // so a failed write degrades to a stale marker rather than a
+            // guessed one. Never retried here — the caller re-arms on focus.
+            let tx = acp_tx.clone();
+            tasks.spawn(async move {
+                let params = serde_json::json!({ "sessionId": session_id });
+                let request = acp::ExtRequest::new(
+                    "alnair/session/view",
+                    serde_json::value::to_raw_value(&params)
+                        .expect("serialize session view params")
+                        .into(),
+                );
+                match acp_send(request, &tx).await {
+                    Ok(_) => TaskResult::SessionViewRecorded { session_id },
+                    Err(e) => TaskResult::SessionViewFailed {
+                        session_id,
+                        error: sanitize_user_error(&format!("{e}")),
+                    },
+                }
+            });
+        }
         Effect::FetchDashboardSessions => {
             let tx = acp_tx.clone();
             let cwd = cwd.to_path_buf();

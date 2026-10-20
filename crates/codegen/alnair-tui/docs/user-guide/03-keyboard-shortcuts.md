@@ -207,6 +207,20 @@ Actions available from any screen.
 |-----|---------|--------|-------------|
 | `Ctrl+N` | | Create a new session (optionally in a git worktree) | Yes (double-press within 1000ms) |
 | `Ctrl+Q` | `Ctrl+D` | Quit the application | Yes (double-press within 1000ms) |
+| `Ctrl+PageDown` | `Ctrl+Tab`\* | Next session tab | No |
+| `Ctrl+PageUp` | `Ctrl+Shift+Tab`\* | Previous session tab | No |
+| `Alt+1` … `Alt+9` | | Jump to session tab N | No |
+| `Alt+W` | | Close the active session tab | No |
+| `Alt+Shift+T` | | Reopen the last closed session tab | No |
+
+\* The `Ctrl+Tab` variants are bound **only where the terminal reports them as a
+distinct chord** (kitty keyboard protocol). Without it the wire byte is a plain
+`Tab`, which already means "move focus" — binding it there would silently steal
+that chord. `Ctrl+PageUp/Down` works everywhere and is the advertised primary.
+On macOS, `Alt+1`..`Alt+9` need "Option as Meta" enabled in the terminal profile.
+
+Closing a tab does not end the session; see
+[Sessions](17-sessions.md#session-tabs) for tab scope and the unread marker.
 
 **VS Code family terminal** (VS Code, Cursor, Windsurf, Zed integrated terminals): `Ctrl+Q` is captured by the host, so Alnair makes **`Ctrl+D` the sole quit key** (`Ctrl+Q` is not bound). Half-page-down is rebound to bare **`Shift+D`**. Mid-turn interject uses **`Ctrl+L`** (no alternates) because `Ctrl+Enter` / `Ctrl+I` do not reliably reach the PTY; extensions are opened via `/plugins` instead of `Ctrl+L`.
 

@@ -198,6 +198,19 @@ pub(crate) fn switch_to_agent(app: &mut AppView, target: AgentId, _cause: Switch
         return;
     }
     app.active_view = ActiveView::Agent(target);
+    // Tab registration: this is the single funnel for every `ActiveView::Agent`
+    // assignment, so a session becomes a tab exactly when it becomes the view.
+    // Subagent views are not tabs — they are reached through the parent block.
+    if let Some(agent) = app.agents.get(&target)
+        && let Some(sid) = agent.session.session_id.as_ref()
+    {
+        let sid = sid.0.to_string();
+        let cwd = agent.session.cwd.clone();
+        super::tabs::register_tab(app, &sid, cwd);
+        // A tab becoming active is a read: queue the server-side watermark so
+        // the `●` clears for every client, not just this one.
+        app.pending_view_mark = Some(sid);
+    }
     // Re-anchor the global permission-mode mirror to the now-active agent so the
     // cycle's `sync_active_auto_flag` (which derives from the global) can't copy a
     // different agent's stale Auto/Always-Approve onto this one. Per-session

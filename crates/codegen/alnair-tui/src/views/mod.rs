@@ -43,6 +43,7 @@ pub mod slash_dropdown;
 pub mod status_bar;
 pub mod subagent_catalog_pane;
 pub mod suggestion_controller;
+pub mod tab_strip;
 pub mod tasks_pane;
 pub mod timeline;
 pub mod todo_pane;

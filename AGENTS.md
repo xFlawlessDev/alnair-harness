@@ -142,6 +142,56 @@ a design against the 0.1.15 teardown), MCP servers on protocol 2026-07-28
 - Graph node worktrees are removed right after a successful merge-back;
   only FAILED nodes keep theirs for postmortem.
 
+## Multi-terminal UX
+
+The pager defaults to leader mode: `resolve_use_leader` takes an
+`unset_default` parameter, the pager passes `true`, and `alnair agent` passes
+`false` so the editor/stdio path keeps `stdio_direct_update_eligible`. An
+explicit `[cli] use_leader` still wins in both directions, and `--no-leader`
+still never evicts a running leader.
+
+A bare launch (no resume, no initial prompt, no `--worktree`, not minimal,
+under a leader) arms `AppView::startup_auto_attach`; the first
+`TaskResult::RosterLoaded` calls `take_startup_auto_attach_choice`, which is
+the ONE decision point. `session_startup::pick_auto_attach` matches the
+**canonicalized cwd exactly** — one leader serves every repo, so that match is
+the only thing keeping them apart — and keeps `Working`/`NeedsInput` rows
+(`session/load` is join-not-steal, so an attach becomes a viewer). The
+`viewer` status chip and the one-shot notice are how the user learns a turn
+is being driven elsewhere. A load failure for the auto-attach agent returns to
+Welcome with a toast; every other load failure keeps its error block.
+
+### Session tabs (F2)
+
+The strip is client state over a shared file, not agent state. `TabEntry` keys
+on `session_id` (stable across processes), never `AgentId`, and carries the
+session's **own cwd** — a global strip spans repositories, so `+` creates in
+the focused tab's directory and the `repo ⎇ branch` label appears only when the
+strip holds more than one. A repo with no session yet is reached through the
+existing location picker (`+…`), which is why that action is no longer gated on
+the dashboard being foreground.
+
+`~/.alnair/run/pager_tabs.json` follows `active_sessions.rs`: a `_in(root, …)`
+seam for tests, `lock_exclusive` held across the whole read-modify-write,
+`replace_file` for the commit, readers lock-free. `NotFound` reads as empty —
+on Windows `replace_file` deletes the destination before renaming, so absence is
+a normal transient state and must never be treated as corruption. `scope` lives
+inside the file so two clients cannot disagree mid-session; the file wins over
+config. `cancelled_tabs` is in-process only: the lock already makes
+cross-process resurrection impossible.
+
+Tab chords are context-gated for the same reason `Ctrl+.` is: without the kitty
+keyboard protocol `Ctrl+Tab` arrives as a plain CR, which is `FocusPrompt` /
+`FocusScrollback`. `Ctrl+PageUp/Down` is the primary everywhere; the `Ctrl+Tab`
+variants are added only when `kitty_skip_reason()` is `None`.
+
+The unread marker is server-authoritative. `Summary.viewed_at` merges
+monotonically, and `SummaryPatch::record_view` **skips the `updated_at` bump** —
+`last_change_unix_ms()` falls back to `updated_at`, so treating a read as
+activity would re-sort the roster (and the strip) on every focus. `●` is
+computed as `last_change_unix_ms > viewed_at` and rendered only on inactive
+tabs; a session with no watermark reads as unread once and self-corrects.
+
 ## Terminal keyboard
 
 `Shift+Enter` inserts a newline in the prompt wherever the terminal can

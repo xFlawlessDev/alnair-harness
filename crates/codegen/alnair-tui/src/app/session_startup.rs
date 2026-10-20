@@ -398,6 +398,67 @@ pub fn effective_fork_new_cwd(process_cwd: &str, parent_cwd: Option<&Path>) -> S
         .map(|p| p.to_string_lossy().into_owned())
         .unwrap_or_else(|| process_cwd.to_string())
 }
+/// A bare launch that is eligible to join an existing session.
+///
+/// Armed by the event loop once, consumed by the first `RosterLoaded`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AutoAttach {
+    /// Canonicalized process cwd; the attach only ever matches this exactly.
+    pub cwd: PathBuf,
+}
+
+/// The session a bare launch decided to join.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AutoAttachChoice {
+    pub session_id: String,
+    /// The roster entry's own cwd — the load request re-homes into it.
+    pub cwd: PathBuf,
+    pub activity: super::roster::RosterActivity,
+}
+
+/// Canonicalize `path`, falling back to the raw path when the filesystem
+/// refuses (a deleted cwd, a permission wall). Both sides of the cwd compare go
+/// through this, so a failed canonicalization degrades to a raw string compare
+/// instead of silently matching nothing.
+fn canonical_or_raw(path: &Path) -> PathBuf {
+    dunce::canonicalize(path).unwrap_or_else(|_| path.to_path_buf())
+}
+
+/// Pick the session a bare launch should attach to.
+///
+/// Rules, in order:
+/// 1. `enabled == false` → `None`.
+/// 2. Drop remote-origin rows and rows that cannot be joined (`Dormant`,
+///    `Dead`). `Working` / `NeedsInput` are deliberately KEPT — those are the
+///    sessions a second terminal most wants to watch, and `session/load` is
+///    join-not-steal, so attaching never takes the turn over.
+/// 3. Compare canonicalized cwds and require an exact match. The leader is one
+///    per user, so this is the only thing keeping three repos apart.
+/// 4. Newest `last_change_unix_ms` wins.
+///
+/// Pure: no I/O beyond `canonicalize`, so it is unit-testable without a TUI.
+pub fn pick_auto_attach(
+    entries: &[super::roster::RosterEntry],
+    cwd: &Path,
+    enabled: bool,
+) -> Option<AutoAttachChoice> {
+    use super::roster::RosterActivity;
+    if !enabled {
+        return None;
+    }
+    let wanted = canonical_or_raw(cwd);
+    entries
+        .iter()
+        .filter(|e| e.origin.kind == "local")
+        .filter(|e| !matches!(e.activity, RosterActivity::Dormant | RosterActivity::Dead))
+        .filter(|e| canonical_or_raw(Path::new(&e.cwd)) == wanted)
+        .max_by_key(|e| e.last_change_unix_ms)
+        .map(|e| AutoAttachChoice {
+            session_id: e.session_id.clone(),
+            cwd: PathBuf::from(&e.cwd),
+            activity: e.activity,
+        })
+}
 /// Resolve most-recent session id for cwd, or error.
 async fn most_recent_session_id(cwd: &str) -> anyhow::Result<(String, Option<String>)> {
     let summaries = alnair_shell::session::persistence::list_summaries(Some(cwd)).await?;
@@ -657,10 +718,132 @@ async fn resolve_existing_session(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::app::roster::{RosterActivity, RosterEntry, RosterOrigin};
     use clap::Parser;
     fn parse(args: &[&str]) -> PagerArgs {
         PagerArgs::try_parse_from(args).unwrap()
     }
+
+    /// A roster row with the fields `pick_auto_attach` reads; everything else
+    /// is a stable default so a test only states what it cares about.
+    fn roster_row(
+        session_id: &str,
+        cwd: &Path,
+        activity: RosterActivity,
+        last_change_unix_ms: i64,
+    ) -> RosterEntry {
+        RosterEntry {
+            session_id: session_id.to_string(),
+            title: None,
+            cwd: cwd.to_string_lossy().into_owned(),
+            is_worktree: false,
+            model_id: None,
+            yolo: false,
+            activity,
+            resident: true,
+            last_change_unix_ms,
+            viewed_at: None,
+            origin: RosterOrigin {
+                kind: "local".into(),
+                host: None,
+            },
+        }
+    }
+
+    #[test]
+    fn auto_attach_disabled_never_attaches() {
+        let dir = tempfile::tempdir().unwrap();
+        let rows = vec![roster_row("s1", dir.path(), RosterActivity::Idle, 1)];
+        assert!(pick_auto_attach(&rows, dir.path(), false).is_none());
+    }
+
+    #[test]
+    fn auto_attach_picks_the_newest_local_session_for_the_cwd() {
+        let dir = tempfile::tempdir().unwrap();
+        let rows = vec![
+            roster_row("older", dir.path(), RosterActivity::Idle, 100),
+            roster_row("newest", dir.path(), RosterActivity::Completed, 300),
+            roster_row("middle", dir.path(), RosterActivity::NeedsInput, 200),
+        ];
+        let choice = pick_auto_attach(&rows, dir.path(), true).expect("a choice");
+        assert_eq!(choice.session_id, "newest");
+        assert_eq!(choice.activity, RosterActivity::Completed);
+    }
+
+    /// The leader is one per user, so a cwd mismatch is the ONLY thing that
+    /// keeps three repos apart. Never cross it, not even for a newer session.
+    #[test]
+    fn auto_attach_never_crosses_the_cwd() {
+        let mine = tempfile::tempdir().unwrap();
+        let other = tempfile::tempdir().unwrap();
+        let rows = vec![
+            roster_row("mine", mine.path(), RosterActivity::Idle, 100),
+            roster_row("theirs", other.path(), RosterActivity::Idle, 900),
+        ];
+        let choice = pick_auto_attach(&rows, mine.path(), true).expect("a choice");
+        assert_eq!(choice.session_id, "mine");
+    }
+
+    #[test]
+    fn auto_attach_returns_none_when_no_session_matches() {
+        let mine = tempfile::tempdir().unwrap();
+        let other = tempfile::tempdir().unwrap();
+        let rows = vec![roster_row(
+            "theirs",
+            other.path(),
+            RosterActivity::Idle,
+            900,
+        )];
+        assert!(pick_auto_attach(&rows, mine.path(), true).is_none());
+        assert!(pick_auto_attach(&[], mine.path(), true).is_none());
+    }
+
+    /// A session already driving a turn is the most interesting one to watch;
+    /// `session/load` joins as a viewer instead of stealing the turn.
+    #[test]
+    fn auto_attach_keeps_running_and_needs_input_sessions() {
+        let dir = tempfile::tempdir().unwrap();
+        for activity in [RosterActivity::Working, RosterActivity::NeedsInput] {
+            let rows = vec![roster_row("s", dir.path(), activity, 1)];
+            let choice = pick_auto_attach(&rows, dir.path(), true)
+                .unwrap_or_else(|| panic!("{activity:?} must stay attachable"));
+            assert_eq!(choice.activity, activity);
+        }
+    }
+
+    #[test]
+    fn auto_attach_drops_dormant_and_dead_sessions() {
+        let dir = tempfile::tempdir().unwrap();
+        for activity in [RosterActivity::Dormant, RosterActivity::Dead] {
+            let rows = vec![roster_row("s", dir.path(), activity, 1)];
+            assert!(
+                pick_auto_attach(&rows, dir.path(), true).is_none(),
+                "{activity:?} must not be attached"
+            );
+        }
+    }
+
+    #[test]
+    fn auto_attach_drops_remote_origin_sessions() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut row = roster_row("remote", dir.path(), RosterActivity::Idle, 1);
+        row.origin = RosterOrigin {
+            kind: "remote".into(),
+            host: Some("other-host".into()),
+        };
+        assert!(pick_auto_attach(&[row], dir.path(), true).is_none());
+    }
+
+    /// A cwd that no longer exists cannot be canonicalized; both sides then
+    /// compare as raw paths rather than silently matching nothing.
+    #[test]
+    fn auto_attach_falls_back_to_raw_compare_when_canonicalize_fails() {
+        let missing = PathBuf::from("/definitely/not/a/real/alnair/cwd");
+        let rows = vec![roster_row("s", &missing, RosterActivity::Idle, 1)];
+        let choice = pick_auto_attach(&rows, &missing, true).expect("raw compare");
+        assert_eq!(choice.session_id, "s");
+    }
+
     #[test]
     fn deferred_startup_owner_take_is_atomic() {
         let mut actions = DeferredStartupActions {

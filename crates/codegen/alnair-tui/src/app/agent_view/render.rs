@@ -1228,6 +1228,18 @@ impl AgentView {
             }
             status.push("plan", Line::from(Span::styled("plan", plan_style)));
         }
+        // Watching a turn another client drives (a second terminal attached
+        // via `session/load`). Shown only while that turn runs: once it ends
+        // this client is an ordinary attached view.
+        if self.attached_as_viewer && self.session.state.is_turn_running() {
+            status.push(
+                "viewer",
+                Line::from(Span::styled(
+                    "viewer",
+                    Style::default().fg(theme.gray_dim).bg(theme.bg_base),
+                )),
+            );
+        }
         if let Some(ref goal) = self.goal_state {
             let tick = self.tasks.tick_count() as usize;
             let active_subagent_tokens: u64 = self

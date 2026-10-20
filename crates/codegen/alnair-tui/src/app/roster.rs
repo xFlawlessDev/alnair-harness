@@ -53,6 +53,13 @@ pub struct RosterEntry {
     pub resident: bool,
     #[serde(default)]
     pub last_change_unix_ms: i64,
+    /// When this user last viewed the session, from the server-side watermark.
+    ///
+    /// `None` for sessions written before the field existed, which reads as
+    /// "unread once" and self-corrects on the first view. See
+    /// `AppView::tab_is_unread`.
+    #[serde(default)]
+    pub viewed_at: Option<chrono::DateTime<chrono::Utc>>,
     #[serde(default)]
     pub origin: RosterOrigin,
 }
@@ -116,6 +123,7 @@ mod tests {
             activity: agent::RosterActivity::Working,
             resident: true,
             last_change_unix_ms: 1_725_000_000_123,
+            viewed_at: None,
             origin: agent::RosterOrigin::Local,
         }
     }

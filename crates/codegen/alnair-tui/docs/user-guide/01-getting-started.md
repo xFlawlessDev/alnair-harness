@@ -67,6 +67,17 @@ alnair
 
 See [Authentication](02-authentication.md) for the full set of auth options including OIDC, external auth providers, and device code flow.
 
+### Several terminals, one session
+
+The pager runs a shared leader by default, so every terminal you open in the
+same project is a client of the same agent rather than a separate one. A bare
+`alnair` in a second terminal attaches to the newest live session for the
+current directory (see [Automatic attach from a second
+terminal](17-sessions.md#automatic-attach-from-a-second-terminal)). Pass
+`--no-attach` to keep the welcome screen, or `--no-leader` to run a fully
+standalone process. `alnair agent stdio` — the editor/ACP transport — is
+unaffected and still runs without a leader unless you ask for one.
+
 ---
 
 ## Basic Interaction

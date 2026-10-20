@@ -766,6 +766,8 @@ impl JsonlStorageAdapter {
             agent_name: source_summary.agent_name,
             sandbox_profile: source_summary.sandbox_profile,
             reasoning_effort: source_summary.reasoning_effort,
+            // A fork is a new session nobody has looked at yet.
+            viewed_at: None,
         };
         let summary_bytes = serde_json::to_vec_pretty(&target_summary)
             .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
@@ -1026,6 +1028,21 @@ impl StorageAdapter for JsonlStorageAdapter {
             info,
             super::summary_write::SummaryPatch {
                 git_head: Some(super::summary_write::GitHeadPatch { commit, branch }),
+                ..Default::default()
+            },
+        )
+        .await
+    }
+    async fn record_view(
+        &self,
+        info: &Info,
+        viewed_at: chrono::DateTime<chrono::Utc>,
+    ) -> io::Result<()> {
+        self.apply_summary_patch(
+            info,
+            super::summary_write::SummaryPatch {
+                viewed_at: Some(viewed_at),
+                record_view: true,
                 ..Default::default()
             },
         )

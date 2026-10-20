@@ -31,6 +31,7 @@ pub async fn handle(
 ) -> Result<acp::ExtResponse, acp::Error> {
     match args.method.as_ref() {
         "alnair/session/info" => handle_session_info(agent, args).await,
+        "alnair/session/view" => handle_session_view(agent, args).await,
         "alnair/session/close" => handle_session_close(agent, args).await,
         "alnair/session/list" => handle_session_list(agent, args).await,
         "alnair/sessions/list" => handle_roster_list(agent, args).await,
@@ -66,6 +67,69 @@ struct RecentSessionsRequest {
     limit: usize,
 }
 
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SessionViewRequest {
+    session_id: String,
+}
+
+/// `alnair/session/view` — record that this user has now seen the session.
+///
+/// The watermark is server-side and monotonic, so two clients looking at the
+/// same session cannot push it backwards. A view is not activity: the patch
+/// carries `record_view`, which keeps `updated_at` (and therefore the roster's
+/// `last_change_unix_ms` sort key) untouched. See `Summary::apply_patch`.
+///
+/// The session must be resident: a viewer attaches with `session/load` first,
+/// so a non-resident id means the client is out of date, not that we should
+/// create a file for a session nobody is hosting.
+async fn handle_session_view(
+    agent: &MvpAgent,
+    args: &acp::ExtRequest,
+) -> Result<acp::ExtResponse, acp::Error> {
+    let req: SessionViewRequest = serde_json::from_str(args.params.get())
+        .map_err(|e| acp::Error::invalid_params().data(format!("invalid params: {e}")))?;
+
+    let sid = acp::SessionId::new(req.session_id.clone());
+    let Some(handle) = agent.sessions.borrow().get(&sid).cloned() else {
+        tracing::debug!(
+            session_id = %req.session_id,
+            "session/view: session not resident; ignoring the watermark"
+        );
+        return ExtMethodResult::success(serde_json::json!({ "recorded": false }))
+            .to_ext_response()
+            .map_err(|e| acp::Error::internal_error().data(e.to_string()));
+    };
+
+    let (respond_to, rx) = tokio::sync::oneshot::channel();
+    let sent = handle
+        .cmd_tx
+        .send(crate::session::SessionCommand::RecordView {
+            viewed_at: chrono::Utc::now(),
+            respond_to,
+        });
+    if sent.is_err() {
+        return ExtMethodResult::success(serde_json::json!({ "recorded": false }))
+            .to_ext_response()
+            .map_err(|e| acp::Error::internal_error().data(e.to_string()));
+    }
+    match rx.await {
+        Ok(Ok(())) => ExtMethodResult::success(serde_json::json!({ "recorded": true }))
+            .to_ext_response()
+            .map_err(|e| acp::Error::internal_error().data(e.to_string())),
+        Ok(Err(e)) => {
+            tracing::warn!(
+                session_id = %req.session_id,
+                error = %e,
+                "session/view: failed to persist the viewed watermark"
+            );
+            Err(acp::Error::internal_error().data(e.to_string()))
+        }
+        Err(_) => ExtMethodResult::success(serde_json::json!({ "recorded": false }))
+            .to_ext_response()
+            .map_err(|e| acp::Error::internal_error().data(e.to_string())),
+    }
+}
 async fn handle_session_info(
     agent: &MvpAgent,
     args: &acp::ExtRequest,

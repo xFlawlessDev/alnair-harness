@@ -213,6 +213,9 @@ impl MvpAgent {
             activity: self.resident_activity(id),
             resident: true,
             last_change_unix_ms: chrono::Utc::now().timestamp_millis(),
+            // Filled by `merge_roster` from the on-disk summary: the live row
+            // has no watermark of its own.
+            viewed_at: None,
             origin: crate::agent::roster::RosterOrigin::Local,
         })
     }

@@ -792,11 +792,15 @@ async fn run_agent_command(
     });
     let agent_memory_config = agent_config.memory_config.clone();
     let leader_eligible = is_stdio;
+    // `unset_default = false`: the agent/stdio path is the editor-facing
+    // transport, and `stdio_direct_update_eligible` depends on it staying
+    // non-leader unless the user opts in. Only the pager defaults to leader.
     let (use_leader, policy_disable_reason) = resolve_use_leader(
         agent_args.leader,
         agent_args.no_leader,
         &raw_config,
         leader_eligible,
+        false,
     );
     tracing::info!(use_leader, ?policy_disable_reason, "leader mode resolved");
     if stdio_direct_update_eligible(is_stdio, use_leader)

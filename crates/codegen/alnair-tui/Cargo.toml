@@ -11,6 +11,9 @@ dunce = { workspace = true }
 alnair-tty-utils = { workspace = true }
 alnair-version = { workspace = true }
 
+# Cross-process tab state: flock over the shared `~/.alnair/run` document.
+fs2 = { workspace = true }
+
 # Shared prompt-queue wire types
 alnair-prompt-queue = { workspace = true }
 

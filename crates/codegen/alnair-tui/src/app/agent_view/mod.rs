@@ -1867,7 +1867,15 @@ fn resolve_action(action_id: Option<ActionId>) -> Option<InputOutcome> {
         | ActionId::DashboardOverlayStop
         | ActionId::DashboardToggleAutoApprove
         | ActionId::DashboardOpenLocationPicker
-        | ActionId::DashboardToggleWorktree => return None,
+        | ActionId::DashboardToggleWorktree
+        // Tab actions live at the global level (`When::Always`); the agent view
+        // must not swallow them, or the strip would be unreachable from a
+        // focused prompt.
+        | ActionId::TabNext
+        | ActionId::TabPrev
+        | ActionId::TabClose
+        | ActionId::TabReopen
+        | ActionId::TabSelect(_) => return None,
     };
     Some(InputOutcome::Action(action))
 }

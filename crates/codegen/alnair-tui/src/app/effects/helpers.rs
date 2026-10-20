@@ -540,6 +540,7 @@ pub(super) fn session_picker_entry_to_roster(
         activity: RosterActivity::Dormant,
         resident: false,
         last_change_unix_ms: last_change.timestamp_millis(),
+        viewed_at: None,
         origin: RosterOrigin {
             kind: e.source.clone(),
             host: e.hostname.clone(),

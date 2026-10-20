@@ -1150,6 +1150,7 @@ fn idle_roster_entry(session_id: &str, title: &str) -> crate::app::roster::Roste
         activity: crate::app::roster::RosterActivity::Dormant,
         resident: false,
         last_change_unix_ms: 1,
+        viewed_at: None,
         origin: crate::app::roster::RosterOrigin::default(),
     }
 }

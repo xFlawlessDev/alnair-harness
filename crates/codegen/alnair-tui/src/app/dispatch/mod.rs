@@ -28,6 +28,7 @@ mod router;
 mod session;
 mod settings;
 mod status;
+mod tabs;
 mod task_result;
 mod transcript;
 mod turn;

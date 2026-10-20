@@ -1179,6 +1179,47 @@ pub fn use_leader_from_toml(root: &TomlValue) -> bool {
     use_leader_from_toml_opt(root).unwrap_or(false)
 }
 
+/// Returns `None` when `[cli] auto_attach` is not set, `Some(true/false)` when
+/// explicitly configured. Controls whether a bare pager launch joins the most
+/// recent live session for the current directory; absent means "enabled".
+pub fn auto_attach_from_toml_opt(root: &TomlValue) -> Option<bool> {
+    if let TomlValue::Table(table) = root
+        && let Some(TomlValue::Table(cli)) = table.get("cli")
+    {
+        cli.get("auto_attach").and_then(|v| v.as_bool())
+    } else {
+        None
+    }
+}
+
+/// `[tabs] enabled`, or `None` when unset (meaning: enabled).
+pub fn tabs_enabled_from_toml_opt(root: &TomlValue) -> Option<bool> {
+    if let TomlValue::Table(table) = root
+        && let Some(TomlValue::Table(tabs)) = table.get("tabs")
+    {
+        tabs.get("enabled").and_then(|v| v.as_bool())
+    } else {
+        None
+    }
+}
+
+/// `[tabs] scope`: `"global"` (default) or `"cwd"`.
+///
+/// The scope is also stored inside `pager_tabs.json`, because two clients
+/// sharing that file must agree on how to read it even if one changes its
+/// config mid-session. An unknown value is ignored rather than fatal.
+pub fn tabs_scope_from_toml_opt(root: &TomlValue) -> Option<String> {
+    if let TomlValue::Table(table) = root
+        && let Some(TomlValue::Table(tabs)) = table.get("tabs")
+    {
+        tabs.get("scope")
+            .and_then(|v| v.as_str())
+            .map(|s| s.trim().to_ascii_lowercase())
+    } else {
+        None
+    }
+}
+
 /// Returns `Some(true/false)` when `[cli] session_registry` is set in config.toml,
 /// `None` when absent (allowing remote settings fallback).
 /// Local config takes precedence over remote settings.

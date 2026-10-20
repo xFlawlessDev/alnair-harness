@@ -696,6 +696,16 @@ pub trait StorageAdapter: Send + Sync {
         branch: Option<String>,
     ) -> io::Result<()>;
 
+    /// Record that the user has now seen this session.
+    ///
+    /// Monotonic and side-effect-free with respect to `updated_at`: a read must
+    /// not re-sort the roster. See `SummaryPatch::record_view`.
+    async fn record_view(
+        &self,
+        info: &Info,
+        viewed_at: chrono::DateTime<chrono::Utc>,
+    ) -> io::Result<()>;
+
     /// Update the monotonic telemetry trace turn counter ("next turn" value).
     async fn update_next_trace_turn(
         &self,

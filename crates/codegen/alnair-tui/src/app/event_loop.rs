@@ -515,6 +515,20 @@ pub(crate) async fn run(
     // sessions regardless); `leader_mode` only controls whether we additionally
     // poll the leader roster (see the roster-poll arm below).
     app.leader_mode = connection.leader_status_rx.is_some();
+    // Tab strip: `[tabs] enabled` / `[tabs] scope`. Read here rather than from
+    // `effective_config` (resolved further down, for the foreign-session
+    // lanes) so the strip's config is available before the first draw.
+    let tabs_config = alnair_shell::config::load_effective_config().ok();
+    app.tabs_enabled = tabs_config
+        .as_ref()
+        .and_then(alnair_shell::util::config::tabs_enabled_from_toml_opt)
+        .unwrap_or(true);
+    app.tabs_scope = tabs_config
+        .as_ref()
+        .and_then(alnair_shell::util::config::tabs_scope_from_toml_opt)
+        .as_deref()
+        .and_then(crate::app::tabs::store::TabScope::parse)
+        .unwrap_or(crate::app::tabs::store::TabScope::Global);
     app.screen_mode = term_state.screen_mode;
     app.escape_writer = terminal.backend_mut().writer().escape_writer();
     // Agent/dashboard prompts pick the mode up at their creation sites
@@ -1257,6 +1271,33 @@ pub(crate) async fn run(
         app.draw(terminal);
     }
 
+    // Bare launch under a leader: join the newest live session for this cwd.
+    // Armed here (not in the startup-intent match above) because it must run
+    // AFTER every explicit intent has had its chance to claim the screen. The
+    // roster arrives asynchronously, so the decision itself lands in
+    // `TaskResult::RosterLoaded`.
+    if matches!(materialized, MaterializedStartup::NewAuto)
+        && args.worktree.is_none()
+        && args.initial_prompt().is_none()
+        && !term_state.screen_mode.is_minimal()
+        && app.session_startup_allowed()
+        && app.leader_mode
+        && args.auto_attach_enabled(effective_config.as_ref())
+        && std::env::var("ALNAIR_OPEN_DASHBOARD_AT_STARTUP").as_deref() != Ok("1")
+    {
+        app.startup_auto_attach = Some(crate::app::session_startup::AutoAttach {
+            cwd: std::env::current_dir().unwrap_or_else(|_| app.cwd.clone()),
+        });
+        if process_effects(
+            vec![Effect::FetchRoster],
+            &mut tasks,
+            &mut app,
+            &progress_tx,
+        ) {
+            return Ok(make_run_result(&app));
+        }
+    }
+
     // Initial prompt from the CLI positional (`alnair "fix the bug"`). When
     // already authenticated, hand it to the shared dispatcher helper (same
     // `NewSession`/`SendPrompt` path the welcome screen uses). When not yet
@@ -1385,6 +1426,25 @@ pub(crate) async fn run(
     crate::app::signal_handler::set_quit_notify(quit_notify.clone());
 
     loop {
+        // Queue the viewed watermark for the active tab, once per iteration.
+        // Only while the window is focused: a background client did not read
+        // anything, and marking it would clear another terminal's `●`.
+        if app.window_focused
+            && let Some(sid) = app.pending_view_mark.take()
+        {
+            let effs = dispatch::dispatch(Action::RecordSessionView(sid), &mut app);
+            if process_effects(effs, &mut tasks, &mut app, &progress_tx) {
+                return Ok(make_run_result(&app));
+            }
+        }
+
+        // Cross-process tab state: another pager may have opened, closed, or
+        // reordered tabs. Reload on a cheap `(mtime, len)` change rather than a
+        // filesystem watcher — the strip already polls the roster at 1 s while
+        // the dashboard is open, and a stat is far cheaper than a notify
+        // subscription for a file that changes only on user action.
+        reload_tabs_if_changed(&mut app);
+
         // Pending $EDITOR / $PAGER suspends first: they can be armed by ANY
         // arm of the select below (input, ticks — e.g. minimal's incremental
         // /transcript build finishing inside a tick draw — tasks, ACP), so
@@ -1632,8 +1692,7 @@ pub(crate) async fn run(
                 }
             }
 
-            maybe_ev = input_rx.recv() => {
-                // Terminal events arrive via the dedicated reader thread set up
+            maybe_ev = input_rx.recv() => {                // Terminal events arrive via the dedicated reader thread set up
                 // near the top of this function. `None` means that thread ended.
                 let Some(ev) = maybe_ev else { break };
                 let result = drain_and_process(
@@ -2400,6 +2459,15 @@ async fn drain_and_process(
                     force_repaint = true;
                     needs_draw = true;
                 }
+                // A window that just regained focus is looking at its active
+                // tab: queue the viewed watermark now. `pending_view_mark` is
+                // normally set on activation, but that can happen while the
+                // window is in the background, and a background read is not a
+                // read the user made.
+                if let Some(sid) = active_session_id(app) {
+                    app.pending_view_mark = Some(sid);
+                }
+                app.window_focused = true;
                 // Capture recap eligibility BEFORE on_focus_gained() clears the
                 // away timer. Auto recap requires the shell rollout flag plus
                 // the notifications opt-in; manual `/recap` only needs the flag.
@@ -2471,6 +2539,10 @@ async fn drain_and_process(
             }
             Event::FocusLost => {
                 app.notification_service.focus_tracker.on_focus_lost();
+                app.window_focused = false;
+                // Drop any queued view mark: losing focus before it was sent
+                // means nobody is looking, so the `●` must stay.
+                app.pending_view_mark = None;
                 // The /gboom game latches held keys until their release; a
                 // release can be lost while unfocused, so stop all movement.
                 if app.gboom_active() {
@@ -2838,6 +2910,69 @@ fn merge_paste_fragments(events: Vec<Event>) -> Vec<Event> {
 }
 
 /// Spawn effects into the task set. Returns `true` if the app should quit.
+/// The active agent's session id, if the foreground view is an agent.
+fn active_session_id(app: &AppView) -> Option<String> {
+    let ActiveView::Agent(id) = app.active_view else {
+        return None;
+    };
+    app.agents
+        .get(&id)?
+        .session
+        .session_id
+        .as_ref()
+        .map(|sid| sid.0.to_string())
+}
+
+/// Reload the shared tab list when another process changed it.
+///
+/// Cheap enough to run every iteration: a `stat` on one file. `None` (file
+/// absent) is treated as "no change" — on Windows `replace_file` deletes the
+/// destination before renaming, so absence is a normal transient state and
+/// treating it as a wipe would blank the strip mid-swap.
+fn reload_tabs_if_changed(app: &mut AppView) {
+    if !app.tabs_enabled {
+        return;
+    }
+    let Some(root) = crate::app::tabs::store::store_root() else {
+        return;
+    };
+    let stamp = crate::app::tabs::store::stamp(&root);
+    let Some(stamp) = stamp else {
+        return;
+    };
+    if app.tab_store_stamp == Some(stamp) {
+        return;
+    }
+    app.tab_store_stamp = Some(stamp);
+
+    let state = crate::app::tabs::store::load_in(&root);
+    // The file is authoritative for the scope: two clients must not disagree
+    // about how to read the very file they share.
+    if state.scope != app.tabs_scope {
+        tracing::warn!(
+            file_scope = state.scope.as_str(),
+            configured_scope = app.tabs_scope.as_str(),
+            "pager_tabs.json declares a different scope; following the file"
+        );
+        app.tabs_scope = state.scope;
+    }
+    let cwd_key = app.cwd.to_string_lossy().into_owned();
+    let list = state.list(app.tabs_scope, &cwd_key);
+    // Do not resurrect a tab this process just closed: the write that removed
+    // it may still be in flight, and the file we just read predates it.
+    let tabs: Vec<crate::app::tabs::TabEntry> = list
+        .tabs
+        .iter()
+        .filter(|t| !app.cancelled_tabs.contains(&t.session_id))
+        .cloned()
+        .collect();
+    let active = list.active.filter(|i| *i < tabs.len());
+    let reloaded = crate::app::tabs::SessionTabs::from_parts(tabs, active);
+    if reloaded != app.tabs {
+        app.tabs = reloaded;
+    }
+}
+
 fn process_effects(
     effs: Vec<super::actions::Effect>,
     tasks: &mut JoinSet<TaskResult>,

@@ -42,6 +42,7 @@ pub mod session_startup;
 mod signal_handler;
 pub mod status_blocks;
 pub mod subagent;
+pub mod tabs;
 mod turn_completion;
 mod xt_filter;
 pub(crate) use crate::terminal::kitty_flags_pushed;
@@ -263,11 +264,17 @@ pub(crate) struct ExitInfo {
 /// `leader_mode` fetched as `false`). Unknown remote state (`None` / prefetch
 /// timeout), the default, `--no-leader`, and ineligibility are `None` — never
 /// reclaim a leader on an unknown signal.
+///
+/// `unset_default` is what an unconfigured, eligible launch resolves to. The
+/// pager passes `true` (multi-terminal UX: every terminal shares one leader);
+/// `alnair agent` passes `false` so the editor/stdio path — and with it
+/// `stdio_direct_update_eligible` — keeps its historical behaviour.
 pub fn resolve_use_leader(
     leader_flag: bool,
     no_leader_flag: bool,
     raw_config: &toml::Value,
     eligible: bool,
+    unset_default: bool,
 ) -> (bool, Option<&'static str>) {
     if no_leader_flag {
         return (false, None);
@@ -281,7 +288,7 @@ pub fn resolve_use_leader(
     if let Some(v) = config::use_leader_from_toml_opt(raw_config) {
         return (v, (!v).then_some("config"));
     }
-    (false, None)
+    (unset_default, None)
 }
 /// First non-blank of CLI > env > config (precedence + blank-skip). `None` →
 /// nothing set; `acp::initialize` canonicalizes and applies the default.
@@ -346,7 +353,7 @@ pub async fn run(
         .map_err(|e| anyhow::anyhow!("Failed to load config: {e}"))?;
     let prefetch_elapsed = startup_start.elapsed();
     let (use_leader, policy_disable_reason) =
-        resolve_use_leader(args.leader, args.no_leader, &raw_config, true);
+        resolve_use_leader(args.leader, args.no_leader, &raw_config, true, true);
     tracing::info!(
         use_leader,
         ?policy_disable_reason,
@@ -1431,47 +1438,65 @@ mod tests {
     #[test]
     fn no_leader_flag_wins_over_leader_flag_and_config() {
         let cfg = config_with_leader(true);
-        let (use_leader, reason) = resolve_use_leader(true, true, &cfg, true);
+        let (use_leader, reason) = resolve_use_leader(true, true, &cfg, true, true);
         assert!(!use_leader);
         assert_eq!(reason, None);
     }
     #[test]
     fn leader_flag_enables() {
-        let (use_leader, reason) = resolve_use_leader(true, false, &empty_config(), true);
+        let (use_leader, reason) = resolve_use_leader(true, false, &empty_config(), true, false);
         assert!(use_leader);
         assert_eq!(reason, None);
     }
     #[test]
     fn not_eligible_returns_false() {
         let cfg = config_with_leader(true);
-        let (use_leader, reason) = resolve_use_leader(false, false, &cfg, false);
+        let (use_leader, reason) = resolve_use_leader(false, false, &cfg, false, true);
         assert!(!use_leader);
         assert_eq!(reason, None);
     }
     #[test]
     fn config_toml_enables() {
         let cfg = config_with_leader(true);
-        let (use_leader, reason) = resolve_use_leader(false, false, &cfg, true);
+        let (use_leader, reason) = resolve_use_leader(false, false, &cfg, true, false);
         assert!(use_leader);
         assert_eq!(reason, None);
     }
     #[test]
     fn config_toml_disables() {
         let cfg = config_with_leader(false);
-        let (use_leader, reason) = resolve_use_leader(false, false, &cfg, true);
+        let (use_leader, reason) = resolve_use_leader(false, false, &cfg, true, true);
         assert!(!use_leader);
         assert_eq!(reason, Some("config"));
     }
+    /// An unconfigured eligible launch resolves to `unset_default`: the pager
+    /// passes `true` (leader by default), `alnair agent` passes `false`.
     #[test]
-    fn default_is_false() {
-        let (use_leader, reason) = resolve_use_leader(false, false, &empty_config(), true);
+    fn default_follows_unset_default() {
+        let (pager, reason) = resolve_use_leader(false, false, &empty_config(), true, true);
+        assert!(pager, "the pager defaults to leader mode");
+        assert_eq!(reason, None, "the default is not a policy disable");
+        let (agent, reason) = resolve_use_leader(false, false, &empty_config(), true, false);
+        assert!(!agent, "the agent/stdio path keeps its non-leader default");
+        assert_eq!(reason, None);
+    }
+    /// An explicit `[cli] use_leader` beats the caller's default in both
+    /// directions — the pager still honours `use_leader = false`.
+    #[test]
+    fn config_overrides_unset_default_both_ways() {
+        let off = config_with_leader(false);
+        let (use_leader, reason) = resolve_use_leader(false, false, &off, true, true);
         assert!(!use_leader);
+        assert_eq!(reason, Some("config"));
+        let on = config_with_leader(true);
+        let (use_leader, reason) = resolve_use_leader(false, false, &on, true, false);
+        assert!(use_leader);
         assert_eq!(reason, None);
     }
     #[test]
     fn cli_flag_overrides_config() {
         let cfg = config_with_leader(false);
-        let (use_leader, reason) = resolve_use_leader(true, false, &cfg, true);
+        let (use_leader, reason) = resolve_use_leader(true, false, &cfg, true, false);
         assert!(use_leader);
         assert_eq!(reason, None);
     }
@@ -1505,7 +1530,7 @@ mod tests {
     #[test]
     fn no_leader_flag_overrides_config_for_tui_fallback() {
         let cfg = config_with_leader(true);
-        let (use_leader, reason) = resolve_use_leader(false, true, &cfg, true);
+        let (use_leader, reason) = resolve_use_leader(false, true, &cfg, true, true);
         assert!(!use_leader);
         assert_eq!(reason, None);
     }
@@ -1532,12 +1557,6 @@ mod tests {
             panic!("expected agent subcommand");
         };
         assert!(agent.mode.is_none(), "bare agent carries no explicit mode");
-    }
-    #[test]
-    fn leader_defaults_off_without_config() {
-        let (use_leader, reason) = resolve_use_leader(false, false, &empty_config(), true);
-        assert!(!use_leader);
-        assert_eq!(reason, None);
     }
     #[test]
     fn cli_resume_parses_session_id() {

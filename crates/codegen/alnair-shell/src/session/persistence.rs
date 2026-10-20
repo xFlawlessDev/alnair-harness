@@ -322,6 +322,14 @@ pub enum PersistenceMsg {
         request_id: Option<String>,
     },
     Signals(SessionSignals),
+    /// Record the "last viewed" watermark for `alnair/session/view`.
+    ///
+    /// Monotonic and NOT activity: the actor writes it through
+    /// `record_view`, which keeps `updated_at` in place so the roster's
+    /// `last_change_unix_ms` sort key never moves on a read.
+    RecordView {
+        viewed_at: DateTime<Utc>,
+    },
     /// Persist announcement tracking state (MCP + skill announcement dedup).
     AnnouncementState(crate::session::announcement_state::AnnouncementState),
     /// Persist goal mode orchestration state.
@@ -881,6 +889,18 @@ pub struct Summary {
         deserialize_with = "alnair_sampling_types::lenient_reasoning_effort_opt"
     )]
     pub reasoning_effort: Option<ReasoningEffort>,
+    /// When this user last looked at the session.
+    ///
+    /// Written by `alnair/session/view` and merged monotonically, so two
+    /// clients marking the same session read never push the watermark back.
+    /// `None` for sessions written before the field existed — that reads as
+    /// "unread once" and self-corrects on the next view.
+    ///
+    /// A view is NOT activity: `SummaryPatch::record_view` deliberately skips
+    /// the `updated_at` bump, because `last_change_unix_ms()` falls back to
+    /// `updated_at` and bumping it would re-sort every roster on every focus.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub viewed_at: Option<DateTime<Utc>>,
 }
 
 /// Current `alnair_home` as a UTF-8 string, or `None` if the path isn't valid UTF-8.
@@ -933,6 +953,7 @@ impl Summary {
             agent_name: None,
             sandbox_profile: None,
             reasoning_effort: None,
+            viewed_at: None,
         })
     }
 
@@ -1799,6 +1820,12 @@ impl SessionPersistence {
                 PersistenceMsg::Btw(entry) => {
                     if let Err(e) = self.storage.append_btw(&self.info, &entry).await {
                         tracing::warn!(?e, "failed to write btw entry");
+                        self.note_storage_failure(&e);
+                    }
+                }
+                PersistenceMsg::RecordView { viewed_at } => {
+                    if let Err(e) = self.storage.record_view(&self.info, viewed_at).await {
+                        tracing::warn!(?e, "failed to persist the viewed watermark");
                         self.note_storage_failure(&e);
                     }
                 }

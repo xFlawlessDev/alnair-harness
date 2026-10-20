@@ -24,9 +24,9 @@ use super::session::lifecycle::{
     handle_worktree_session_created, handle_worktree_session_failed,
 };
 use super::session::load::{
-    handle_card_detail_loaded, handle_deep_search_results, handle_session_load_failed,
-    handle_session_loaded, handle_session_restore_failed, handle_session_restored,
-    handle_session_search_debounce_expired, remove_session_from_pickers,
+    dispatch_load_session, handle_card_detail_loaded, handle_deep_search_results,
+    handle_session_load_failed, handle_session_loaded, handle_session_restore_failed,
+    handle_session_restored, handle_session_search_debounce_expired, remove_session_from_pickers,
 };
 use super::settings::ui::apply_setting_rollback;
 use super::status::{handle_context_info_complete, handle_usage_fetched, scrub_error_for_toast};
@@ -295,6 +295,32 @@ pub(super) fn dispatch_task_result(result: TaskResult, app: &mut AppView) -> Vec
         }
         TaskResult::RosterLoaded { sessions } => {
             app.leader_roster = sessions;
+            // A bare launch arms one attach; the first roster is what decides
+            // it. The guards (still on Welcome, no deferred intent, no agent
+            // yet) live in the method so they stay testable without the loop.
+            let Some(choice) = app.take_startup_auto_attach_choice() else {
+                return vec![];
+            };
+            let effects = dispatch_load_session(app, choice.session_id, Some(choice.cwd), false);
+            // Read the agent id off the effect rather than predicting it: a
+            // gate that deferred the load emits no `LoadSession`, and marking
+            // an unrelated agent as ours would let the failure path discard it.
+            app.startup_auto_attach_agent = effects.iter().find_map(|e| match e {
+                Effect::LoadSession { agent_id, .. } => Some(*agent_id),
+                _ => None,
+            });
+            effects
+        }
+        TaskResult::SessionViewRecorded { session_id } => {
+            tracing::debug!(session_id = %session_id, "viewed watermark recorded");
+            vec![]
+        }
+        TaskResult::SessionViewFailed { session_id, error } => {
+            tracing::debug!(
+                session_id = %session_id,
+                error = %error,
+                "viewed watermark not recorded; the unread marker stays"
+            );
             vec![]
         }
         TaskResult::RosterFailed { error } => {
