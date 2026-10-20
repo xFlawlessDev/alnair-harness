@@ -1,8 +1,8 @@
 //! Turn status line — single-row widget showing current turn activity.
 //!
-//! Layout: `⠧ Run command 0.2s              1m20s ⇣12k [stop]`
+//! Layout: `● • · Run command 0.2s              1m20s ⇣12k [stop]`
 //!
-//! - Spinner (left, slowed to ~7.5fps)
+//! - Activity pulse: three dots travelling left to right (~1.2s per cycle)
 //! - Activity label (colored per activity type, truncates if needed)
 //! - Phase timer `Xs` (gray, never truncates)
 //! - Queued-send hint `· N queued — Enter to send now` (gray, sendable waits only)
@@ -30,6 +30,16 @@ use crate::theme::Theme;
 /// Show each spinner frame for this many animation ticks.
 /// At ~30fps, 4 ticks = ~133ms per frame = ~7.5 spinner fps.
 pub(crate) const SPINNER_DIVISOR: u64 = 4;
+
+/// Dwell of each frame in the three-dot activity pulse, in animation ticks.
+///
+/// The pulse is a continuous wave rather than a frame list, so this is only a
+/// quantization step: the dots' brightness is sampled every 2 ticks (~15 fps)
+/// instead of every tick. Three dots advancing a third of a cycle apart over
+/// [`crate::glyphs::PULSE_PERIOD_TICKS`] then read as a smooth left-to-right
+/// swell, while the slower sampling keeps the status row off the full-rate
+/// repaint path.
+pub(crate) const PULSE_DIVISOR: u64 = 2;
 
 /// Show each monitor-pulse frame for this many animation ticks — twice the
 /// [`SPINNER_DIVISOR`] dwell (~3.75 fps). The idle "watching" cue should
@@ -60,6 +70,33 @@ pub(crate) fn pending_diamond_color(theme: &Theme, accent: Color, tick: u64) -> 
     let brightness = crate::theme::pulse_brightness(tick, USER_WAITING_PULSE_SPEED);
     crate::render::color::blend_color(theme.bg_base, accent, 0.3 + brightness * 0.7)
         .unwrap_or(accent)
+}
+
+/// Append the three-dot activity pulse and the space that separates it from the
+/// label.
+///
+/// Each dot carries its own brightness (a travelling wave, see
+/// [`crate::glyphs::pulse_intensity`]) *and* its own glyph step
+/// ([`crate::glyphs::pulse_glyph`]), so the pulse survives a colourless
+/// terminal, a piped capture, or a theme whose blend lands on similar values.
+/// The row is always exactly [`crate::glyphs::PULSE_DOTS`] + 1 columns, which
+/// is what keeps the label beside it from shifting as the wave travels.
+fn push_pulse_dots(spans: &mut Vec<Span<'static>>, theme: &Theme, tick: u64, style: Style) {
+    let accent = style.fg.unwrap_or(theme.text_secondary);
+    let sample = tick / PULSE_DIVISOR;
+
+    for index in 0..crate::glyphs::PULSE_DOTS {
+        let intensity = crate::glyphs::pulse_intensity(sample, index);
+        let color =
+            crate::render::color::blend_color(theme.bg_base, accent, intensity).unwrap_or(accent);
+        spans.push(Span::styled(
+            crate::glyphs::pulse_glyph(intensity).to_string(),
+            style.fg(color),
+        ));
+    }
+    // One space before the label, matching the single-glyph indicators this
+    // replaced so the label lands in the same column.
+    spans.push(Span::styled(" ", style));
 }
 
 /// Output from rendering the turn status line.
@@ -341,17 +378,16 @@ pub fn render_turn_status(
     let right_width = turn_timer_width + bg_width + cancel_width;
 
     // While a tool is blocked on a permission prompt or `ask_user_question`,
-    // swap the spinning moon for a pulsing `◆`. Same animation shape the
+    // swap the pulse for a single pulsing `◆`. Same animation shape the
     // drain-blocked and plan-approval indicators already use, so every
     // "your turn" status reads with one consistent visual cue.
-    let spinner_str = if is_pending_user_input {
-        format!("{} ", crate::glyphs::diamond_filled())
+    let spinner_width: usize = if is_pending_user_input {
+        // `◆ ` — the diamond plus its trailing space.
+        crate::glyphs::diamond_filled().width() + 1
     } else {
-        let frames = crate::glyphs::moon_spinner_frames();
-        let frame_idx = (tick / SPINNER_DIVISOR) as usize % frames.len();
-        format!("{} ", frames[frame_idx])
+        // Three dots plus the trailing space before the label.
+        crate::glyphs::PULSE_DOTS + 1
     };
-    let spinner_width = spinner_str.width();
 
     // "Ask" tools (AskUserQuestion): suppress the phase timer so the user
     // doesn't feel time-pressured while answering questions.
@@ -404,19 +440,21 @@ pub fn render_turn_status(
 
     let mut left_spans: Vec<Span<'static>> = Vec::with_capacity(5);
 
-    // Spinner color: usually inherits the activity color (green for tools,
-    // secondary for thinking/responding, yellow for retries). While the
-    // tool is parked on the user we render `◆` with a smooth pulse from
-    // dim→bright in `accent_user`, matching the drain-blocked and
-    // plan-approval indicators so every "your turn" status has the same
+    // Indicator: usually three dots pulsing left to right in the activity
+    // colour (green for tools, secondary for thinking/responding, yellow for
+    // retries). While the tool is parked on the user we render `◆` with a
+    // smooth pulse from dim→bright in `accent_user`, matching the drain-blocked
+    // and plan-approval indicators so every "your turn" status has the same
     // visual cadence.
-    let spinner_style = if is_pending_user_input {
+    if is_pending_user_input {
         let diamond_color = pending_diamond_color(&theme, theme.accent_user, tick);
-        Style::default().fg(diamond_color)
+        left_spans.push(Span::styled(
+            format!("{} ", crate::glyphs::diamond_filled()),
+            Style::default().fg(diamond_color),
+        ));
     } else {
-        activity_style
-    };
-    left_spans.push(Span::styled(spinner_str, spinner_style));
+        push_pulse_dots(&mut left_spans, &theme, tick, activity_style);
+    }
 
     let mut queued_hint: Option<Span<'static>> = None;
     if is_tool {
@@ -1049,6 +1087,74 @@ mod tests {
             })
             .collect::<Vec<_>>()
             .join("\n")
+    }
+
+    /// Render a running turn at animation tick `tick` and return the row text.
+    fn render_turn_at_tick(tick: u64) -> String {
+        let area = Rect::new(0, 0, 60, 1);
+        let mut buf = Buffer::empty(area);
+        render_turn_status(
+            &mut buf,
+            area,
+            &AgentState::TurnRunning,
+            &Some(TurnActivity::Thinking),
+            None,
+            None,
+            tick,
+            false,
+            Some(MouseButtons::default()),
+            false,
+            None,
+            None,
+            false,
+            false,
+            false,
+            Watchers::default(),
+            false,
+            0,
+            false,
+        );
+        buffer_text(&buf, area)
+    }
+
+    /// The running-turn indicator is three dots, not the old moon emoji, and
+    /// they animate: a capture that drops colour must still change frame to
+    /// frame.
+    #[test]
+    fn running_turn_renders_an_animated_pulse() {
+        let frames: Vec<String> = (0..12).map(|step| render_turn_at_tick(step * 3)).collect();
+
+        assert!(
+            frames[0].starts_with("Thinking…") || frames[0].contains("Thinking…"),
+            "the label must still render, got {:?}",
+            frames[0]
+        );
+        assert!(
+            !frames.iter().any(|frame| frame.contains('\u{1f311}')),
+            "the moon spinner must be gone, got {:?}",
+            frames[0]
+        );
+
+        let distinct: std::collections::HashSet<&String> = frames.iter().collect();
+        assert!(
+            distinct.len() >= 3,
+            "the pulse must animate without colour, got {} distinct frames: {frames:?}",
+            distinct.len()
+        );
+    }
+
+    /// A travelling wave changes the glyphs but never the row width, so the
+    /// label and the right-aligned timer never jitter as the dots animate.
+    #[test]
+    fn pulse_row_width_is_stable() {
+        let widths: std::collections::HashSet<usize> = (0..24)
+            .map(|step| render_turn_at_tick(step).trim_end().chars().count())
+            .collect();
+        assert_eq!(
+            widths.len(),
+            1,
+            "the status row width must not change as the pulse animates: {widths:?}"
+        );
     }
 
     /// Invoke `render_turn_status` for an idle agent with the given MCP seed.

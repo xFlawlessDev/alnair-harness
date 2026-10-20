@@ -222,8 +222,8 @@ pub fn diamond_hollow_char() -> char {
 /// the MCP-connecting chip, the image-viewer loader, and the `/btw`
 /// overlay all fall back to the classic ASCII spinner there. Every frame
 /// in both sets is exactly 1 column so the surrounding layout never
-/// shifts. (The turn-status "Waiting for response…" line uses
-/// [`moon_spinner_frames`] instead.)
+/// shifts. (The turn-status activity line uses the
+/// [`pulse_intensity`] / [`pulse_glyph`] dot pulse instead.)
 pub fn braille_spinner_frames() -> &'static [&'static str] {
     const FANCY: &[&str] = &[
         "\u{280b}", "\u{2819}", "\u{2839}", "\u{2838}", "\u{283c}", "\u{2834}", "\u{2826}",
@@ -237,32 +237,55 @@ pub fn braille_spinner_frames() -> &'static [&'static str] {
     }
 }
 
-/// Moon-phase spinner frames (`🌑🌒🌓🌔🌕🌖🌗🌘`) normally; the ASCII
-/// spinner on legacy ConHost.
+/// Number of dots in the turn-status pulse indicator.
+pub const PULSE_DOTS: usize = 3;
+
+/// Ticks in one full pulse cycle at the nominal 30 fps animation rate.
 ///
-/// The turn-status "Waiting for response…" line reuses the official
-/// kimi-cli's lunation animation (rich's `moon` spinner) — one full
-/// lunation per cycle, matching the welcome-screen moon logo. Emoji
-/// frames are 2 columns wide; the caller measures the rendered frame
-/// (`spinner_str.width()`) so the layout adapts. Legacy ConHost's raster
-/// font has no emoji, so it falls back to the 1-column ASCII spinner.
-pub fn moon_spinner_frames() -> &'static [&'static str] {
-    const FANCY: &[&str] = &[
-        "\u{1f311}",
-        "\u{1f312}",
-        "\u{1f313}",
-        "\u{1f314}",
-        "\u{1f315}",
-        "\u{1f316}",
-        "\u{1f317}",
-        "\u{1f318}",
-    ];
-    const FALLBACK: &[&str] = &["|", "/", "-", "\\"];
-    if is_legacy_windows_console() {
-        FALLBACK
+/// 36 ticks ≈ 1.2 s — slow enough to read as breathing rather than blinking,
+/// and in the same range as the other status cues.
+pub const PULSE_PERIOD_TICKS: f32 = 36.0;
+
+/// Ticks between neighbouring dots. A third of a cycle each is what makes the
+/// pulse travel left to right instead of throbbing in unison.
+const PULSE_DOT_OFFSET_TICKS: f32 = PULSE_PERIOD_TICKS / PULSE_DOTS as f32;
+
+/// The smallest and largest brightness a dot reaches. The floor keeps every dot
+/// present so the row never blinks.
+const PULSE_MIN: f32 = 0.25;
+const PULSE_MAX: f32 = 1.0;
+
+/// Brightness of dot `index` at `tick`, in `PULSE_MIN..=PULSE_MAX`.
+///
+/// A raised cosine gives a smooth swell with no flat spot at either end, and
+/// the per-index offset is what turns three dots into a travelling pulse.
+pub fn pulse_intensity(tick: u64, index: usize) -> f32 {
+    let phase = tick as f32 - index as f32 * PULSE_DOT_OFFSET_TICKS;
+    let wave = 0.5 - 0.5 * (std::f32::consts::TAU * phase / PULSE_PERIOD_TICKS).cos();
+    PULSE_MIN + (PULSE_MAX - PULSE_MIN) * wave
+}
+
+/// Glyph for a dot at `intensity`, in three fill steps.
+///
+/// The glyph varies with brightness rather than only the colour: a piped
+/// capture, a colourless terminal, or a blend that happens to land on the same
+/// value would otherwise render the pulse as three static dots. Both sets are
+/// exactly 1 column, so the label beside them never shifts as they animate.
+///
+/// The legacy set stays inside CP437 — period `0x2E`, middle dot `0xFA`
+/// (U+00B7), bullet `0x07` (U+2022) — because the fancy set's bright step
+/// U+25CF is absent from the ConHost raster font.
+pub fn pulse_glyph(intensity: f32) -> &'static str {
+    const FANCY: [&str; 3] = ["\u{00B7}", "\u{2022}", "\u{25CF}"];
+    const FALLBACK: [&str; 3] = [".", "\u{00B7}", "\u{2022}"];
+
+    let steps = if is_legacy_windows_console() {
+        &FALLBACK
     } else {
-        FANCY
-    }
+        &FANCY
+    };
+    let fraction = ((intensity - PULSE_MIN) / (PULSE_MAX - PULSE_MIN)).clamp(0.0, 1.0);
+    steps[((fraction * PULSE_DOTS as f32) as usize).min(PULSE_DOTS - 1)]
 }
 
 /// Pulsing dot progress-spinner frames (`⋅ : ⸬ ⁙`) normally; a quiet
@@ -697,6 +720,70 @@ mod tests {
             )
         {
             assert_eq!(frame.width(), 1, "spinner frame {frame:?} must be 1 column");
+        }
+    }
+
+    /// The pulse glyph steps must all be 1 column in both variants, or the
+    /// label beside the indicator would shift as the dots animate.
+    #[test]
+    fn pulse_glyphs_are_one_column() {
+        for glyph in [".", "\u{00b7}", "\u{2022}", "\u{25CF}"] {
+            assert_eq!(glyph.width(), 1, "pulse glyph {glyph:?} must be 1 column");
+        }
+        for step in 0..=PULSE_DOTS {
+            let intensity = PULSE_MIN + (PULSE_MAX - PULSE_MIN) * step as f32 / PULSE_DOTS as f32;
+            assert_eq!(
+                pulse_glyph(intensity).width(),
+                1,
+                "pulse glyph at intensity {intensity} must be 1 column"
+            );
+        }
+    }
+
+    /// A colour-only indicator is invisible once piped or on a colourless
+    /// terminal, so the glyph has to carry the animation too. This is the
+    /// regression that made the old pulse look static.
+    #[test]
+    fn pulse_glyphs_change_over_the_cycle() {
+        let mut seen = std::collections::HashSet::new();
+        for step in 0..36 {
+            let tick = step as u64;
+            let frame: String = (0..PULSE_DOTS)
+                .map(|index| pulse_glyph(pulse_intensity(tick, index)))
+                .collect();
+            seen.insert(frame);
+        }
+        assert!(
+            seen.len() >= 3,
+            "pulse produced only {} distinct plain-text frames: {seen:?}",
+            seen.len()
+        );
+    }
+
+    /// The dots must be out of phase, otherwise the indicator reads as three
+    /// static dots rather than a travelling pulse.
+    #[test]
+    fn pulse_dots_are_out_of_phase() {
+        let intensities: Vec<f32> = (0..PULSE_DOTS).map(|i| pulse_intensity(9, i)).collect();
+        assert!(
+            intensities
+                .windows(2)
+                .any(|pair| (pair[0] - pair[1]).abs() > 0.1),
+            "dots moved in unison: {intensities:?}"
+        );
+    }
+
+    /// A dot at its dimmest must still be visible, so the row never blinks.
+    #[test]
+    fn pulse_never_goes_dark() {
+        for tick in 0..72 {
+            for index in 0..PULSE_DOTS {
+                let intensity = pulse_intensity(tick, index);
+                assert!(
+                    (PULSE_MIN..=PULSE_MAX).contains(&intensity),
+                    "intensity {intensity} out of bounds at tick {tick}"
+                );
+            }
         }
     }
 
