@@ -28,7 +28,7 @@ use super::dashboard::{
     dispatch_dashboard_peek_reply, dispatch_dashboard_permission_followup,
     dispatch_dashboard_permission_select, dispatch_dashboard_question_answer,
     dispatch_dashboard_stop, dispatch_dashboard_toggle_auto_approve, dispatch_exit_dashboard,
-    dispatch_open_dashboard, ensure_dashboard_state, resolve_location_input,
+    dispatch_open_dashboard, ensure_dashboard_state,
 };
 use super::modes::{
     YOLO_ON_UNDER_PLAN_TOAST, active_agent_plan_nudge_state, dispatch_cycle_mode_and_sync,
@@ -56,6 +56,7 @@ use crate::app::app_view::{ActiveView, AppView, AuthMode, AuthState, TrustState}
 use crate::scrollback::block::RenderBlock;
 use crate::scrollback::blocks::{SessionEvent, ToolCallBlock};
 use crate::scrollback::state::ScrollbackState;
+use crate::views::location_picker::resolve_location_input;
 use agent_client_protocol as acp;
 use indexmap::IndexMap;
 use std::path::PathBuf;
@@ -73,6 +74,8 @@ fn test_app() -> AppView {
         tabs_scope: crate::app::tabs::store::TabScope::Global,
         tab_store_stamp: None,
         cancelled_tabs: std::collections::HashSet::new(),
+        location_picker: None,
+        pending_location: None,
         pending_view_mark: None,
         window_focused: true,
         next_agent_id: 0,

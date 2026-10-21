@@ -72,6 +72,7 @@ pub fn builtin_commands() -> Vec<Arc<dyn SlashCommand>> {
         Arc::new(docs::DocsCommand),
         Arc::new(home::HomeCommand),
         Arc::new(new::NewCommand),
+        Arc::new(new::ClearCommand),
         Arc::new(fork::ForkCommand),
         Arc::new(compact::CompactCommand),
         Arc::new(copy::CopyCommand),
@@ -239,10 +240,24 @@ mod tests {
         assert!(matches!(result, CommandResult::Action(Action::Quit)));
     }
     #[test]
-    fn new_returns_new_session_action() {
+    fn new_asks_for_a_directory() {
         let models = ModelState::default();
         let mut ctx = make_ctx(&models);
         let cmd = new::NewCommand;
+        let result = cmd.run(&mut ctx, "");
+        assert!(matches!(
+            result,
+            CommandResult::Action(Action::NewSessionPickLocation)
+        ));
+    }
+
+    /// `/clear` keeps the no-questions path: its name promises "start over
+    /// here", so it must not open the picker.
+    #[test]
+    fn clear_creates_in_place() {
+        let models = ModelState::default();
+        let mut ctx = make_ctx(&models);
+        let cmd = new::ClearCommand;
         let result = cmd.run(&mut ctx, "");
         assert!(matches!(result, CommandResult::Action(Action::NewSession)));
     }

@@ -66,9 +66,10 @@ pub struct TabHit {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TabHitTarget {
     Tab(String),
+    /// The `[ + ]` affordance: ask where the new session should live.
     NewSession,
-    /// Open the location picker so `+` creates in a different repo.
-    NewSessionElsewhere,
+    /// The `[ × ]` affordance: close the active tab (never the session).
+    CloseTab,
 }
 
 /// One chip's data, gathered by the caller.
@@ -99,7 +100,7 @@ pub struct TabStripParams<'a> {
 pub struct TabStripRendered {
     pub tabs: Vec<TabHit>,
     pub new_session: Option<Rect>,
-    pub new_session_elsewhere: Option<Rect>,
+    pub close_tab: Option<Rect>,
     /// True when chips were dropped and the overflow markers are shown.
     pub overflow: bool,
 }
@@ -118,10 +119,10 @@ impl TabStripRendered {
             return Some(TabHitTarget::NewSession);
         }
         if self
-            .new_session_elsewhere
+            .close_tab
             .is_some_and(|r| r.contains((column, row).into()))
         {
-            return Some(TabHitTarget::NewSessionElsewhere);
+            return Some(TabHitTarget::CloseTab);
         }
         None
     }
@@ -156,20 +157,24 @@ pub fn render_tab_strip(
     let multi_repo = spans_multiple_repos(chips);
 
     // Right-hand affordances reserve their width up front so chips never
-    // collide with them.
+    // collide with them. `[ × ]` is only offered while a tab is active —
+    // with nothing to close it would be a dead button.
     let plus = "[ + ]";
-    let plus_elsewhere = "[ +\u{2026} ]";
-    let plus_w = plus.len() as u16;
-    let elsewhere_w = plus_elsewhere.len() as u16;
+    let close = "[ \u{00d7} ]";
+    let plus_w = plus.chars().count() as u16;
+    let close_w = close.chars().count() as u16;
     let gutter = 1u16;
-    let reserve = plus_w + elsewhere_w + gutter * 3;
+    let show_close = active.is_some();
+    let buttons_w = plus_w + if show_close { close_w + gutter } else { 0 };
+    let reserve = buttons_w + gutter * 3;
     if area.width <= reserve + MIN_CHIP {
         // Not enough room for even one chip plus the buttons: show only the
-        // buttons, so `+` is never unreachable.
-        let x = area.x + area.width.saturating_sub(elsewhere_w + plus_w + gutter);
-        let (a, b) = place_buttons(buf, area, theme, x, plus, plus_elsewhere);
-        out.new_session_elsewhere = Some(b);
-        out.new_session = Some(a);
+        // buttons, so `+` (and `×`) are never unreachable.
+        let x = area.x + area.width.saturating_sub(buttons_w + gutter);
+        let (add, close_rect) =
+            place_buttons(buf, area, theme, x, plus, show_close.then_some(close));
+        out.new_session = Some(add);
+        out.close_tab = close_rect;
         return out;
     }
     let chip_budget = area.width - reserve;
@@ -218,34 +223,38 @@ pub fn render_tab_strip(
     }
     out.overflow = shown < chips.len();
 
-    let x = area.x + area.width.saturating_sub(elsewhere_w + plus_w + gutter);
-    let (a, b) = place_buttons(buf, area, theme, x, plus, plus_elsewhere);
-    out.new_session = Some(a);
-    out.new_session_elsewhere = Some(b);
+    let x = area.x + area.width.saturating_sub(buttons_w + gutter);
+    let (add, close_rect) = place_buttons(buf, area, theme, x, plus, show_close.then_some(close));
+    out.new_session = Some(add);
+    out.close_tab = close_rect;
     out
 }
 
+/// Paint the right-hand affordances right-aligned at `x`.
+///
+/// Returns `(add_rect, close_rect)`; `close` is `None` when the strip has no
+/// active tab and the close button is therefore not offered.
 fn place_buttons(
     buf: &mut Buffer,
     area: Rect,
     theme: &Theme,
     x: u16,
     plus: &str,
-    plus_elsewhere: &str,
-) -> (Rect, Rect) {
+    close: Option<&str>,
+) -> (Rect, Option<Rect>) {
     let style = Style::default().fg(theme.link_fg).bg(theme.bg_base);
-    let elsewhere_w = plus_elsewhere.chars().count() as u16;
     let plus_w = plus.chars().count() as u16;
-    let elsewhere = Rect::new(x, area.y, elsewhere_w, 1);
-    let plus_rect = Rect::new(x + elsewhere_w + 1, area.y, plus_w, 1);
-    buf.set_span_safe(
-        elsewhere.x,
-        area.y,
-        &Span::styled(plus_elsewhere, style),
-        elsewhere_w,
-    );
-    buf.set_span_safe(plus_rect.x, area.y, &Span::styled(plus, style), plus_w);
-    (plus_rect, elsewhere)
+    let mut cursor = x;
+    let close_rect = close.map(|text| {
+        let w = text.chars().count() as u16;
+        let rect = Rect::new(cursor, area.y, w, 1);
+        buf.set_span_safe(cursor, area.y, &Span::styled(text, style), w);
+        cursor = cursor.saturating_add(w).saturating_add(1);
+        rect
+    });
+    let plus_rect = Rect::new(cursor, area.y, plus_w, 1);
+    buf.set_span_safe(cursor, area.y, &Span::styled(plus, style), plus_w);
+    (plus_rect, close_rect)
 }
 
 /// `N glyph title` (active) / `glyph title` (inactive), plus the repo detail.
@@ -386,23 +395,42 @@ mod tests {
             Some(TabHitTarget::Tab("a".into()))
         );
         assert!(rendered.new_session.is_some());
-        assert!(rendered.new_session_elsewhere.is_some());
+        assert!(rendered.close_tab.is_some());
     }
 
     #[test]
-    fn plus_chips_are_reachable_at_the_right_edge() {
+    fn plus_and_close_are_reachable_at_the_right_edge() {
         let c = chips(&["a"]);
         let area = Rect::new(0, 0, 60, 1);
         let (_, rendered) = draw(area, &c, Some(0));
         let plus = rendered.new_session.expect("+ chip");
         assert!(plus.x + plus.width <= area.right());
-        let elsewhere = rendered.new_session_elsewhere.expect("+… chip");
-        assert!(elsewhere.x + elsewhere.width <= area.right());
+        let close = rendered.close_tab.expect("x chip");
+        assert!(close.x + close.width <= area.right());
+        assert!(
+            close.x < plus.x,
+            "close sits left of add so the primary action keeps the corner"
+        );
         assert_eq!(
             rendered.hit(plus.x, 0),
             Some(TabHitTarget::NewSession),
             "the + chip must win the hit test at its own columns"
         );
+        assert_eq!(
+            rendered.hit(close.x, 0),
+            Some(TabHitTarget::CloseTab),
+            "the x chip must win the hit test at its own columns"
+        );
+    }
+
+    /// With no active tab there is nothing to close, so the button is omitted
+    /// rather than painted as a dead affordance.
+    #[test]
+    fn close_button_is_absent_without_an_active_tab() {
+        let c = chips(&["a", "b"]);
+        let (_, rendered) = draw(Rect::new(0, 0, 60, 1), &c, None);
+        assert!(rendered.close_tab.is_none());
+        assert!(rendered.new_session.is_some());
     }
 
     /// A very narrow strip keeps the buttons even when no chip fits.
@@ -412,7 +440,7 @@ mod tests {
         let area = Rect::new(0, 0, 18, 1);
         let (_, rendered) = draw(area, &c, Some(0));
         assert!(rendered.new_session.is_some());
-        assert!(rendered.new_session_elsewhere.is_some());
+        assert!(rendered.close_tab.is_some());
         for hit in &rendered.tabs {
             assert!(hit.rect.right() <= area.right(), "no chip may overflow");
         }

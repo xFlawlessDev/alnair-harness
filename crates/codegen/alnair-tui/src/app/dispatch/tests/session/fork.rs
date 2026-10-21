@@ -231,11 +231,22 @@ fn fork_initiation_supersedes_open_reload_window() {
 fn slash_new_uses_worktree_cwd() {
     let mut app = test_app_with_agent();
     let id = AgentId(0);
-    let worktree_path = PathBuf::from("/worktree/path");
+    // A real directory: the picker validates the chosen path before creating.
+    let tmp = tempfile::tempdir().unwrap();
+    let worktree_path =
+        dunce::canonicalize(tmp.path()).unwrap_or_else(|_| tmp.path().to_path_buf());
     app.agents.get_mut(&id).unwrap().session.cwd = worktree_path.clone();
     app.agents.get_mut(&id).unwrap().session.is_worktree = true;
 
-    let effects = dispatch(Action::SendPrompt("/new".into()), &mut app);
+    // `/new` asks for the directory first; the chosen one is where the
+    // session lands.
+    dispatch(Action::SendPrompt("/new".into()), &mut app);
+    let effects = dispatch(
+        Action::AppLocationChosen {
+            input: worktree_path.to_string_lossy().into_owned(),
+        },
+        &mut app,
+    );
     let create = effects
         .iter()
         .find(|e| matches!(e, Effect::CreateSession { .. }));

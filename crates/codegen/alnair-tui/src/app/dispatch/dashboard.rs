@@ -629,48 +629,10 @@ pub(super) fn dispatch_dashboard_open_shortcuts_help(app: &mut AppView) {
     }));
 }
 
-/// Short display label for a directory in the location picker — the
-/// basename (truncated), or `~` for the home directory itself.
-fn location_picker_label(path: &std::path::Path) -> String {
-    if dirs::home_dir().is_some_and(|h| h == path) {
-        return "~".to_string();
-    }
-    let raw = path.file_name().and_then(|n| n.to_str()).unwrap_or("/");
-    crate::render::line_utils::truncate_str(raw, 30)
-}
-
-/// Resolve a raw location-picker / `/cd` path string to an absolute path,
-/// expanding a leading `~` and joining relative paths against `cwd`.
-/// Returns `None` for empty input or when `~` can't be expanded. The
-/// caller is responsible for validating the result is a directory.
-pub(super) fn resolve_location_input(
-    input: &str,
-    cwd: &std::path::Path,
-) -> Option<std::path::PathBuf> {
-    let trimmed = input.trim();
-    if trimmed.is_empty() {
-        return None;
-    }
-    let expanded: std::path::PathBuf = if trimmed == "~" {
-        dirs::home_dir()?
-    } else if let Some(rest) = trimmed.strip_prefix("~/") {
-        dirs::home_dir()?.join(rest)
-    } else {
-        std::path::PathBuf::from(trimmed)
-    };
-    if expanded.is_absolute() {
-        Some(expanded)
-    } else {
-        Some(cwd.join(expanded))
-    }
-}
-
-/// Open the dashboard's location picker. Seeds the candidate list with
-/// the current cwd (marked `(current)`) followed by recent project
-/// directories from session history. Idempotent — a no-op if the picker
+/// Open the dashboard's location picker. Idempotent — a no-op if the picker
 /// is already open or the dashboard isn't active.
 pub(super) fn dispatch_dashboard_open_location_picker(app: &mut AppView) -> Vec<Effect> {
-    use crate::views::dashboard::{LocationCandidate, LocationPickerState};
+    use crate::views::location_picker::LocationPickerPurpose;
 
     if !matches!(app.active_view, ActiveView::AgentDashboard) {
         // `/cd` reached from a non-dashboard surface — the location
@@ -678,10 +640,6 @@ pub(super) fn dispatch_dashboard_open_location_picker(app: &mut AppView) -> Vec<
         // Gate on the dashboard being the *foreground* view (not merely
         // `app.dashboard.is_some()`, which stays true for the rest of the
         // session once the dashboard has been opened even once).
-        //
-        // The tab strip's `+…` chip does NOT bypass this: it opens the
-        // dashboard first (`dispatch_open_location_picker_for_tabs`), so the
-        // picker always runs with its host view present.
         app.show_toast("Open the dashboard (/dashboard) to change location");
         return vec![];
     }
@@ -694,54 +652,14 @@ pub(super) fn dispatch_dashboard_open_location_picker(app: &mut AppView) -> Vec<
         return vec![];
     }
 
-    let cwd = app.cwd.clone();
-    // Same pattern as `open_project_question` — the recent-dirs source is
-    // async; block the current runtime thread briefly to collect it.
-    let recent = tokio::task::block_in_place(|| {
-        tokio::runtime::Handle::current()
-            .block_on(crate::project_picker::sources::collect_recent_dirs(10))
-    });
-
-    // Worktree label index (root path → label), built once and reused to
-    // tag both recents and live directory suggestions.
-    let worktrees = crate::git_info::worktree_label_index();
-    let worktree_label = |path: &std::path::Path| -> Option<String> {
-        let key = dunce::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
-        worktrees.get(&key).cloned()
-    };
-
-    let mut candidates: Vec<LocationCandidate> = Vec::new();
-    candidates.push(LocationCandidate {
-        label: location_picker_label(&cwd),
-        detail: format!(
-            "{}  (current)",
-            crate::project_picker::sources::display_path(&cwd)
-        ),
-        worktree: worktree_label(&cwd),
-        path: cwd.clone(),
-    });
-    for (path, ts) in recent.into_iter().filter(|(p, _)| p != &cwd) {
-        let detail = format!(
-            "{}  ({})",
-            crate::project_picker::sources::display_path(&path),
-            crate::views::session_title::format_relative_time(
-                (chrono::Utc::now() - ts).to_std().unwrap_or_default()
-            ),
-        );
-        candidates.push(LocationCandidate {
-            label: location_picker_label(&path),
-            detail,
-            worktree: worktree_label(&path),
-            path,
-        });
-    }
-
+    let worktree_mode = app.dashboard.as_ref().is_some_and(|d| d.dispatch_worktree);
+    let modal = crate::views::location_picker::open_location_picker(
+        app.cwd.clone(),
+        LocationPickerPurpose::Dashboard,
+        worktree_mode,
+    );
     if let Some(d) = app.dashboard.as_mut() {
-        let mut lp = LocationPickerState::new(candidates, cwd, worktrees);
-        // Reflect the dashboard's current worktree arming so reopening the
-        // picker shows the toggle in its existing state.
-        lp.worktree_mode = d.dispatch_worktree;
-        d.location_picker = Some(lp);
+        d.location_picker = Some(modal);
     }
     crate::unified_log::info("dashboard.location_picker.opened", None, None);
     vec![]
@@ -761,7 +679,9 @@ pub(super) fn dispatch_dashboard_change_location(app: &mut AppView, input: Strin
         app.show_toast("Open the dashboard (/dashboard) to change location");
         return vec![];
     }
-    let path = match resolve_location_input(&input, &app.cwd).filter(|p| p.is_dir()) {
+    let path = match crate::views::location_picker::resolve_location_input(&input, &app.cwd)
+        .filter(|p| p.is_dir())
+    {
         Some(p) => p,
         None => {
             if let Some(lp) = app
@@ -769,7 +689,7 @@ pub(super) fn dispatch_dashboard_change_location(app: &mut AppView, input: Strin
                 .as_mut()
                 .and_then(|d| d.location_picker.as_mut())
             {
-                lp.error = Some(format!("Not a directory: {}", input.trim()));
+                lp.state.error = Some(format!("Not a directory: {}", input.trim()));
             } else if let Some(d) = app.dashboard.as_mut() {
                 // `/cd <bad path>` typed into the dispatch box (no picker
                 // open) — surface the error as a dashboard toast.
@@ -809,7 +729,7 @@ pub(super) fn dispatch_dashboard_change_location(app: &mut AppView, input: Strin
         // the destination is a git repo. Worktrees require one, so navigating
         // to a non-git directory forces worktree mode off (the dashboard is
         // never in worktree mode outside a repo).
-        if let Some(wt) = d.location_picker.as_ref().map(|lp| lp.worktree_mode) {
+        if let Some(wt) = d.location_picker.as_ref().map(|lp| lp.state.worktree_mode) {
             d.dispatch_worktree = wt && has_git;
         } else if !has_git {
             d.dispatch_worktree = false;

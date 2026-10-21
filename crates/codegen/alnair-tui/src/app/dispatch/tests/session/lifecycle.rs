@@ -631,7 +631,18 @@ fn exit_session_unregisters_active_session() {
 #[test]
 fn slash_new_dispatches_new_session() {
     let mut app = test_app_with_agent();
-    let effects = dispatch(Action::SendPrompt("/new".into()), &mut app);
+    // `/new` asks where first; the chosen directory drives the creation.
+    dispatch(Action::SendPrompt("/new".into()), &mut app);
+    assert!(
+        app.location_picker.is_some(),
+        "expected the directory picker"
+    );
+    let effects = dispatch(
+        Action::AppLocationChosen {
+            input: "/tmp".into(),
+        },
+        &mut app,
+    );
     assert!(
         effects
             .iter()

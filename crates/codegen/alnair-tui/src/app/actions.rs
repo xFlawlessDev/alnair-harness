@@ -137,8 +137,16 @@ pub enum Action {
     CycleTab(bool),
     /// Send the server-side "viewed" watermark for a session.
     RecordSessionView(String),
-    /// Open the location picker so `+` can create in another repository.
-    TabOpenLocationPicker,
+    /// `/new`: ask for the directory first, then create the session there.
+    NewSessionPickLocation,
+    /// A path was chosen in the app-level directory picker.
+    AppLocationChosen {
+        input: String,
+    },
+    /// Dismiss the app-level directory picker without applying a path.
+    CloseAppLocationPicker,
+    /// Open the app-level directory picker to move the pager (welcome screen).
+    PickPagerCwd,
     /// Submit a clicked follow-up suggestion chip as a LITERAL model prompt.
     /// The suggestion text is server/model-controlled, so it must bypass
     /// slash-command and exit-alias resolution (a `/always-approve` or `/quit`

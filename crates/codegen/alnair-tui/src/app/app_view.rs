@@ -473,6 +473,18 @@ impl PasteProvenance {
         matches!(self, Self::Terminal)
     }
 }
+/// What a path chosen from the app-level directory picker should become.
+///
+/// The picker itself is surface-independent, so the meaning of "Enter" has to
+/// be carried alongside it rather than baked into the modal.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PendingLocationChoice {
+    /// Create a new session in the chosen directory.
+    NewSession,
+    /// Move the pager there without creating anything (the welcome screen).
+    PagerCwd,
+}
+
 /// A pending action awaiting double-press confirmation.
 ///
 /// Set when a `requires_confirmation` action is triggered. The shortcuts bar
@@ -581,6 +593,16 @@ pub struct AppView {
     /// them. In-process only: the file lock already prevents cross-process
     /// resurrection.
     pub cancelled_tabs: std::collections::HashSet<String>,
+    /// The directory picker, when it is hosted by the app rather than by the
+    /// dashboard.
+    ///
+    /// `/new` and the tab strip's `+` must ask "where?" before creating a
+    /// session, and neither runs on the dashboard. The dashboard keeps its own
+    /// copy (`DashboardState::location_picker`) because that one is an overlay
+    /// over a view it owns; this slot is the surface-independent one.
+    pub location_picker: Option<crate::views::location_picker::LocationPicker>,
+    /// What to do with the path chosen from [`Self::location_picker`].
+    pub pending_location: Option<PendingLocationChoice>,
     /// Session id whose view watermark still needs to be sent.
     pub pending_view_mark: Option<String>,
     /// Whether the terminal window currently holds focus.
@@ -1080,6 +1102,8 @@ impl AppView {
             tabs_scope: crate::app::tabs::store::TabScope::Global,
             tab_store_stamp: None,
             cancelled_tabs: std::collections::HashSet::new(),
+            location_picker: None,
+            pending_location: None,
             pending_view_mark: None,
             window_focused: true,
             next_agent_id: 0,
@@ -1866,10 +1890,10 @@ impl AppView {
                     TabHitTarget::Tab(session_id) => {
                         InputOutcome::Action(Action::SwitchToTabId(session_id))
                     }
-                    TabHitTarget::NewSession => InputOutcome::Action(Action::NewSession),
-                    TabHitTarget::NewSessionElsewhere => {
-                        InputOutcome::Action(Action::TabOpenLocationPicker)
+                    TabHitTarget::NewSession => {
+                        InputOutcome::Action(Action::NewSessionPickLocation)
                     }
+                    TabHitTarget::CloseTab => InputOutcome::Action(Action::CloseTab),
                 };
             }
             let is_mouse_action = matches!(
@@ -1882,6 +1906,27 @@ impl AppView {
             if is_mouse_action {}
         }
         let has_foreign_resume = self.foreign_resume_hint().is_some();
+        // The app-level directory picker is modal over whatever view is in
+        // front — it is opened from `/new`, the tab strip, and the welcome
+        // screen, so no single view owns its input. It claims events before
+        // the view dispatch for that reason.
+        if self.location_picker.is_some() {
+            use crate::views::location_picker::LocationPickerOutcome;
+            let outcome = match self.location_picker.as_mut() {
+                Some(modal) => modal.state.handle_input(ev),
+                None => LocationPickerOutcome::Unchanged,
+            };
+            return match outcome {
+                LocationPickerOutcome::Chosen(input) => {
+                    InputOutcome::Action(Action::AppLocationChosen { input })
+                }
+                LocationPickerOutcome::Closed => {
+                    InputOutcome::Action(Action::CloseAppLocationPicker)
+                }
+                LocationPickerOutcome::Changed => InputOutcome::Changed,
+                LocationPickerOutcome::Unchanged => InputOutcome::Unchanged,
+            };
+        }
         let outcome = match self.active_view {
             ActiveView::Welcome => handle_welcome_input(
                 ev,
@@ -1898,7 +1943,11 @@ impl AppView {
                     new_worktree_dialog: &mut self.new_worktree_dialog,
                     menu_index: &mut self.welcome_menu_index,
                     menu_rects: &self.welcome_menu_rects,
-                    menu_count: 3 + if self.has_claude_import { 1 } else { 0 },
+                    menu_count: crate::views::welcome::welcome_menu_items(
+                        crate::views::welcome::welcome_in_vscode_family(),
+                        self.has_claude_import,
+                    )
+                    .len(),
                     prompt_rect: self.welcome_prompt_rect.as_ref(),
                     import_banner_rect: self.welcome_import_banner_rect.as_ref(),
                     auth_url_rect: self.welcome_auth_url_rect.as_ref(),
@@ -2823,6 +2872,12 @@ fn handle_welcome_input(ev: &Event, ctx: &mut WelcomeInputCtx<'_>) -> InputOutco
             if ctx.has_claude_import && key!('I', CONTROL | SHIFT).matches(key) {
                 return InputOutcome::Action(Action::DismissClaudeImport);
             }
+            // Ctrl+L: choose the working directory before the first session.
+            // A bare launch otherwise inherits whatever the process cwd was,
+            // which is the one decision a user most often wants to make first.
+            if key!('l', CONTROL).matches(key) {
+                return InputOutcome::Action(Action::PickPagerCwd);
+            }
         }
         if matches!(ctx.auth_state, AuthState::Done) && crate::input::key::is_shift_tab(key) {
             return InputOutcome::ActionThenForward(Action::NewSession);
@@ -3254,25 +3309,27 @@ fn dispatch_pending_menu_action(
 }
 /// Dispatch an action for a welcome menu item by index.
 ///
-/// Menu order: `[Import]`, New worktree, Resume session, Quit.
+/// The row list comes from [`crate::views::welcome::welcome_menu_items`] — the
+/// same one the renderer paints — so an inserted row can't shift the meaning
+/// of every row below it.
 fn dispatch_menu_action(index: usize, has_claude_import: bool) -> InputOutcome {
-    let base = if has_claude_import { 1 } else { 0 };
-    let worktree_idx = base;
-    let resume_idx = base + 1;
-    let quit_idx = base + 2;
-    if has_claude_import && index == 0 {
-        return InputOutcome::Action(Action::ImportClaudeSettings);
+    use crate::views::welcome::{WelcomeMenuAction, welcome_menu_items};
+    let items = welcome_menu_items(
+        crate::views::welcome::welcome_in_vscode_family(),
+        has_claude_import,
+    );
+    let Some(item) = items.get(index) else {
+        return InputOutcome::Unchanged;
+    };
+    match item.action {
+        WelcomeMenuAction::ImportClaudeSettings => {
+            InputOutcome::Action(Action::ImportClaudeSettings)
+        }
+        WelcomeMenuAction::ChooseDirectory => InputOutcome::Action(Action::PickPagerCwd),
+        WelcomeMenuAction::NewWorktree => InputOutcome::Action(Action::OpenNewWorktreeDialog),
+        WelcomeMenuAction::ResumeSession => InputOutcome::Action(Action::FetchSessionList),
+        WelcomeMenuAction::Quit => InputOutcome::Action(Action::Quit),
     }
-    if index == worktree_idx {
-        return InputOutcome::Action(Action::OpenNewWorktreeDialog);
-    }
-    if index == resume_idx {
-        return InputOutcome::Action(Action::FetchSessionList);
-    }
-    if index == quit_idx {
-        return InputOutcome::Action(Action::Quit);
-    }
-    InputOutcome::Unchanged
 }
 impl AppView {
     /// Merge notification escape sequences with render-produced post-flush
@@ -3533,6 +3590,7 @@ impl AppView {
             pending_action,
             pending_notification_escapes,
             tab_hit_rects,
+            location_picker,
             ..
         } = self;
         let notif_escapes = pending_notification_escapes.take();
@@ -3548,315 +3606,155 @@ impl AppView {
             });
         let fps_frame_started = fps_overlay.as_ref().map(|_| std::time::Instant::now());
         crate::render::draw::draw_frame(terminal, cursor, |f, link_spans| {
-            let full_area = f.area();
-            let tracing_height = 0u16;
-            #[allow(unused_variables)]
-            let (tracing_area, view_area) =
-                if tracing_height > 0 && tracing_height < full_area.height {
-                    let tracing = ratatui::layout::Rect {
-                        x: full_area.x,
-                        y: full_area.y,
-                        width: full_area.width,
-                        height: tracing_height,
+            // The body is a nested closure so the app-level directory picker
+            // can be painted AFTER whatever view drew, even though each view
+            // arm returns early with its own cursor/escape result. Painting it
+            // at every one of those exits instead would be four copies of the
+            // same call, and one of them would eventually be forgotten.
+            let (cursor_pos, post_flush) = (|| {
+                let full_area = f.area();
+                let tracing_height = 0u16;
+                #[allow(unused_variables)]
+                let (tracing_area, view_area) =
+                    if tracing_height > 0 && tracing_height < full_area.height {
+                        let tracing = ratatui::layout::Rect {
+                            x: full_area.x,
+                            y: full_area.y,
+                            width: full_area.width,
+                            height: tracing_height,
+                        };
+                        let view = ratatui::layout::Rect {
+                            x: full_area.x,
+                            y: full_area.y + tracing_height,
+                            width: full_area.width,
+                            height: full_area.height.saturating_sub(tracing_height),
+                        };
+                        (Some(tracing), view)
+                    } else if tracing_height >= full_area.height {
+                        let tracing = full_area;
+                        (Some(tracing), ratatui::layout::Rect::default())
+                    } else {
+                        (None, full_area)
                     };
-                    let view = ratatui::layout::Rect {
-                        x: full_area.x,
-                        y: full_area.y + tracing_height,
-                        width: full_area.width,
-                        height: full_area.height.saturating_sub(tracing_height),
+                // Session tab strip: one row carved off the top, so Welcome, Agent,
+                // and Dashboard all share it. Drawn before the view body so a
+                // shorter view area never overpaints it.
+                let view_area = if !tab_chips.is_empty()
+                    && view_area.height > crate::views::agent::SHORT_TERMINAL_ROWS
+                {
+                    let strip = ratatui::layout::Rect {
+                        x: view_area.x,
+                        y: view_area.y,
+                        width: view_area.width,
+                        height: 1,
                     };
-                    (Some(tracing), view)
-                } else if tracing_height >= full_area.height {
-                    let tracing = full_area;
-                    (Some(tracing), ratatui::layout::Rect::default())
-                } else {
-                    (None, full_area)
-                };
-            // Session tab strip: one row carved off the top, so Welcome, Agent,
-            // and Dashboard all share it. Drawn before the view body so a
-            // shorter view area never overpaints it.
-            let view_area = if !tab_chips.is_empty()
-                && view_area.height > crate::views::agent::SHORT_TERMINAL_ROWS
-            {
-                let strip = ratatui::layout::Rect {
-                    x: view_area.x,
-                    y: view_area.y,
-                    width: view_area.width,
-                    height: 1,
-                };
-                let theme = crate::theme::Theme::current();
-                let params = crate::views::tab_strip::TabStripParams {
-                    chips: &tab_chips,
-                    active: tab_active,
-                };
-                *tab_hit_rects = crate::views::tab_strip::render_tab_strip(
-                    strip,
-                    f.buffer_mut(),
-                    &theme,
-                    &params,
-                );
-                ratatui::layout::Rect {
-                    x: view_area.x,
-                    y: view_area.y + 1,
-                    width: view_area.width,
-                    height: view_area.height.saturating_sub(1),
-                }
-            } else {
-                *tab_hit_rects = Default::default();
-                view_area
-            };
-            if view_area.height > 0 {
-                match *active_view {
-                    ActiveView::Welcome => {
-                        let mut flags_vec: Vec<crate::views::prompt_widget::PromptFlag<'_>> =
-                            Vec::new();
-                        if self.default_yolo {
-                            flags_vec.push(crate::views::prompt_widget::PromptFlag {
-                                text: "always-approve",
-                                color: None,
-                                bold: false,
-                            });
-                        }
-                        if !self.welcome_prompt.text().is_empty() {
-                            self.welcome_tip_typing_dismissed = true;
-                        }
-                        let tip = if self.welcome_tip_typing_dismissed {
-                            None
-                        } else {
-                            self.tip.as_deref()
-                        };
-                        let model_name_base = self.models.current_model_name().unwrap_or_default();
-                        let model_name = match self.models.reasoning_effort_display() {
-                            Some(eff) => format!("{model_name_base} ({eff})"),
-                            None => model_name_base,
-                        };
-                        let welcome_params = crate::views::welcome::WelcomeRenderParams {
-                            prompt_focus: if self.welcome_prompt_focused {
-                                WelcomePromptFocus::Focused
-                            } else {
-                                WelcomePromptFocus::Unfocused
-                            },
-                            cwd: &self.cwd,
-                            auth_state: &self.auth_state,
-                            trust_state: &self.trust_state,
-                            auth_methods: &self.auth_methods,
-                            login_label: self.login_label.as_deref(),
-                            auth_code_input: &self.auth_code_input,
-                            custom_entry: &self.custom_entry,
-                            custom_select: self.custom_select.as_ref(),
-                            clipboard_copied: self.auth_clipboard_copied,
-                            show_raw_url: self.auth_show_raw_url,
-                            tip,
-                            model_name: &model_name,
-                            flags: &flags_vec,
-                            selected: self.welcome_menu_index,
-                            menu_scroll: self.welcome_menu_scroll,
-                            mid_session_login: self.auth_return_view.is_some(),
-                            has_claude_import: self.has_claude_import,
-                            mouse_pos: self.last_mouse_pos,
-                            session_picker: self.session_picker_entries.as_deref(),
-                            session_picker_loading: self.session_picker_entries.is_none()
-                                && (self.session_picker_loading
-                                    || self.session_picker_lanes.foreign_loading),
-                            compact,
-                            pending_hint,
-                            startup_warnings: &self.startup_warnings,
-                            pending_update_version: self.pending_update_version.as_deref(),
-                            foreign_resume_hint: foreign_resume_hint.as_ref(),
-                            session_picker_content_results: self
-                                .session_picker_content_results
-                                .as_deref(),
-                            session_picker_content_loading: self.session_picker_content_loading,
-                            session_picker_entries_query: self
-                                .session_picker_entries_query
-                                .as_deref(),
-                            welcome_tick: self.welcome_tick,
-                            session_picker_grouped: self.session_picker_grouped,
-                            session_picker_source_filter: self.session_picker_source_filter,
-                            chat_mode: self.chat_mode,
-                            is_api_key_auth: self.is_api_key_auth,
-                        };
-                        let result = crate::views::welcome::render_welcome(
-                            view_area,
-                            f.buffer_mut(),
-                            &welcome_params,
-                            &mut self.welcome_prompt,
-                            &mut self.session_picker_state,
-                        );
-                        self.welcome_menu_rects = result.menu_rects;
-                        self.welcome_menu_scroll = result.menu_scroll;
-                        self.welcome_prompt_rect = result.prompt_rect;
-                        self.welcome_import_banner_rect = result.import_banner_rect;
-                        self.welcome_auth_url_rect = result.auth_url_rect;
-                        self.welcome_auth_fallback_rect = result.auth_fallback_rect;
-                        self.session_picker_state.hit_areas = result.session_picker_hit_areas;
-                        if let Some(modal) = self.import_claude_modal.as_mut() {
-                            let theme = crate::theme::Theme::current();
-                            crate::views::import_claude_modal::render_import_claude_modal(
-                                f.buffer_mut(),
-                                view_area,
-                                modal,
-                                &theme,
-                                compact,
-                            );
-                        }
-                        if let Some(dialog) = self.new_worktree_dialog.as_ref() {
-                            crate::views::new_worktree_dialog::render_new_worktree_dialog(
-                                view_area,
-                                f.buffer_mut(),
-                                dialog,
-                            );
-                        }
-                        if let Some(crate::views::modal::ActiveModal::DocViewer {
-                            ref title,
-                            ref content,
-                            ref mut scroll,
-                            ref mut window,
-                            ref mut cached_lines,
-                            ..
-                        }) = self.welcome_doc_viewer
-                        {
-                            let theme = crate::theme::Theme::current();
-                            crate::views::modal::render_doc_viewer_overlay(
-                                f.buffer_mut(),
-                                view_area,
-                                window,
-                                title,
-                                content,
-                                scroll,
-                                cached_lines,
-                                compact,
-                                &theme,
-                            );
-                        }
-                        if let Some(fps) = &fps_overlay {
-                            fps.render(full_area, f.buffer_mut());
-                        }
-                        if let Some(panel) = &scroll_debug_panel {
-                            panel.render(full_area, f.buffer_mut());
-                        }
-                        let has_cloud_modal = false;
-                        let cursor = if has_cloud_modal {
-                            None
-                        } else {
-                            result.cursor_pos
-                        };
-                        let on_url = self.welcome_auth_url_rect.as_ref().is_some_and(|r| {
-                            matches!(self.auth_state, AuthState::Authenticating { .. })
-                                && self.last_mouse_pos.is_some_and(|(mx, my)| {
-                                    mx >= r.x
-                                        && mx < r.x + r.width
-                                        && my >= r.y
-                                        && my < r.y + r.height
-                                })
-                        });
-                        let mut post_flush = result.post_flush_escapes;
-                        if crate::terminal::terminal_context()
-                            .hyperlink_capabilities()
-                            .osc22_cursor
-                            && on_url != self.welcome_on_auth_url
-                        {
-                            use crossterm::Command;
-                            let mut buf = String::new();
-                            if on_url {
-                                let _ = crate::terminal::SetPointerCursor.write_ansi(&mut buf);
-                            } else {
-                                let _ = crate::terminal::SetDefaultCursor.write_ansi(&mut buf);
-                            }
-                            match post_flush.as_mut() {
-                                Some(existing) => existing.append_plain(&buf),
-                                None => {
-                                    post_flush =
-                                        Some(crate::terminal::overlay::PostFlush::plain(buf));
-                                }
-                            }
-                        }
-                        self.welcome_on_auth_url = on_url;
-                        return (cursor, post_flush);
+                    let theme = crate::theme::Theme::current();
+                    let params = crate::views::tab_strip::TabStripParams {
+                        chips: &tab_chips,
+                        active: tab_active,
+                    };
+                    *tab_hit_rects = crate::views::tab_strip::render_tab_strip(
+                        strip,
+                        f.buffer_mut(),
+                        &theme,
+                        &params,
+                    );
+                    ratatui::layout::Rect {
+                        x: view_area.x,
+                        y: view_area.y + 1,
+                        width: view_area.width,
+                        height: view_area.height.saturating_sub(1),
                     }
-                    ActiveView::Agent(id) => {
-                        let overlay_focused = false;
-                        let overlay_active = self
-                            .dashboard
-                            .as_ref()
-                            .is_some_and(|d| d.attached_agent == Some(id));
-                        let position: Option<(usize, usize)> =
-                            if overlay_active && let Some(d) = self.dashboard.as_ref() {
-                                let order = crate::views::dashboard::overlay_cycle_order(d, agents);
-                                order
-                                    .iter()
-                                    .position(|i| *i == id)
-                                    .map(|idx| (idx + 1, order.len()))
-                            } else {
-                                None
-                            };
-                        let (agent_area, header) = if overlay_active {
-                            let theme = crate::theme::Theme::current();
-                            let title = agents
-                                .get(&id)
-                                .map(crate::views::session_title::entry_title)
-                                .unwrap_or_else(|| "(session)".to_string());
-                            let (hover_prev, hover_next, hover_close) = self
-                                .dashboard
-                                .as_ref()
-                                .map(|d| {
-                                    (
-                                        d.overlay_prev_hit.hovered,
-                                        d.overlay_next_hit.hovered,
-                                        d.overlay_close_hit.hovered,
-                                    )
-                                })
-                                .unwrap_or((false, false, false));
-                            let header = crate::views::dashboard::render_dashboard_session_header(
-                                f.buffer_mut(),
-                                view_area,
-                                &theme,
-                                &title,
-                                position,
-                                hover_prev,
-                                hover_next,
-                                hover_close,
-                                header_pad_left,
-                                header_pad_right,
-                                header_pad_top,
-                            );
-                            match header {
-                                Some(chrome) => (chrome.content, Some(chrome)),
-                                None => (view_area, None),
+                } else {
+                    *tab_hit_rects = Default::default();
+                    view_area
+                };
+                if view_area.height > 0 {
+                    match *active_view {
+                        ActiveView::Welcome => {
+                            let mut flags_vec: Vec<crate::views::prompt_widget::PromptFlag<'_>> =
+                                Vec::new();
+                            if self.default_yolo {
+                                flags_vec.push(crate::views::prompt_widget::PromptFlag {
+                                    text: "always-approve",
+                                    color: None,
+                                    bold: false,
+                                });
                             }
-                        } else {
-                            (view_area, None)
-                        };
-                        if let Some(d) = self.dashboard.as_mut() {
-                            d.overlay_close_hit.set(header.and_then(|c| c.close_rect));
-                            d.overlay_prev_hit.set(header.and_then(|c| c.prev_rect));
-                            d.overlay_next_hit.set(header.and_then(|c| c.next_rect));
-                        }
-                        if let Some(agent) = agents.get_mut(&id) {
-                            let show_session_tip = self.tip.is_some() && agent.should_show_tip();
-                            let has_mode_banner = agent.mode_switch_banner.is_some();
-                            let banner_height = if has_mode_banner || show_session_tip {
-                                1
+                            if !self.welcome_prompt.text().is_empty() {
+                                self.welcome_tip_typing_dismissed = true;
+                            }
+                            let tip = if self.welcome_tip_typing_dismissed {
+                                None
                             } else {
-                                0
+                                self.tip.as_deref()
                             };
-                            let result = agent.draw(
-                                agent_area,
-                                f.buffer_mut(),
-                                registry,
-                                scratch,
-                                pending_hint,
-                                overlay_focused,
-                                banner_height,
-                                if show_session_tip {
-                                    self.tip.as_deref()
+                            let model_name_base =
+                                self.models.current_model_name().unwrap_or_default();
+                            let model_name = match self.models.reasoning_effort_display() {
+                                Some(eff) => format!("{model_name_base} ({eff})"),
+                                None => model_name_base,
+                            };
+                            let welcome_params = crate::views::welcome::WelcomeRenderParams {
+                                prompt_focus: if self.welcome_prompt_focused {
+                                    WelcomePromptFocus::Focused
                                 } else {
-                                    None
+                                    WelcomePromptFocus::Unfocused
                                 },
-                                &self.bundle_state,
-                                overlay_active,
-                                link_spans,
+                                cwd: &self.cwd,
+                                auth_state: &self.auth_state,
+                                trust_state: &self.trust_state,
+                                auth_methods: &self.auth_methods,
+                                login_label: self.login_label.as_deref(),
+                                auth_code_input: &self.auth_code_input,
+                                custom_entry: &self.custom_entry,
+                                custom_select: self.custom_select.as_ref(),
+                                clipboard_copied: self.auth_clipboard_copied,
+                                show_raw_url: self.auth_show_raw_url,
+                                tip,
+                                model_name: &model_name,
+                                flags: &flags_vec,
+                                selected: self.welcome_menu_index,
+                                menu_scroll: self.welcome_menu_scroll,
+                                mid_session_login: self.auth_return_view.is_some(),
+                                has_claude_import: self.has_claude_import,
+                                mouse_pos: self.last_mouse_pos,
+                                session_picker: self.session_picker_entries.as_deref(),
+                                session_picker_loading: self.session_picker_entries.is_none()
+                                    && (self.session_picker_loading
+                                        || self.session_picker_lanes.foreign_loading),
+                                compact,
+                                pending_hint,
+                                startup_warnings: &self.startup_warnings,
+                                pending_update_version: self.pending_update_version.as_deref(),
+                                foreign_resume_hint: foreign_resume_hint.as_ref(),
+                                session_picker_content_results: self
+                                    .session_picker_content_results
+                                    .as_deref(),
+                                session_picker_content_loading: self.session_picker_content_loading,
+                                session_picker_entries_query: self
+                                    .session_picker_entries_query
+                                    .as_deref(),
+                                welcome_tick: self.welcome_tick,
+                                session_picker_grouped: self.session_picker_grouped,
+                                session_picker_source_filter: self.session_picker_source_filter,
+                                chat_mode: self.chat_mode,
+                                is_api_key_auth: self.is_api_key_auth,
+                            };
+                            let result = crate::views::welcome::render_welcome(
+                                view_area,
+                                f.buffer_mut(),
+                                &welcome_params,
+                                &mut self.welcome_prompt,
+                                &mut self.session_picker_state,
                             );
+                            self.welcome_menu_rects = result.menu_rects;
+                            self.welcome_menu_scroll = result.menu_scroll;
+                            self.welcome_prompt_rect = result.prompt_rect;
+                            self.welcome_import_banner_rect = result.import_banner_rect;
+                            self.welcome_auth_url_rect = result.auth_url_rect;
+                            self.welcome_auth_fallback_rect = result.auth_fallback_rect;
+                            self.session_picker_state.hit_areas = result.session_picker_hit_areas;
                             if let Some(modal) = self.import_claude_modal.as_mut() {
                                 let theme = crate::theme::Theme::current();
                                 crate::views::import_claude_modal::render_import_claude_modal(
@@ -3867,126 +3765,320 @@ impl AppView {
                                     compact,
                                 );
                             }
+                            if let Some(dialog) = self.new_worktree_dialog.as_ref() {
+                                crate::views::new_worktree_dialog::render_new_worktree_dialog(
+                                    view_area,
+                                    f.buffer_mut(),
+                                    dialog,
+                                );
+                            }
+                            if let Some(crate::views::modal::ActiveModal::DocViewer {
+                                ref title,
+                                ref content,
+                                ref mut scroll,
+                                ref mut window,
+                                ref mut cached_lines,
+                                ..
+                            }) = self.welcome_doc_viewer
+                            {
+                                let theme = crate::theme::Theme::current();
+                                crate::views::modal::render_doc_viewer_overlay(
+                                    f.buffer_mut(),
+                                    view_area,
+                                    window,
+                                    title,
+                                    content,
+                                    scroll,
+                                    cached_lines,
+                                    compact,
+                                    &theme,
+                                );
+                            }
                             if let Some(fps) = &fps_overlay {
                                 fps.render(full_area, f.buffer_mut());
                             }
                             if let Some(panel) = &scroll_debug_panel {
                                 panel.render(full_area, f.buffer_mut());
                             }
-                            let (cursor_pos, post_flush) = result;
-                            let post_flush =
-                                Self::merge_post_flush(agent.take_pending_post_flush(), post_flush);
-                            let has_cloud = false;
-                            if has_cloud || self.import_claude_modal.is_some() {
-                                link_spans.clear();
-                            }
-                            let cursor = if has_cloud { None } else { cursor_pos };
-                            return (cursor, Self::merge_escapes(notif_escapes, post_flush));
-                        }
-                    }
-                    ActiveView::AgentDashboard => {
-                        if let Some(dashboard) = self.dashboard.as_mut() {
-                            if let Some(id) = dashboard.attached_agent
-                                && !agents.contains_key(&id)
+                            let has_cloud_modal = false;
+                            let cursor = if has_cloud_modal {
+                                None
+                            } else {
+                                result.cursor_pos
+                            };
+                            let on_url = self.welcome_auth_url_rect.as_ref().is_some_and(|r| {
+                                matches!(self.auth_state, AuthState::Authenticating { .. })
+                                    && self.last_mouse_pos.is_some_and(|(mx, my)| {
+                                        mx >= r.x
+                                            && mx < r.x + r.width
+                                            && my >= r.y
+                                            && my < r.y + r.height
+                                    })
+                            });
+                            let mut post_flush = result.post_flush_escapes;
+                            if crate::terminal::terminal_context()
+                                .hyperlink_capabilities()
+                                .osc22_cursor
+                                && on_url != self.welcome_on_auth_url
                             {
-                                dashboard.close_popup();
-                                if dashboard.error_toast.is_none() {
-                                    dashboard.error_toast = Some(format!(
-                                        "{} Session closed",
-                                        crate::glyphs::check_mark()
-                                    ));
+                                use crossterm::Command;
+                                let mut buf = String::new();
+                                if on_url {
+                                    let _ = crate::terminal::SetPointerCursor.write_ansi(&mut buf);
+                                } else {
+                                    let _ = crate::terminal::SetDefaultCursor.write_ansi(&mut buf);
+                                }
+                                match post_flush.as_mut() {
+                                    Some(existing) => existing.append_plain(&buf),
+                                    None => {
+                                        post_flush =
+                                            Some(crate::terminal::overlay::PostFlush::plain(buf));
+                                    }
                                 }
                             }
-                            let dashboard_roster: &[crate::app::roster::RosterEntry] =
-                                if self.leader_mode {
-                                    &self.leader_roster
-                                } else {
-                                    &self.dashboard_local_sessions
-                                };
-                            let dash_cursor = crate::views::dashboard::render_dashboard(
-                                f.buffer_mut(),
-                                view_area,
-                                dashboard,
-                                agents,
-                                registry,
-                                pending_hint,
-                                dashboard_roster,
-                                self.dashboard_sessions_loading,
-                            );
-                            let (popup_cursor, popup_post_flush, drawn_popup_agent) =
-                                if let Some(agent_id) = dashboard.attached_agent {
-                                    let theme = crate::theme::Theme::current();
-                                    let popup_area = crate::views::dashboard::popup_rect(view_area);
-                                    let title = agents
-                                        .get(&agent_id)
-                                        .map(crate::views::session_title::entry_title)
-                                        .unwrap_or_else(|| "(session)".to_string());
-                                    let bundle_state = &self.bundle_state;
-                                    let (cursor, post_flush, drawn) =
-                                        crate::views::dashboard::render_popup_overlay(
-                                            f.buffer_mut(),
-                                            popup_area,
-                                            &theme,
-                                            &title,
-                                            dashboard,
-                                            |inner, buf| {
-                                                if let Some(agent) = agents.get_mut(&agent_id) {
-                                                    let (cursor, post_flush) = agent.draw(
-                                                        inner,
-                                                        buf,
-                                                        registry,
-                                                        scratch,
-                                                        None,
-                                                        false,
-                                                        0,
-                                                        None,
-                                                        bundle_state,
-                                                        false,
-                                                        link_spans,
-                                                    );
-                                                    (
-                                                        cursor,
-                                                        Self::merge_post_flush(
-                                                            agent.take_pending_post_flush(),
-                                                            post_flush,
-                                                        ),
-                                                    )
-                                                } else {
-                                                    (None, None)
-                                                }
-                                            },
-                                        );
-                                    (cursor, post_flush, drawn.then_some(agent_id))
-                                } else {
-                                    (None, None, None)
-                                };
-                            let stale_clears =
-                                Self::dashboard_stale_image_clears(agents, drawn_popup_agent);
-                            let popup_post_flush =
-                                Self::merge_post_flush(stale_clears, popup_post_flush);
-                            if let Some(fps) = &fps_overlay {
-                                fps.render(full_area, f.buffer_mut());
-                            }
-                            if let Some(panel) = &scroll_debug_panel {
-                                panel.render(full_area, f.buffer_mut());
-                            }
-                            let cursor = if dashboard.attached_agent.is_some() {
-                                popup_cursor
+                            self.welcome_on_auth_url = on_url;
+                            return (cursor, post_flush);
+                        }
+                        ActiveView::Agent(id) => {
+                            let overlay_focused = false;
+                            let overlay_active = self
+                                .dashboard
+                                .as_ref()
+                                .is_some_and(|d| d.attached_agent == Some(id));
+                            let position: Option<(usize, usize)> = if overlay_active
+                                && let Some(d) = self.dashboard.as_ref()
+                            {
+                                let order = crate::views::dashboard::overlay_cycle_order(d, agents);
+                                order
+                                    .iter()
+                                    .position(|i| *i == id)
+                                    .map(|idx| (idx + 1, order.len()))
                             } else {
-                                dash_cursor
+                                None
                             };
-                            return (cursor, Self::merge_escapes(notif_escapes, popup_post_flush));
+                            let (agent_area, header) = if overlay_active {
+                                let theme = crate::theme::Theme::current();
+                                let title = agents
+                                    .get(&id)
+                                    .map(crate::views::session_title::entry_title)
+                                    .unwrap_or_else(|| "(session)".to_string());
+                                let (hover_prev, hover_next, hover_close) = self
+                                    .dashboard
+                                    .as_ref()
+                                    .map(|d| {
+                                        (
+                                            d.overlay_prev_hit.hovered,
+                                            d.overlay_next_hit.hovered,
+                                            d.overlay_close_hit.hovered,
+                                        )
+                                    })
+                                    .unwrap_or((false, false, false));
+                                let header =
+                                    crate::views::dashboard::render_dashboard_session_header(
+                                        f.buffer_mut(),
+                                        view_area,
+                                        &theme,
+                                        &title,
+                                        position,
+                                        hover_prev,
+                                        hover_next,
+                                        hover_close,
+                                        header_pad_left,
+                                        header_pad_right,
+                                        header_pad_top,
+                                    );
+                                match header {
+                                    Some(chrome) => (chrome.content, Some(chrome)),
+                                    None => (view_area, None),
+                                }
+                            } else {
+                                (view_area, None)
+                            };
+                            if let Some(d) = self.dashboard.as_mut() {
+                                d.overlay_close_hit.set(header.and_then(|c| c.close_rect));
+                                d.overlay_prev_hit.set(header.and_then(|c| c.prev_rect));
+                                d.overlay_next_hit.set(header.and_then(|c| c.next_rect));
+                            }
+                            if let Some(agent) = agents.get_mut(&id) {
+                                let show_session_tip =
+                                    self.tip.is_some() && agent.should_show_tip();
+                                let has_mode_banner = agent.mode_switch_banner.is_some();
+                                let banner_height = if has_mode_banner || show_session_tip {
+                                    1
+                                } else {
+                                    0
+                                };
+                                let result = agent.draw(
+                                    agent_area,
+                                    f.buffer_mut(),
+                                    registry,
+                                    scratch,
+                                    pending_hint,
+                                    overlay_focused,
+                                    banner_height,
+                                    if show_session_tip {
+                                        self.tip.as_deref()
+                                    } else {
+                                        None
+                                    },
+                                    &self.bundle_state,
+                                    overlay_active,
+                                    link_spans,
+                                );
+                                if let Some(modal) = self.import_claude_modal.as_mut() {
+                                    let theme = crate::theme::Theme::current();
+                                    crate::views::import_claude_modal::render_import_claude_modal(
+                                        f.buffer_mut(),
+                                        view_area,
+                                        modal,
+                                        &theme,
+                                        compact,
+                                    );
+                                }
+                                if let Some(fps) = &fps_overlay {
+                                    fps.render(full_area, f.buffer_mut());
+                                }
+                                if let Some(panel) = &scroll_debug_panel {
+                                    panel.render(full_area, f.buffer_mut());
+                                }
+                                let (cursor_pos, post_flush) = result;
+                                let post_flush = Self::merge_post_flush(
+                                    agent.take_pending_post_flush(),
+                                    post_flush,
+                                );
+                                let has_cloud = false;
+                                if has_cloud || self.import_claude_modal.is_some() {
+                                    link_spans.clear();
+                                }
+                                let cursor = if has_cloud { None } else { cursor_pos };
+                                return (cursor, Self::merge_escapes(notif_escapes, post_flush));
+                            }
+                        }
+                        ActiveView::AgentDashboard => {
+                            if let Some(dashboard) = self.dashboard.as_mut() {
+                                if let Some(id) = dashboard.attached_agent
+                                    && !agents.contains_key(&id)
+                                {
+                                    dashboard.close_popup();
+                                    if dashboard.error_toast.is_none() {
+                                        dashboard.error_toast = Some(format!(
+                                            "{} Session closed",
+                                            crate::glyphs::check_mark()
+                                        ));
+                                    }
+                                }
+                                let dashboard_roster: &[crate::app::roster::RosterEntry] =
+                                    if self.leader_mode {
+                                        &self.leader_roster
+                                    } else {
+                                        &self.dashboard_local_sessions
+                                    };
+                                let dash_cursor = crate::views::dashboard::render_dashboard(
+                                    f.buffer_mut(),
+                                    view_area,
+                                    dashboard,
+                                    agents,
+                                    registry,
+                                    pending_hint,
+                                    dashboard_roster,
+                                    self.dashboard_sessions_loading,
+                                );
+                                let (popup_cursor, popup_post_flush, drawn_popup_agent) =
+                                    if let Some(agent_id) = dashboard.attached_agent {
+                                        let theme = crate::theme::Theme::current();
+                                        let popup_area =
+                                            crate::views::dashboard::popup_rect(view_area);
+                                        let title = agents
+                                            .get(&agent_id)
+                                            .map(crate::views::session_title::entry_title)
+                                            .unwrap_or_else(|| "(session)".to_string());
+                                        let bundle_state = &self.bundle_state;
+                                        let (cursor, post_flush, drawn) =
+                                            crate::views::dashboard::render_popup_overlay(
+                                                f.buffer_mut(),
+                                                popup_area,
+                                                &theme,
+                                                &title,
+                                                dashboard,
+                                                |inner, buf| {
+                                                    if let Some(agent) = agents.get_mut(&agent_id) {
+                                                        let (cursor, post_flush) = agent.draw(
+                                                            inner,
+                                                            buf,
+                                                            registry,
+                                                            scratch,
+                                                            None,
+                                                            false,
+                                                            0,
+                                                            None,
+                                                            bundle_state,
+                                                            false,
+                                                            link_spans,
+                                                        );
+                                                        (
+                                                            cursor,
+                                                            Self::merge_post_flush(
+                                                                agent.take_pending_post_flush(),
+                                                                post_flush,
+                                                            ),
+                                                        )
+                                                    } else {
+                                                        (None, None)
+                                                    }
+                                                },
+                                            );
+                                        (cursor, post_flush, drawn.then_some(agent_id))
+                                    } else {
+                                        (None, None, None)
+                                    };
+                                let stale_clears =
+                                    Self::dashboard_stale_image_clears(agents, drawn_popup_agent);
+                                let popup_post_flush =
+                                    Self::merge_post_flush(stale_clears, popup_post_flush);
+                                if let Some(fps) = &fps_overlay {
+                                    fps.render(full_area, f.buffer_mut());
+                                }
+                                if let Some(panel) = &scroll_debug_panel {
+                                    panel.render(full_area, f.buffer_mut());
+                                }
+                                let cursor = if dashboard.attached_agent.is_some() {
+                                    popup_cursor
+                                } else {
+                                    dash_cursor
+                                };
+                                return (
+                                    cursor,
+                                    Self::merge_escapes(notif_escapes, popup_post_flush),
+                                );
+                            }
                         }
                     }
                 }
+                if let Some(fps) = &fps_overlay {
+                    fps.render(full_area, f.buffer_mut());
+                }
+                if let Some(panel) = &scroll_debug_panel {
+                    panel.render(full_area, f.buffer_mut());
+                }
+                (None, Self::merge_escapes(notif_escapes, None))
+            })();
+            // The app-level directory picker is the topmost surface: it opens
+            // over Welcome, an agent, or the dashboard alike, and each of those
+            // arms returns early with its own cursor/escape pair. Painting it
+            // here — after the body has drawn and before the frame commits —
+            // keeps one call site instead of four.
+            if let Some(modal) = location_picker.as_mut() {
+                let area = f.area();
+                crate::views::location_picker::render_location_picker(
+                    f.buffer_mut(),
+                    area,
+                    &crate::theme::Theme::current(),
+                    modal.purpose,
+                    &mut modal.state,
+                );
+                return (None, post_flush);
             }
-            if let Some(fps) = &fps_overlay {
-                fps.render(full_area, f.buffer_mut());
-            }
-            if let Some(panel) = &scroll_debug_panel {
-                panel.render(full_area, f.buffer_mut());
-            }
-            (None, Self::merge_escapes(notif_escapes, None))
+            (cursor_pos, post_flush)
         });
         if let Some(started) = fps_frame_started {
             self.fps_hud.record(started.elapsed());
@@ -4037,6 +4129,9 @@ impl AppView {
         ) || self.import_claude_modal.is_some()
             || self.new_worktree_dialog.is_some()
             || self.welcome_doc_viewer.is_some()
+            // The app-level directory picker covers the view it was opened
+            // over, so a wheel event must not scroll what is behind it.
+            || self.location_picker.is_some()
             || matches!(
                 self.active_view, ActiveView::AgentDashboard if self.dashboard.as_ref()
                 .is_some_and(| d | d.shortcuts_modal.is_some())
@@ -4726,6 +4821,8 @@ pub(crate) mod tests {
             tabs_scope: crate::app::tabs::store::TabScope::Global,
             tab_store_stamp: None,
             cancelled_tabs: std::collections::HashSet::new(),
+            location_picker: None,
+            pending_location: None,
             pending_view_mark: None,
             window_focused: true,
             next_agent_id: 0,
@@ -6111,6 +6208,16 @@ pub(crate) mod tests {
         );
     }
     #[test]
+    fn welcome_done_ctrl_l_opens_the_directory_picker() {
+        let mut app = test_app();
+        app.auth_state = AuthState::Done;
+        let outcome = app.handle_input(&key_event(KeyCode::Char('l'), KeyModifiers::CONTROL));
+        assert!(matches!(
+            outcome,
+            InputOutcome::Action(Action::PickPagerCwd)
+        ));
+    }
+    #[test]
     fn welcome_ctrl_w_opens_new_worktree_dialog() {
         let mut app = test_app();
         app.cwd_has_git_ancestor = true;
@@ -6190,18 +6297,22 @@ pub(crate) mod tests {
     fn menu_action_indices() {
         assert!(matches!(
             dispatch_menu_action(0, false),
-            InputOutcome::Action(Action::OpenNewWorktreeDialog)
+            InputOutcome::Action(Action::PickPagerCwd)
         ));
         assert!(matches!(
             dispatch_menu_action(1, false),
-            InputOutcome::Action(Action::FetchSessionList)
+            InputOutcome::Action(Action::OpenNewWorktreeDialog)
         ));
         assert!(matches!(
             dispatch_menu_action(2, false),
-            InputOutcome::Action(Action::Quit)
+            InputOutcome::Action(Action::FetchSessionList)
         ));
         assert!(matches!(
             dispatch_menu_action(3, false),
+            InputOutcome::Action(Action::Quit)
+        ));
+        assert!(matches!(
+            dispatch_menu_action(4, false),
             InputOutcome::Unchanged
         ));
     }
@@ -6213,14 +6324,18 @@ pub(crate) mod tests {
         ));
         assert!(matches!(
             dispatch_menu_action(1, true),
-            InputOutcome::Action(Action::OpenNewWorktreeDialog)
+            InputOutcome::Action(Action::PickPagerCwd)
         ));
         assert!(matches!(
             dispatch_menu_action(2, true),
-            InputOutcome::Action(Action::FetchSessionList)
+            InputOutcome::Action(Action::OpenNewWorktreeDialog)
         ));
         assert!(matches!(
             dispatch_menu_action(3, true),
+            InputOutcome::Action(Action::FetchSessionList)
+        ));
+        assert!(matches!(
+            dispatch_menu_action(4, true),
             InputOutcome::Action(Action::Quit)
         ));
     }

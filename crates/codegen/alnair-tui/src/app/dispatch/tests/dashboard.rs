@@ -172,10 +172,13 @@ async fn dashboard_change_location_valid_updates_cwd_and_closes_modal() {
     app.active_view = ActiveView::AgentDashboard;
     app.dashboard = Some(crate::views::dashboard::DashboardState::new());
     if let Some(d) = app.dashboard.as_mut() {
-        d.location_picker = Some(crate::views::dashboard::LocationPickerState::new(
-            vec![],
-            std::path::PathBuf::from("/base"),
-            std::collections::HashMap::new(),
+        d.location_picker = Some(crate::views::location_picker::LocationPicker::new(
+            crate::views::location_picker::LocationPickerState::new(
+                vec![],
+                std::path::PathBuf::from("/base"),
+                std::collections::HashMap::new(),
+            ),
+            crate::views::location_picker::LocationPickerPurpose::Dashboard,
         ));
     }
     app.cwd = PathBuf::from("/definitely/not/a/real/dir");
@@ -213,10 +216,13 @@ async fn dashboard_change_location_invalid_keeps_cwd_and_sets_error() {
     app.active_view = ActiveView::AgentDashboard;
     app.dashboard = Some(crate::views::dashboard::DashboardState::new());
     if let Some(d) = app.dashboard.as_mut() {
-        d.location_picker = Some(crate::views::dashboard::LocationPickerState::new(
-            vec![],
-            std::path::PathBuf::from("/base"),
-            std::collections::HashMap::new(),
+        d.location_picker = Some(crate::views::location_picker::LocationPicker::new(
+            crate::views::location_picker::LocationPickerState::new(
+                vec![],
+                std::path::PathBuf::from("/base"),
+                std::collections::HashMap::new(),
+            ),
+            crate::views::location_picker::LocationPickerPurpose::Dashboard,
         ));
     }
     let original = PathBuf::from("/tmp");
@@ -242,7 +248,7 @@ async fn dashboard_change_location_invalid_keeps_cwd_and_sets_error() {
         .location_picker
         .as_ref()
         .expect("picker stays open on error");
-    assert!(lp.error.is_some(), "an inline error must be set");
+    assert!(lp.state.error.is_some(), "an inline error must be set");
 }
 
 /// Applying a git-repo location with the picker's worktree toggle on arms
@@ -254,12 +260,15 @@ async fn dashboard_change_location_persists_worktree_toggle() {
     app.active_view = ActiveView::AgentDashboard;
     app.dashboard = Some(crate::views::dashboard::DashboardState::new());
     if let Some(d) = app.dashboard.as_mut() {
-        let mut lp = crate::views::dashboard::LocationPickerState::new(
-            vec![],
-            std::path::PathBuf::from("/base"),
-            std::collections::HashMap::new(),
+        let mut lp = crate::views::location_picker::LocationPicker::new(
+            crate::views::location_picker::LocationPickerState::new(
+                vec![],
+                std::path::PathBuf::from("/base"),
+                std::collections::HashMap::new(),
+            ),
+            crate::views::location_picker::LocationPickerPurpose::Dashboard,
         );
-        lp.worktree_mode = true;
+        lp.state.worktree_mode = true;
         d.location_picker = Some(lp);
     }
     // The destination must be a git repo for worktree mode to persist.
@@ -293,12 +302,15 @@ async fn dashboard_change_location_to_non_git_clears_worktree_toggle() {
     app.active_view = ActiveView::AgentDashboard;
     app.dashboard = Some(crate::views::dashboard::DashboardState::new());
     if let Some(d) = app.dashboard.as_mut() {
-        let mut lp = crate::views::dashboard::LocationPickerState::new(
-            vec![],
-            std::path::PathBuf::from("/base"),
-            std::collections::HashMap::new(),
+        let mut lp = crate::views::location_picker::LocationPicker::new(
+            crate::views::location_picker::LocationPickerState::new(
+                vec![],
+                std::path::PathBuf::from("/base"),
+                std::collections::HashMap::new(),
+            ),
+            crate::views::location_picker::LocationPickerPurpose::Dashboard,
         );
-        lp.worktree_mode = true;
+        lp.state.worktree_mode = true;
         d.location_picker = Some(lp);
     }
     // A fresh tempdir with no `.git` anywhere above it.

@@ -849,6 +849,11 @@ pub(in crate::app::dispatch) fn handle_session_created(
             cwd: agent.session.cwd.display().to_string(),
         });
         notify_session_ready(&app.notification_service, agent);
+        // The session id exists only now, so this is the first moment a tab can
+        // name this session — `switch_to_agent` ran before it did. Without this
+        // a `/new`, Ctrl+N, fork, or dashboard-dispatched session never reached
+        // the strip, while a resumed session (id known up front) always did.
+        super::super::tabs::register_agent_tab(app, agent_id);
         return effects;
     }
     vec![]
@@ -925,6 +930,11 @@ pub(in crate::app::dispatch) fn handle_worktree_session_created(
             cwd: agent.session.cwd.display().to_string(),
         });
         notify_session_ready(&app.notification_service, agent);
+        // The session id exists only now, so this is the first moment a tab can
+        // name this session — `switch_to_agent` ran before it did. Without this
+        // a `/new`, Ctrl+N, fork, or dashboard-dispatched session never reached
+        // the strip, while a resumed session (id known up front) always did.
+        super::super::tabs::register_agent_tab(app, agent_id);
         return effects;
     }
     vec![]

@@ -199,7 +199,12 @@ pub(crate) fn dispatch(action: Action, app: &mut AppView) -> Vec<Effect> {
         Action::RecordSessionView(session_id) => {
             vec![Effect::RecordSessionView { session_id }]
         }
-        Action::TabOpenLocationPicker => super::tabs::dispatch_open_location_picker_for_tabs(app),
+        Action::NewSessionPickLocation => super::tabs::open_new_session_picker(app),
+        Action::PickPagerCwd => super::tabs::open_pager_cwd_picker(app),
+        Action::AppLocationChosen { input } => {
+            super::tabs::dispatch_app_location_chosen(app, input)
+        }
+        Action::CloseAppLocationPicker => super::tabs::dispatch_close_app_location_picker(app),
         Action::NewSessionWithId(session_id) => dispatch_new_session_with_id(app, session_id),
         Action::StartupForkSession {
             parent_session_id,
@@ -1140,7 +1145,7 @@ pub(crate) fn dispatch(action: Action, app: &mut AppView) -> Vec<Effect> {
         Action::DashboardOpenLocationPicker => dispatch_dashboard_open_location_picker(app),
         Action::DashboardCloseLocationPicker => {
             if let Some(d) = app.dashboard.as_mut() {
-                if let Some(wt) = d.location_picker.as_ref().map(|lp| lp.worktree_mode) {
+                if let Some(wt) = d.location_picker.as_ref().map(|lp| lp.state.worktree_mode) {
                     d.dispatch_worktree = wt && d.cwd_has_git_ancestor;
                 }
                 d.location_picker = None;

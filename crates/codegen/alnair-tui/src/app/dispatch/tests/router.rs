@@ -389,7 +389,15 @@ fn slash_new_does_not_cancel_running_turn() {
     let mut app = test_app_with_agent();
     let id = AgentId(0);
     app.agents.get_mut(&id).unwrap().session.state = AgentState::TurnRunning;
-    let effects = dispatch(Action::SendPrompt("/new".into()), &mut app);
+    // `/new` asks where first, so the session is created by the picker's
+    // apply step — that is where "must not cancel the running turn" lives.
+    dispatch(Action::SendPrompt("/new".into()), &mut app);
+    let effects = dispatch(
+        Action::AppLocationChosen {
+            input: "/tmp".into(),
+        },
+        &mut app,
+    );
     assert!(
         effects
             .iter()
@@ -407,12 +415,25 @@ fn slash_new_does_not_cancel_running_turn() {
     );
 }
 #[test]
-fn slash_new_uses_active_agent_cwd() {
+fn slash_new_opens_the_directory_picker_instead_of_creating() {
+    let mut app = test_app_with_agent();
+    let effects = dispatch(Action::SendPrompt("/new".into()), &mut app);
+    assert!(
+        effects.is_empty(),
+        "the picker must not create anything until a directory is chosen"
+    );
+    assert!(
+        app.location_picker.is_some(),
+        "`/new` must ask where the session should live"
+    );
+}
+#[test]
+fn slash_clear_uses_active_agent_cwd() {
     let mut app = test_app_with_agent();
     let id = AgentId(0);
     let agent_cwd = PathBuf::from("/custom/agent/cwd");
     app.agents.get_mut(&id).unwrap().session.cwd = agent_cwd.clone();
-    let effects = dispatch(Action::SendPrompt("/new".into()), &mut app);
+    let effects = dispatch(Action::SendPrompt("/clear".into()), &mut app);
     let create = effects
         .iter()
         .find(|e| matches!(e, Effect::CreateSession { .. }));

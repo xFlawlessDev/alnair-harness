@@ -519,14 +519,19 @@ pub(in crate::app::dispatch) fn handle_worktree_forked(
         }
         let effective_chat = conversation_entry || app.chat_mode;
         agent.chat_kind = effective_chat;
-        return vec![Effect::LoadSession {
-            agent_id,
-            session_id: session_id_str,
-            session_cwd: Some(session_cwd),
-            chat_kind: conversation_entry,
-        }];
+    } else {
+        return vec![];
     }
-    vec![]
+    // A forked session has no id until the fork completes, so the tab can only
+    // be named here — `switch_to_agent` ran while `session_id` was still
+    // `None` (see `register_agent_tab`).
+    super::super::tabs::register_agent_tab(app, agent_id);
+    vec![Effect::LoadSession {
+        agent_id,
+        session_id: session_id_str,
+        session_cwd: Some(session_cwd),
+        chat_kind: conversation_entry,
+    }]
 }
 pub(in crate::app::dispatch) fn handle_fork_session_ready(
     app: &mut AppView,
@@ -557,14 +562,17 @@ pub(in crate::app::dispatch) fn handle_fork_session_ready(
         agent.session.cwd = cwd.clone();
         let effective_chat = conversation_entry || app.chat_mode;
         agent.chat_kind = effective_chat;
-        return vec![Effect::LoadSession {
-            agent_id,
-            session_id: session_id_str,
-            session_cwd: Some(cwd),
-            chat_kind: conversation_entry,
-        }];
+    } else {
+        return vec![];
     }
-    vec![]
+    // Same reason as `handle_worktree_forked`: the fork's id is new here.
+    super::super::tabs::register_agent_tab(app, agent_id);
+    vec![Effect::LoadSession {
+        agent_id,
+        session_id: session_id_str,
+        session_cwd: Some(cwd),
+        chat_kind: conversation_entry,
+    }]
 }
 pub(in crate::app::dispatch) fn handle_fork_session_failed(
     app: &mut AppView,

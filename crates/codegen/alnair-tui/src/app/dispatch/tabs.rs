@@ -131,23 +131,148 @@ pub(in crate::app::dispatch) fn dispatch_cycle_tab(
     dispatch_activate_session(app, &tab.session_id, &tab.cwd)
 }
 
-/// `+…`: choose a directory, then create there.
+/// Open the app-level directory picker for "where should the new session go?".
 ///
-/// The location picker lives on the dashboard, so this opens the dashboard and
-/// hands the picker to it. That keeps ONE picker implementation: the tab strip
-/// reaches a repo with no session yet through the same affordance the dashboard
-/// already offers, rather than growing a second modal.
-pub(in crate::app::dispatch) fn dispatch_open_location_picker_for_tabs(
+/// The strip's `+` and `/new` both land here. `+` used to route through the
+/// dashboard's picker, which meant it was refused whenever the dashboard was
+/// not the foreground view; the picker is app-level now, so the question is
+/// asked in place.
+pub(in crate::app::dispatch) fn open_new_session_picker(app: &mut AppView) -> Vec<Effect> {
+    use crate::app::app_view::PendingLocationChoice;
+    use crate::views::location_picker::LocationPickerPurpose;
+
+    if app.location_picker.is_some() {
+        return vec![];
+    }
+    // Anchor on the active tab's directory: with a global strip spanning
+    // repositories, the process cwd is the wrong guess.
+    let base = app
+        .tabs
+        .active()
+        .map(|t| t.cwd.clone())
+        .unwrap_or_else(|| app.cwd.clone());
+    app.location_picker = Some(crate::views::location_picker::open_location_picker(
+        base,
+        LocationPickerPurpose::NewSession,
+        false,
+    ));
+    app.pending_location = Some(PendingLocationChoice::NewSession);
+    vec![]
+}
+
+/// Open the app-level directory picker to move the pager (welcome screen).
+pub(in crate::app::dispatch) fn open_pager_cwd_picker(app: &mut AppView) -> Vec<Effect> {
+    use crate::app::app_view::PendingLocationChoice;
+    use crate::views::location_picker::LocationPickerPurpose;
+
+    if app.location_picker.is_some() {
+        return vec![];
+    }
+    app.location_picker = Some(crate::views::location_picker::open_location_picker(
+        app.cwd.clone(),
+        LocationPickerPurpose::PagerCwd,
+        false,
+    ));
+    app.pending_location = Some(PendingLocationChoice::PagerCwd);
+    vec![]
+}
+
+/// Close the app-level picker without applying anything.
+pub(in crate::app::dispatch) fn dispatch_close_app_location_picker(
     app: &mut AppView,
 ) -> Vec<Effect> {
-    if !matches!(app.active_view, ActiveView::AgentDashboard) {
-        let effects = super::dashboard::dispatch_open_dashboard(app);
-        if !matches!(app.active_view, ActiveView::AgentDashboard) {
-            app.show_toast("Changing location needs the dashboard (/dashboard)");
-            return effects;
+    app.location_picker = None;
+    app.pending_location = None;
+    vec![]
+}
+
+/// Apply a path chosen in the app-level picker.
+///
+/// Validates first: a bad path keeps the modal open with an inline error
+/// rather than silently creating a session in the old directory.
+pub(in crate::app::dispatch) fn dispatch_app_location_chosen(
+    app: &mut AppView,
+    input: String,
+) -> Vec<Effect> {
+    use crate::app::app_view::PendingLocationChoice;
+
+    let Some(purpose) = app.pending_location.clone() else {
+        return dispatch_close_app_location_picker(app);
+    };
+    let Some(path) = crate::views::location_picker::resolve_location_input(&input, &app.cwd)
+        .filter(|p| p.is_dir())
+    else {
+        if let Some(modal) = app.location_picker.as_mut() {
+            modal.state.error = Some(format!("Not a directory: {}", input.trim()));
+        }
+        return vec![];
+    };
+
+    app.location_picker = None;
+    app.pending_location = None;
+    match purpose {
+        PendingLocationChoice::NewSession => dispatch_new_session_in_dir(app, path),
+        PendingLocationChoice::PagerCwd => dispatch_move_pager_cwd(app, path),
+    }
+}
+
+/// Point the pager at `path` without creating a session.
+fn dispatch_move_pager_cwd(app: &mut AppView, path: std::path::PathBuf) -> Vec<Effect> {
+    let display = crate::project_picker::sources::display_path(&path);
+    let changed = app.cwd != path;
+    app.cwd = path.clone();
+    app.cwd_has_git_ancestor = path.ancestors().any(|p| p.join(".git").exists());
+    crate::git_info::populate_from_cwd_async(path.clone());
+    if let Some(d) = app.dashboard.as_mut() {
+        d.cwd = path.clone();
+        d.cwd_has_git_ancestor = app.cwd_has_git_ancestor;
+    }
+    if changed {
+        app.show_toast(&format!("\u{2192} {display}"));
+    }
+    vec![Effect::SetWorkingDir { path }]
+}
+
+/// Create a new session rooted at `path`.
+///
+/// The session is created in the chosen directory *without* moving the
+/// process cwd: a global strip spans repositories, so re-rooting the pager
+/// would silently change where unrelated later actions resolve relative
+/// paths. `/cd` remains the explicit way to move the pager itself.
+fn dispatch_new_session_in_dir(app: &mut AppView, path: std::path::PathBuf) -> Vec<Effect> {
+    use super::session::lifecycle::dispatch_new_session_inner;
+
+    // The project picker's question is answered by this dialog; asking it
+    // again inside the fresh session would be a second prompt for the same
+    // decision.
+    let saved_shown = app.project_picker_shown;
+    app.project_picker_shown = true;
+    let mut effects = dispatch_new_session_inner(app, None);
+    app.project_picker_shown = saved_shown;
+
+    // `dispatch_new_session_inner` seeds the agent from the active session's
+    // cwd (or `app.cwd`). Re-point the freshly created placeholder at the
+    // chosen directory before its `CreateSession` effect runs.
+    let Some(agent_id) = effects.iter().find_map(|e| match e {
+        Effect::CreateSession { agent_id, .. } => Some(*agent_id),
+        _ => None,
+    }) else {
+        return effects;
+    };
+    if let Some(agent) = app.agents.get_mut(&agent_id) {
+        agent.session.cwd = path.clone();
+        agent.prompt.file_search.retarget(&path);
+    }
+    for effect in &mut effects {
+        if let Effect::CreateSession {
+            agent_id: id, cwd, ..
+        } = effect
+            && *id == agent_id
+        {
+            *cwd = path.clone();
         }
     }
-    super::dashboard::dispatch_dashboard_open_location_picker(app)
+    effects
 }
 
 /// Register a session as a tab (called from `switch_to_agent`).
@@ -157,6 +282,46 @@ pub(crate) fn register_tab(app: &mut AppView, session_id: &str, cwd: std::path::
     }
     app.tabs
         .open(crate::app::tabs::TabEntry::new(session_id, cwd));
+    persist(app);
+}
+
+/// Register the tab a freshly-bound agent now owns.
+///
+/// `switch_to_agent` is the funnel for every `ActiveView::Agent` assignment,
+/// but a brand-new session has no id yet when it runs — `AgentSession::session_id`
+/// is `None` until the shell answers `CreateSession`. Without this second
+/// registration, sessions created through `/new`, Ctrl+N, or a dashboard
+/// dispatch never reached the strip, while a resumed session (id known up
+/// front) did. The bind is the first moment a tab can be named, so it is the
+/// right chokepoint.
+///
+/// The strip cursor only follows a session that is actually in front: a
+/// dashboard dispatch leaves the dashboard foregrounded, and stealing the
+/// active chip there would claim the user is looking at something they are
+/// not.
+pub(in crate::app::dispatch) fn register_agent_tab(
+    app: &mut AppView,
+    agent_id: crate::app::agent::AgentId,
+) {
+    let Some(agent) = app.agents.get(&agent_id) else {
+        return;
+    };
+    let Some(session_id) = agent.session.session_id.as_ref().map(|s| s.0.to_string()) else {
+        return;
+    };
+    if app.cancelled_tabs.contains(&session_id) {
+        return;
+    }
+    let cwd = agent.session.cwd.clone();
+    let foreground = matches!(app.active_view, ActiveView::Agent(id) if id == agent_id);
+    // `open` moves the cursor onto the new chip; remember where it was so a
+    // background bind can put it back.
+    let previous = app.tabs.active().map(|t| t.session_id.clone());
+    app.tabs
+        .open(crate::app::tabs::TabEntry::new(session_id, cwd));
+    if !foreground && let Some(previous) = previous {
+        app.tabs.set_active_id(&previous);
+    }
     persist(app);
 }
 

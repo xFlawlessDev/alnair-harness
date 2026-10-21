@@ -232,3 +232,226 @@ fn tab_repo_detail_names_the_repository() {
     app.leader_roster = vec![roster_row("s", "/work/alnair", 1)];
     assert_eq!(app.tab_repo_detail("s").as_deref(), Some("alnair"));
 }
+
+/// A session id is unknown until the shell answers `CreateSession`, so
+/// `switch_to_agent` cannot register a brand-new session's tab. Binding the
+/// id is the first moment a chip can be named — without this a `/new`,
+/// Ctrl+N, or dashboard-dispatched session never reached the strip, while a
+/// resumed one (id known up front) always did.
+#[test]
+fn a_new_session_earns_its_tab_when_the_id_is_bound() {
+    let mut app = test_app();
+    assert!(app.tabs.is_empty(), "no session, no tab");
+
+    let (agent_id, _effects) =
+        crate::app::dispatch::session::lifecycle::dispatch_new_session_inner_with_id(
+            &mut app, None,
+        );
+    assert!(
+        app.tabs.is_empty(),
+        "a placeholder with no session id cannot be named yet"
+    );
+
+    crate::app::dispatch::session::lifecycle::handle_session_created(
+        &mut app,
+        agent_id,
+        acp::SessionId::new("brand-new"),
+        None,
+    );
+
+    assert_eq!(
+        app.tabs.session_ids(),
+        vec!["brand-new"],
+        "binding the id must put the session on the strip"
+    );
+    assert_eq!(
+        app.tabs.active().map(|t| t.session_id.as_str()),
+        Some("brand-new"),
+        "the session in front owns the strip cursor"
+    );
+}
+
+/// A dashboard dispatch leaves the dashboard foregrounded, so its new
+/// session must join the strip without stealing the cursor.
+#[test]
+fn a_background_bind_does_not_move_the_strip_cursor() {
+    let mut app = app_with_tabs(&["first"]);
+    app.tabs.set_active(0);
+
+    let (agent_id, _effects) =
+        crate::app::dispatch::session::lifecycle::dispatch_new_session_inner_with_id(
+            &mut app, None,
+        );
+    // `dispatch_new_session_inner_with_id` switches to the new agent; put the
+    // dashboard back in front to model the plain-Enter dashboard dispatch.
+    app.active_view = ActiveView::AgentDashboard;
+
+    crate::app::dispatch::session::lifecycle::handle_session_created(
+        &mut app,
+        agent_id,
+        acp::SessionId::new("background"),
+        None,
+    );
+
+    assert_eq!(app.tabs.session_ids(), vec!["first", "background"]);
+    assert_eq!(
+        app.tabs.active().map(|t| t.session_id.as_str()),
+        Some("first"),
+        "a background session must not claim the strip cursor"
+    );
+}
+
+/// A closed tab stays closed: an async bind that lands after the close must
+/// not resurrect the chip.
+#[test]
+fn a_bind_cannot_revive_a_closed_tab() {
+    let mut app = test_app();
+    let (agent_id, _effects) =
+        crate::app::dispatch::session::lifecycle::dispatch_new_session_inner_with_id(
+            &mut app, None,
+        );
+    app.cancelled_tabs.insert("revived".to_string());
+    crate::app::dispatch::session::lifecycle::handle_session_created(
+        &mut app,
+        agent_id,
+        acp::SessionId::new("revived"),
+        None,
+    );
+    assert!(app.tabs.is_empty());
+}
+
+/// The strip's `+` asks where first. It must not create anything until a
+/// directory is chosen, and it must work from an agent view (the old `+…`
+/// route demanded the dashboard).
+#[test]
+fn the_strip_plus_opens_the_picker_from_any_view() {
+    let mut app = test_app_with_agent();
+    let effects = dispatch(Action::NewSessionPickLocation, &mut app);
+    assert!(effects.is_empty(), "nothing is created before a choice");
+    let modal = app
+        .location_picker
+        .as_ref()
+        .expect("`+` must open the directory picker");
+    assert_eq!(
+        modal.purpose,
+        crate::views::location_picker::LocationPickerPurpose::NewSession,
+        "the picker must know its answer creates a session"
+    );
+}
+
+/// The picker anchors on the active tab's directory, not the process cwd: a
+/// global strip spans repositories, so the cwd is the wrong guess.
+#[test]
+fn the_picker_anchors_on_the_active_tab_directory() {
+    let mut app = app_with_tabs(&["a", "b"]);
+    app.tabs.set_active(1);
+    if let Some(tab) = app.tabs.tabs().get(1) {
+        let mut tab = tab.clone();
+        tab.cwd = PathBuf::from("/elsewhere/repo");
+        app.tabs.close(1);
+        app.tabs.open(tab);
+    }
+    dispatch(Action::NewSessionPickLocation, &mut app);
+    let modal = app.location_picker.as_ref().expect("picker open");
+    assert_eq!(modal.state.base_cwd, PathBuf::from("/elsewhere/repo"));
+}
+
+/// Choosing a directory creates the session there — and does NOT move the
+/// process cwd, because other tabs may live in other repositories.
+#[test]
+fn choosing_a_directory_creates_there_without_moving_the_pager() {
+    let mut app = test_app();
+    app.cwd = PathBuf::from("/original");
+    let tmp = tempfile::tempdir().unwrap();
+    let target = dunce::canonicalize(tmp.path()).unwrap_or_else(|_| tmp.path().to_path_buf());
+
+    dispatch(Action::NewSessionPickLocation, &mut app);
+    let effects = dispatch(
+        Action::AppLocationChosen {
+            input: target.to_string_lossy().into_owned(),
+        },
+        &mut app,
+    );
+
+    assert!(
+        app.location_picker.is_none(),
+        "the picker closes once a path is applied"
+    );
+    assert_eq!(
+        app.cwd,
+        PathBuf::from("/original"),
+        "creating a tab must not re-root the pager"
+    );
+    assert!(
+        !effects
+            .iter()
+            .any(|e| matches!(e, Effect::SetWorkingDir { .. })),
+        "no cwd change for a new-session pick: {effects:?}"
+    );
+    let create = effects
+        .iter()
+        .find_map(|e| match e {
+            Effect::CreateSession { cwd, .. } => Some(cwd.clone()),
+            _ => None,
+        })
+        .expect("expected CreateSession");
+    assert_eq!(create, target);
+}
+
+/// A bad path keeps the modal open with an inline error instead of silently
+/// creating a session in the old directory.
+#[test]
+fn an_invalid_directory_keeps_the_picker_open() {
+    let mut app = test_app();
+    dispatch(Action::NewSessionPickLocation, &mut app);
+    let effects = dispatch(
+        Action::AppLocationChosen {
+            input: "/no/such/dir/xyz-123-not-real".into(),
+        },
+        &mut app,
+    );
+    assert!(effects.is_empty(), "nothing is created for a bad path");
+    let modal = app.location_picker.as_ref().expect("picker stays open");
+    assert!(modal.state.error.is_some(), "an inline error must be set");
+}
+
+/// Esc dismisses the picker and creates nothing.
+#[test]
+fn dismissing_the_picker_creates_nothing() {
+    let mut app = test_app();
+    dispatch(Action::NewSessionPickLocation, &mut app);
+    let effects = dispatch(Action::CloseAppLocationPicker, &mut app);
+    assert!(effects.is_empty());
+    assert!(app.location_picker.is_none());
+    assert!(app.agents.is_empty());
+}
+
+/// The welcome screen's picker moves the pager instead of creating a session.
+#[test]
+fn the_welcome_picker_moves_the_pager_without_creating() {
+    let mut app = test_app();
+    assert!(matches!(app.active_view, ActiveView::Welcome));
+    let tmp = tempfile::tempdir().unwrap();
+    let target = dunce::canonicalize(tmp.path()).unwrap_or_else(|_| tmp.path().to_path_buf());
+
+    dispatch(Action::PickPagerCwd, &mut app);
+    let modal = app.location_picker.as_ref().expect("picker open");
+    assert_eq!(
+        modal.purpose,
+        crate::views::location_picker::LocationPickerPurpose::PagerCwd
+    );
+
+    let effects = dispatch(
+        Action::AppLocationChosen {
+            input: target.to_string_lossy().into_owned(),
+        },
+        &mut app,
+    );
+    assert_eq!(app.cwd, target, "the pager follows the choice");
+    assert!(app.agents.is_empty(), "no session is created");
+    assert!(
+        effects
+            .iter()
+            .any(|e| matches!(e, Effect::SetWorkingDir { path } if path == &target))
+    );
+}

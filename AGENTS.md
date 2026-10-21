@@ -167,9 +167,22 @@ The strip is client state over a shared file, not agent state. `TabEntry` keys
 on `session_id` (stable across processes), never `AgentId`, and carries the
 session's **own cwd** — a global strip spans repositories, so `+` creates in
 the focused tab's directory and the `repo ⎇ branch` label appears only when the
-strip holds more than one. A repo with no session yet is reached through the
-existing location picker (`+…`), which is why that action is no longer gated on
-the dashboard being foreground.
+strip holds more than one. The strip offers `[ × ]` (close the active tab —
+never the session) and `[ + ]` (create one) as clickable chips; the close chip
+is omitted when no tab is active rather than painted as a dead button.
+
+**A session earns its tab when its id is bound, not when it becomes the view.**
+`switch_to_agent` is the single funnel for `ActiveView::Agent`, but a
+brand-new session has no id there — `AgentSession::session_id` stays `None`
+until the shell answers `CreateSession`. So every post-bind handler
+(`handle_session_created`, `handle_worktree_session_created`,
+`handle_session_restored`, both fork paths) calls
+`tabs::register_agent_tab`. Without that second registration a `/new`,
+Ctrl+N, fork, or dashboard-dispatched session never reached the strip while a
+resumed session (id known up front) always did. A bind arriving for a session
+that is not in front adds the chip **without** moving the cursor — a dashboard
+dispatch leaves the dashboard foregrounded, and stealing the active chip there
+would claim the user is looking at something they are not.
 
 `~/.alnair/run/pager_tabs.json` follows `active_sessions.rs`: a `_in(root, …)`
 seam for tests, `lock_exclusive` held across the whole read-modify-write,
@@ -179,6 +192,36 @@ a normal transient state and must never be treated as corruption. `scope` lives
 inside the file so two clients cannot disagree mid-session; the file wins over
 config. `cancelled_tabs` is in-process only: the lock already makes
 cross-process resurrection impossible.
+
+### The directory picker is app-level
+
+`views::location_picker` owns the path-completion modal, and it answers only
+"which directory?". The **caller** supplies a `LocationPickerPurpose` and
+decides what the answer becomes, because three different outcomes share one
+modal:
+
+| Purpose | Opened by | Enter does |
+|---|---|---|
+| `Dashboard` | `Ctrl+L`, `/cd`, the header label | retarget the dashboard's dispatch cwd |
+| `NewSession` | `/new`, the strip's `+` | create a session in that directory |
+| `PagerCwd` | `Ctrl+L` on Welcome | move the pager, create nothing |
+
+`AppView::location_picker` hosts the non-dashboard purposes (routed before the
+view dispatch, painted after the view body so it overlays whatever is in
+front); `DashboardState::location_picker` keeps its own copy because that one
+is an overlay on a view it owns. Do not fold them together — the dashboard's
+picker is reset on dashboard-open and carries the dispatch worktree toggle,
+which has no meaning on the other two surfaces.
+
+`/new` asks; `/clear` does not. `/clear`'s name promises "start over *here*",
+so it keeps the in-place path. Creating from the picker deliberately does
+**not** move the process cwd: a global strip spans repositories, and
+re-rooting the pager would silently change where unrelated later actions
+resolve relative paths — `/cd` stays the explicit way to move it.
+
+The Welcome screen's menu rows come from `views::welcome::welcome_menu_items`,
+shared by the renderer and the input handler. That is what keeps an inserted
+row from being painted with one meaning and dispatched with another.
 
 Tab chords are context-gated for the same reason `Ctrl+.` is: without the kitty
 keyboard protocol `Ctrl+Tab` arrives as a plain CR, which is `FocusPrompt` /

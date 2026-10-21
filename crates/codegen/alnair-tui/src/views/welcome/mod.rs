@@ -34,7 +34,7 @@ use top_bar::render_top_bar;
 
 /// True for VS Code and xterm.js embeds (VS Code-family IDEs and Zed) where
 /// quit is `Ctrl+D` (canonical: [`TerminalName::is_vscode_family`]).
-fn welcome_in_vscode_family() -> bool {
+pub(crate) fn welcome_in_vscode_family() -> bool {
     crate::terminal::terminal_context().brand.is_vscode_family()
 }
 
@@ -447,6 +447,69 @@ fn render_prompt_and_version(
     }
 
     prompt_result
+}
+
+/// One row of the welcome screen's shortcut menu.
+///
+/// The row list is shared by the renderer (which paints labels) and the input
+/// handler (which maps a row index to an action). Keeping the two on one
+/// definition is what stops a row from being painted with one meaning and
+/// dispatched with another — the bug that appears whenever a row is inserted.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct WelcomeMenuItem {
+    /// Right-aligned key hint.
+    pub key: &'static str,
+    /// Left-aligned label.
+    pub label: &'static str,
+    pub action: WelcomeMenuAction,
+}
+
+/// What activating a [`WelcomeMenuItem`] does.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WelcomeMenuAction {
+    ImportClaudeSettings,
+    ChooseDirectory,
+    NewWorktree,
+    ResumeSession,
+    Quit,
+}
+
+/// Build the welcome menu rows for the current screen state.
+///
+/// `in_vscode_family` swaps the quit chord (Ctrl+D is the editor's own "close
+/// the panel" muscle memory). `has_claude_import` prepends the import row,
+/// whose trailing `[x]` is a clickable dismiss affordance.
+pub fn welcome_menu_items(in_vscode_family: bool, has_claude_import: bool) -> Vec<WelcomeMenuItem> {
+    let key_q = if in_vscode_family { "ctrl+d" } else { "ctrl+q" };
+    let mut items = Vec::with_capacity(5);
+    if has_claude_import {
+        items.push(WelcomeMenuItem {
+            key: "ctrl+i  [x]",
+            label: "Import Claude settings",
+            action: WelcomeMenuAction::ImportClaudeSettings,
+        });
+    }
+    items.push(WelcomeMenuItem {
+        key: "ctrl+l",
+        label: "Choose directory",
+        action: WelcomeMenuAction::ChooseDirectory,
+    });
+    items.push(WelcomeMenuItem {
+        key: "ctrl+w",
+        label: "New worktree",
+        action: WelcomeMenuAction::NewWorktree,
+    });
+    items.push(WelcomeMenuItem {
+        key: "ctrl+s",
+        label: "Resume session",
+        action: WelcomeMenuAction::ResumeSession,
+    });
+    items.push(WelcomeMenuItem {
+        key: key_q,
+        label: "Quit",
+        action: WelcomeMenuAction::Quit,
+    });
+    items
 }
 
 /// All display state for rendering the welcome screen.
@@ -1459,31 +1522,11 @@ fn render_welcome_done(
         0
     };
 
-    let owned_menu;
-    let menu_items: &[(&str, &str)] = {
-        let (key_w, key_s, key_q, key_i_with_x) = (
-            "ctrl+w",
-            "ctrl+s",
-            if in_vscode_family { "ctrl+d" } else { "ctrl+q" },
-            "ctrl+i  [x]",
-        );
-        // Insert the import row at the top when there are pending `.claude/`
-        // settings to import — it's the most actionable item right now.
-        let mut items: Vec<(&str, &str)> = Vec::with_capacity(4);
-        if p.has_claude_import {
-            // The trailing "[x]" is a clickable dismiss affordance — the
-            // welcome screen mouse handler treats clicks on the rightmost
-            // 3 cells of this row as dismiss instead of open. Keyboard:
-            // ctrl-shift-i. The key string is right-aligned by render_menu,
-            // so [x] sits at the very end of the row.
-            items.push((key_i_with_x, "Import Claude settings"));
-        }
-        items.push((key_w, "New worktree"));
-        items.push((key_s, "Resume session"));
-        items.push((key_q, "Quit"));
-        owned_menu = items;
-        owned_menu.as_slice()
-    };
+    let owned_menu: Vec<(&str, &str)> = welcome_menu_items(in_vscode_family, p.has_claude_import)
+        .into_iter()
+        .map(|item| (item.key, item.label))
+        .collect();
+    let menu_items: &[(&str, &str)] = owned_menu.as_slice();
 
     let menu_height = if show_picker {
         0
