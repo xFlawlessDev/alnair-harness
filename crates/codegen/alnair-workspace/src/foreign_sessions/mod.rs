@@ -763,7 +763,16 @@ mod tests {
             },
             |_, _| panic!("claude scanner called"),
             |received, _| {
-                assert_eq!(received, dunce::canonicalize(&cwd).unwrap());
+                // `dunce::canonicalize` on a tempdir under a user profile whose
+                // name is 8+ characters comes back as the 8.3 SHORT name
+                // (`ARIFPE~1`), which is the same directory under a different
+                // spelling. Compare canonicalized forms so the assertion is
+                // about "ordinary spelling" (no `\\?\` verbatim prefix), not
+                // about which of the two legal spellings the OS handed back.
+                assert_eq!(
+                    dunce::canonicalize(received).unwrap(),
+                    dunce::canonicalize(&cwd).unwrap()
+                );
                 assert!(!received.to_string_lossy().starts_with(r"\\?\"));
                 Vec::new()
             },

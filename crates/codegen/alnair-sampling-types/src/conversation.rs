@@ -82,6 +82,16 @@ pub enum SyntheticReason {
     /// session spawn. Invariant: once placed, never replaced (would bust the
     /// KV-cache prefix).
     ProjectInstructions,
+    /// A *later revision* of the project instructions, appended mid-session
+    /// after `AGENTS.md` / `CLAUDE.md` / rules files changed on disk.
+    ///
+    /// Deliberately distinct from [`Self::ProjectInstructions`]: that variant
+    /// carries a "once placed, never replaced" invariant that the spawn-time
+    /// idempotence guard (`conversation_has_project_instructions`) and the
+    /// compaction de-dup both rely on. Tagging an update with it would make
+    /// "the original is present" unanswerable and would silently suppress the
+    /// update at every spawn-path call site.
+    ProjectInstructionsUpdate,
     /// Injected by the auto-continue logic after compaction so the agent
     /// keeps working.  Not real user input.
     AutoContinue,
@@ -142,6 +152,7 @@ impl SyntheticReason {
             Self::CompactionMeta
             | Self::SystemReminder
             | Self::ProjectInstructions
+            | Self::ProjectInstructionsUpdate
             | Self::AutoContinue
             | Self::AutoRecovery
             | Self::Interjection
@@ -916,6 +927,23 @@ impl ConversationItem {
                 text: Arc::<str>::from(content.into()),
             }],
             synthetic_reason: Some(SyntheticReason::ProjectInstructions),
+            prior_turn_interrupt: None,
+            prompt_index: None,
+        })
+    }
+
+    /// A *revised* project-instructions block, appended when the on-disk
+    /// `AGENTS.md` / `CLAUDE.md` / rules files changed mid-session.
+    ///
+    /// Unlike [`Self::project_instructions`] this is an append-only update: the
+    /// original item stays in the conversation so the KV-cache prefix is
+    /// untouched, and the model sees the revision as the newer instruction.
+    pub fn project_instructions_update(content: impl Into<String>) -> Self {
+        Self::User(UserItem {
+            content: vec![ContentPart::Text {
+                text: Arc::<str>::from(content.into()),
+            }],
+            synthetic_reason: Some(SyntheticReason::ProjectInstructionsUpdate),
             prior_turn_interrupt: None,
             prompt_index: None,
         })
@@ -8733,6 +8761,52 @@ mod tests {
         } else {
             panic!("expected User variant after round-trip");
         }
+    }
+
+    /// An update revision is tagged with its own variant, not the original
+    /// `ProjectInstructions` — the spawn-time idempotence guard and the
+    /// compaction de-dup both key on the original tag and must keep answering
+    /// "the spawn-time block is present".
+    #[test]
+    fn project_instructions_update_tagged_distinctly() {
+        let item = ConversationItem::project_instructions_update("# AGENTS.md v2");
+        if let ConversationItem::User(u) = item {
+            assert_eq!(
+                u.synthetic_reason,
+                Some(SyntheticReason::ProjectInstructionsUpdate)
+            );
+        } else {
+            panic!("expected User variant");
+        }
+    }
+
+    /// Serializes to snake_case `"project_instructions_update"` and round-trips
+    /// back to the same variant.
+    #[test]
+    fn project_instructions_update_serde_roundtrip() {
+        let item = ConversationItem::project_instructions_update("revised body");
+        let json = serde_json::to_value(&item).expect("serialize");
+        assert_eq!(
+            json["synthetic_reason"],
+            serde_json::json!("project_instructions_update"),
+            "synthetic_reason must serialize as snake_case string"
+        );
+        let back: ConversationItem = serde_json::from_value(json).expect("deserialize");
+        if let ConversationItem::User(u) = back {
+            assert_eq!(
+                u.synthetic_reason,
+                Some(SyntheticReason::ProjectInstructionsUpdate)
+            );
+        } else {
+            panic!("expected User variant after round-trip");
+        }
+    }
+
+    /// An update is a mid-turn injection, never a turn starter: it must not
+    /// consume a `prompt_index` slot or wake the agent on its own.
+    #[test]
+    fn project_instructions_update_does_not_start_turn() {
+        assert!(!SyntheticReason::ProjectInstructionsUpdate.starts_prompt_turn());
     }
 
     /// Forward-compat regression guard for the `#[serde(other)]` arm:

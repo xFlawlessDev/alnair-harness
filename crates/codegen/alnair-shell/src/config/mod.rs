@@ -426,6 +426,30 @@ impl SubagentsConfig {
     /// When `cwd` is provided, file-based roles are discovered from
     /// `{cwd}/.alnair/roles/*.toml` and merged (inline config takes precedence).
     pub fn resolve(cli_flag: bool, config: &toml::Value, cwd: Option<&std::path::Path>) -> Self {
+        Self::resolve_with_roots(
+            cli_flag,
+            config,
+            cwd,
+            dirs::home_dir().as_deref(),
+            &bundle::bundled_root(),
+        )
+    }
+
+    /// [`Self::resolve`] with the two ambient roots injected.
+    ///
+    /// Exists because `dirs::home_dir()` is not redirectable through the
+    /// environment on Windows (it reads the `FOLDERID_Profile` Known Folder,
+    /// ignoring `USERPROFILE`), so a test that sets `HOME` still sees the
+    /// developer's real home. Injecting the roots makes the discovery order —
+    /// workspace < home < bundled — assertable on every platform without
+    /// touching process-wide state.
+    pub fn resolve_with_roots(
+        cli_flag: bool,
+        config: &toml::Value,
+        cwd: Option<&std::path::Path>,
+        home: Option<&std::path::Path>,
+        bundled_root: &std::path::Path,
+    ) -> Self {
         let mut result: Self = config
             .get("subagents")
             .and_then(|v| v.clone().try_into().ok())
@@ -443,11 +467,10 @@ impl SubagentsConfig {
             result.discover_roles(cwd);
             result.discover_personas(cwd);
         }
-        if let Some(home) = dirs::home_dir() {
-            result.discover_roles(&home);
-            result.discover_personas(&home);
+        if let Some(home) = home {
+            result.discover_roles(home);
+            result.discover_personas(home);
         }
-        let bundled_root = bundle::bundled_root();
         result.discover_roles_in_dir(&bundled_root.join("roles"));
         result.discover_personas_in_dir(&bundled_root.join("personas"));
         result

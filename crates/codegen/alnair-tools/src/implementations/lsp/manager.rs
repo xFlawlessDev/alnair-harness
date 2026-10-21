@@ -273,8 +273,14 @@ impl LspManager {
                     continue;
                 };
                 server_had_diagnostics = true;
-                // Unix-only
-                let display_path = uri.strip_prefix("file://").unwrap_or(uri);
+                // Render the native path, not the URI: stripping `file://`
+                // leaves `/C:/repo/app.ts` on Windows, which then lands in the
+                // `<lsp-diagnostics>` block injected into the model's context.
+                let decoded = Url::parse(uri)
+                    .ok()
+                    .and_then(|u| u.to_file_path().ok())
+                    .map(|p| p.display().to_string());
+                let display_path = decoded.as_deref().unwrap_or(uri);
                 let mut has_header = false;
 
                 for d in diags {

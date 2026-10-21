@@ -615,6 +615,58 @@ pub fn restore_native_stderr() {
     }
 }
 
+/// Whether a process with `pid` is still running.
+///
+/// This is the cross-platform primitive every caller should use instead of
+/// shelling out to `kill -0`: that binary does not exist on Windows, so a
+/// `kill`-based probe silently reports **every** process as dead there — which
+/// for worktree GC means reclaiming a directory a live session is still using.
+///
+/// - Unix: `kill(pid, 0)`; true if the process exists (even under a different
+///   UID), false only on `ESRCH`.
+/// - Windows: `OpenProcess(SYNCHRONIZE)` + a zero-timeout
+///   `WaitForSingleObject`; true while running, false on exit or open failure.
+///
+/// `pid == 0` is never a real tracked process, so it reads as dead.
+pub fn is_process_alive(pid: u32) -> bool {
+    if pid == 0 {
+        return false;
+    }
+    #[cfg(unix)]
+    {
+        use nix::errno::Errno;
+        use nix::sys::signal::kill;
+        use nix::unistd::Pid;
+        // A pid above i32::MAX wraps to a negative pid_t (a process-group
+        // selector), so it is not a real pid either.
+        if pid > i32::MAX as u32 {
+            return false;
+        }
+        match kill(Pid::from_raw(pid as i32), None) {
+            Ok(()) => true,
+            Err(Errno::ESRCH) => false,
+            Err(_) => true,
+        }
+    }
+    #[cfg(windows)]
+    {
+        use windows::Win32::Foundation::{CloseHandle, WAIT_TIMEOUT};
+        use windows::Win32::System::Threading::{
+            OpenProcess, PROCESS_SYNCHRONIZE, WaitForSingleObject,
+        };
+        let Ok(handle) = (unsafe { OpenProcess(PROCESS_SYNCHRONIZE, false, pid) }) else {
+            return false;
+        };
+        let wait_result = unsafe { WaitForSingleObject(handle, 0) };
+        let _ = unsafe { CloseHandle(handle) };
+        wait_result == WAIT_TIMEOUT
+    }
+    #[cfg(not(any(unix, windows)))]
+    {
+        false
+    }
+}
+
 /// Returns `true` when running inside Windows Subsystem for Linux (WSL1/WSL2).
 /// Cached for process lifetime. Detection: the `WSL_DISTRO_NAME` / `WSL_INTEROP`
 /// env vars, with a `/proc/sys/kernel/osrelease` `microsoft`/`wsl` substring

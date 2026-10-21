@@ -58,7 +58,29 @@ pub(crate) fn sample_rss_bytes() -> u64 {
             }
         }
     }
-    #[cfg(not(unix))]
+    #[cfg(windows)]
+    {
+        // `GetProcessMemoryInfo` with `PROCESS_MEMORY_COUNTERS`:
+        // `WorkingSetSize` is the resident set, matching the Unix reading.
+        use windows::Win32::System::ProcessStatus::{
+            GetProcessMemoryInfo, PROCESS_MEMORY_COUNTERS,
+        };
+        use windows::Win32::System::Threading::GetCurrentProcess;
+        let mut counters = PROCESS_MEMORY_COUNTERS::default();
+        let ok = unsafe {
+            GetProcessMemoryInfo(
+                GetCurrentProcess(),
+                &mut counters,
+                std::mem::size_of::<PROCESS_MEMORY_COUNTERS>() as u32,
+            )
+        };
+        if ok.is_ok() {
+            counters.WorkingSetSize as u64
+        } else {
+            0
+        }
+    }
+    #[cfg(not(any(unix, windows)))]
     {
         0
     }

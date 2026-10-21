@@ -665,7 +665,12 @@ mod tests {
         // home; ALNAIR_SHARE_DIR-isolated store; ALNAIR_FOLDER_TRUST unset so the
         // default-on flag applies.
         let home = tempfile::tempdir().unwrap();
-        let _home = EnvGuard::set("HOME", home.path());
+        // `dirs::home_dir()` ignores `HOME` on Windows (it reads the
+        // `FOLDERID_Profile` Known Folder), so redirect home through the
+        // crate's test seam rather than the environment.
+        let _home = alnair_workspace::trust::HomeOverride::set(Some(
+            dunce::canonicalize(home.path()).unwrap(),
+        ));
         let alnair_home = tempfile::tempdir().unwrap();
         let _env = EnvGuard::set("ALNAIR_SHARE_DIR", alnair_home.path());
         let _flag = EnvGuard::unset("ALNAIR_FOLDER_TRUST");
@@ -688,6 +693,11 @@ mod tests {
         );
     }
 
+    /// Unix-only: `.envrc` is executed through `direnv`/`bash`
+    /// (`alnair_workspace::envrc`), neither of which exists on Windows, so the
+    /// loader correctly yields an empty map there. Gating keeps the test
+    /// asserting the trust gate rather than the platform's shell support.
+    #[cfg(unix)]
     #[test]
     #[serial_test::serial]
     fn envrc_gate_drops_untrusted_then_loads_when_store_trusted() {
@@ -1504,6 +1514,9 @@ mod tests {
         assert!(lt, "store-trusted launch dir must be allowed");
     }
 
+    /// Unix-only for the same `.envrc`/bash reason as
+    /// [`envrc_gate_drops_untrusted_then_loads_when_store_trusted`].
+    #[cfg(unix)]
     #[test]
     #[serial_test::serial]
     fn local_build_is_inert_launch_trust_auto_trusts() {

@@ -867,6 +867,13 @@ mod tests {
     /// Now the env-var pre-spawn check refuses with a clear reason when
     /// the var is unset (and the dispatcher fail-opens, so the tool call
     /// itself is not blocked).
+    ///
+    /// Unix-only: this asserts `sh -c` semantics over a POSIX shell script.
+    /// The non-Unix branch deliberately uses the platform shell
+    /// (`shell_command_argv`), where `${VAR}` expansion is a different
+    /// contract and a `.sh` file is not executable — testing it here would
+    /// assert the wrong thing rather than a Windows bug.
+    #[cfg(unix)]
     #[tokio::test]
     async fn test_env_var_interpolation_runs_via_shell() {
         let tmp = tempfile::tempdir().unwrap();
@@ -920,6 +927,10 @@ mod tests {
     /// it on the spawned child so shell expansion via the `sh -c` branch
     /// resolves correctly; otherwise such hooks fail to find the
     /// command.
+    ///
+    /// Unix-only for the same reason as the test above: it drives a POSIX
+    /// script through `sh -c`.
+    #[cfg(unix)]
     #[tokio::test]
     async fn test_claude_project_dir_is_exported() {
         let tmp = tempfile::tempdir().unwrap();

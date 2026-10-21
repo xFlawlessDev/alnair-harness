@@ -1042,9 +1042,11 @@ fn dummy_tracker(
     use crate::session::signals::SessionSignalsHandle;
     use std::sync::atomic::AtomicBool;
     let gateway = test_gateway();
-    let cwd = alnair_paths::AbsPathBuf::new(PathBuf::from("/tmp")).unwrap();
+    // `/tmp` is not absolute on Windows and `AbsPathBuf::new` rejects it, so
+    // every test in this module failed in setup there.
+    let cwd = alnair_paths::AbsPathBuf::new(std::env::temp_dir()).unwrap();
     let fs: Arc<dyn alnair_workspace::file_system::AsyncFileSystem> = Arc::new(
-        alnair_workspace::file_system::LocalFs::new(PathBuf::from("/tmp")),
+        alnair_workspace::file_system::LocalFs::new(std::env::temp_dir()),
     );
     let terminal: Arc<dyn crate::terminal::AsyncTerminalRunner> = Arc::new(
         crate::terminal::TerminalRunner::new(

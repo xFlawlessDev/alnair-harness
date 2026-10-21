@@ -64,6 +64,43 @@ impl std::fmt::Display for ColorLevel {
 
 static COLOR_LEVEL: OnceLock<ColorLevel> = OnceLock::new();
 
+/// Test-only forced level, consulted ahead of the cached detection.
+///
+/// [`set`] cannot re-pin an already-initialized [`COLOR_LEVEL`], so a test that
+/// needs a specific level after another test (or the ambient environment, e.g.
+/// `NO_COLOR=1`) has resolved it cannot use `set`. Under `ColorLevel::None`
+/// every theme color quantizes to `Reset`, which silently empties any
+/// assertion that distinguishes two colors — the failure mode is a diff-band
+/// check that sees no bands at all.
+#[cfg(any(test, feature = "test-support"))]
+static FORCED_LEVEL: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(u8::MAX);
+
+#[cfg(any(test, feature = "test-support"))]
+fn forced_level() -> Option<ColorLevel> {
+    match FORCED_LEVEL.load(std::sync::atomic::Ordering::Relaxed) {
+        0 => Some(ColorLevel::None),
+        1 => Some(ColorLevel::Basic),
+        2 => Some(ColorLevel::Ansi256),
+        3 => Some(ColorLevel::TrueColor),
+        _ => None,
+    }
+}
+
+/// Force the color level for the rest of this test process.
+///
+/// Unlike [`set`], this always wins, including over a level that was already
+/// resolved. Test builds only; there is no production reset.
+#[cfg(any(test, feature = "test-support"))]
+pub fn force_for_test(level: ColorLevel) {
+    FORCED_LEVEL.store(level as u8, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// Drop the forced level so detection resumes.
+#[cfg(any(test, feature = "test-support"))]
+pub fn clear_forced_for_test() {
+    FORCED_LEVEL.store(u8::MAX, std::sync::atomic::Ordering::Relaxed);
+}
+
 /// Detect the terminal's color support and cache the result.
 ///
 /// Uses the `supports-color` crate which checks `COLORTERM`, `TERM`,
@@ -87,6 +124,10 @@ pub fn detect() -> ColorLevel {
 
 /// The raw cached detection, without the terminal-native lock cap.
 fn detect_raw() -> ColorLevel {
+    #[cfg(any(test, feature = "test-support"))]
+    if let Some(level) = forced_level() {
+        return level;
+    }
     *COLOR_LEVEL.get_or_init(|| {
         // Explicit opt-out via NO_COLOR takes priority.
         if std::env::var_os("NO_COLOR").is_some() {

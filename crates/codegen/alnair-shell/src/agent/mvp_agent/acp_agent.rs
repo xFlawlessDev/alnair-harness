@@ -2140,6 +2140,7 @@ impl acp::Agent for MvpAgent {
             | "alnair/session/update_mcp_servers" | "alnair/session/fork"
             | "alnair/internal/reload_all_mcp_servers"
             | "alnair/internal/reload_project_mcp_servers" | "alnair/internal/reload_skills"
+            | "alnair/internal/reload_project_instructions"
             | "alnair/internal/reload_models" | "alnair/internal/reload_models_cache"
             | "alnair/plugins/reload"
             | "alnair/commands/list" => {
@@ -2553,5 +2554,31 @@ impl acp::Agent for MvpAgent {
             );
         }
         Ok(())
+    }
+}
+
+impl MvpAgent {
+    /// Dispatch an internal extension method **directly**, without routing it
+    /// through the ACP inbound stream.
+    ///
+    /// The stream-injection path used by the leader (`internal_reload_request_line`
+    /// → simplex writer → `ext_method`) does not exist in the in-process TUI
+    /// transport: `spawn_agent_thread_direct` hands RPC straight to the agent
+    /// over an `Rc`, with no inbound simplex to write to. A watcher there
+    /// therefore had no way to reach the agent at all, which is why the
+    /// non-leader TUI had no config hot-reload.
+    ///
+    /// Callers must already be running on the agent's own thread/local set —
+    /// `MvpAgent` is `!Send` by construction.
+    pub async fn dispatch_internal(
+        &self,
+        method: &str,
+        params: serde_json::Value,
+    ) -> Result<acp::ExtResponse, acp::Error> {
+        use acp::Agent as _;
+        let raw = serde_json::value::to_raw_value(&params)
+            .map_err(|e| acp::Error::internal_error().data(e.to_string()))?;
+        self.ext_method(acp::ExtRequest::new(method, raw.into()))
+            .await
     }
 }

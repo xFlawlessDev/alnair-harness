@@ -2447,6 +2447,27 @@ mod tests {
     // `test_ctx` stamps `WorkspaceViewerContext { stream_tool_progress:
     // true }` by default, so these tests exercise the streaming path.
 
+    /// The `make_real_resources` fixtures below run through the *real*
+    /// `LocalTerminalBackend`, which spawns via the detected shell
+    /// (`alnair_config::shell::shell_command_argv`). A fixture must therefore be
+    /// written in that shell's dialect: POSIX on Unix and Windows + Git Bash,
+    /// PowerShell otherwise (`cmd.exe`, reachable only via an explicit
+    /// `ALNAIR_SHELL=cmd`, is not covered — the default cascade never picks it).
+    fn sh(posix: &str, powershell: &str) -> String {
+        #[cfg(unix)]
+        {
+            let _ = powershell;
+            posix.to_owned()
+        }
+        #[cfg(not(unix))]
+        {
+            match alnair_config::shell::detect_windows_shell() {
+                alnair_config::shell::WindowsShell::GitBash(_) => posix.to_owned(),
+                _ => powershell.to_owned(),
+            }
+        }
+    }
+
     /// Build resources backed by the *real* `LocalTerminalBackend` so the
     /// terminal actor emits `BashOutputChunk`s. Returns the `TempDir` too so
     /// the caller keeps the session/cwd directory alive for the test.
@@ -2631,7 +2652,10 @@ mod tests {
         let mut stream = alnair_tool_runtime::Tool::execute(
             &tool,
             ctx,
-            make_input("for i in 1 2 3; do echo $i; sleep 0.1; done"),
+            make_input(&sh(
+                "for i in 1 2 3; do echo $i; sleep 0.1; done",
+                "1..3 | ForEach-Object { $_; Start-Sleep -Milliseconds 100 }",
+            )),
         )
         .await;
 
@@ -2676,7 +2700,10 @@ mod tests {
         let mut stream = alnair_tool_runtime::Tool::execute(
             &tool,
             test_ctx(resources.into_shared()),
-            make_input("for i in 1 2 3; do echo $i; sleep 0.1; done"),
+            make_input(&sh(
+                "for i in 1 2 3; do echo $i; sleep 0.1; done",
+                "1..3 | ForEach-Object { $_; Start-Sleep -Milliseconds 100 }",
+            )),
         )
         .await;
 
@@ -2726,9 +2753,10 @@ mod tests {
         let mut stream = alnair_tool_runtime::Tool::execute(
             &tool,
             test_ctx(resources.into_shared()),
-            make_input(
+            make_input(&sh(
                 "for i in $(seq 1 60); do printf 'LINE%03d-XXXXXXXXXXXXXXXXXXXX\\n' \"$i\"; sleep 0.03; done",
-            ),
+                "1..60 | ForEach-Object { 'LINE{0:D3}-XXXXXXXXXXXXXXXXXXXX' -f $_; Start-Sleep -Milliseconds 30 }",
+            )),
         )
         .await;
 
@@ -2833,11 +2861,14 @@ mod tests {
         // Fast-exiting command that emits its full output in one burst —
         // exercises the "drained after the last periodic chunk" path that the
         // bug missed. ASCII so lossy UTF-8 conversion is exact.
-        let cmd = "printf 'tail-bytes-after-final-tick\\n'";
+        let cmd = sh(
+            "printf 'tail-bytes-after-final-tick\\n'",
+            "Write-Output 'tail-bytes-after-final-tick'",
+        );
         let mut stream = alnair_tool_runtime::Tool::execute(
             &tool,
             test_ctx(resources.into_shared()),
-            make_input(cmd),
+            make_input(&cmd),
         )
         .await;
 

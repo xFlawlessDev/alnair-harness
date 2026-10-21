@@ -245,6 +245,11 @@ mod tests {
 
     #[test]
     fn requirements_win_over_campaign() {
+        // Same process-global `ALNAIR_CAMPAIGNS` read reachable through
+        // `effective_config_with_campaigns` — see `effective_config_honors_dismiss`.
+        let _g = crate::CAMPAIGN_ENV_LOCK
+            .lock()
+            .unwrap_or_else(|p| p.into_inner());
         use crate::loader::ConfigLayers;
         // A campaign (even from a lower layer) can't override a field the admin
         // set in requirements: `apply_campaign_overrides` re-merges requirements on top.
@@ -268,6 +273,14 @@ mod tests {
 
     #[test]
     fn effective_config_honors_dismiss() {
+        // Takes the crate-wide lock: `effective_config_with_campaigns` reaches
+        // `campaigns_application_disabled`, which reads the process-global
+        // `ALNAIR_CAMPAIGNS` that `loader::tests::kill_switch_env_var_disables`
+        // mutates. Without sharing the lock, this test observed that writer's
+        // value and saw campaigns disabled.
+        let _g = crate::CAMPAIGN_ENV_LOCK
+            .lock()
+            .unwrap_or_else(|p| p.into_inner());
         use crate::loader::ConfigLayers;
         let mut layers = ConfigLayers {
             user: parse("[models]\ndefault = \"user-old\"\n"),

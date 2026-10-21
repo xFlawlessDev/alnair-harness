@@ -33,19 +33,41 @@ async fn build_gate_actor() -> SessionActor {
     });
     actor
 }
-/// Flip the fixture's tracker to Active (plan file: `/tmp/test-session/plan.md`).
+/// Flip the fixture's tracker to Active (plan file: `<temp>/test-session/plan.md`).
 fn activate_plan_mode(actor: &SessionActor) {
     let mut tracker = actor.plan_mode.lock();
     assert!(tracker.enter_pending());
     assert!(tracker.activate());
 }
+/// The fixture's plan file, exactly as the tracker spells it.
+///
+/// Derived rather than hardcoded: the tracker builds it with
+/// `session_dir.join("plan.md")`, so a literal `/tmp/test-session/plan.md`
+/// would assert a POSIX separator on Windows and never match.
+fn plan_file(actor: &SessionActor) -> String {
+    actor
+        .plan_mode
+        .lock()
+        .plan_file_path()
+        .to_string_lossy()
+        .into_owned()
+}
+
 fn search_replace_call(id: &str, path: &str) -> ToolCallResponse {
     ToolCallResponse {
         id: id.to_string(),
         kind: "function".to_string(),
         function: crate::sampling::types::ToolCallFunction::new(
             "search_replace",
-            format!(r#"{{"file_path":"{path}","old_string":"a","new_string":"b"}}"#),
+            // Serialized rather than formatted: a native Windows path carries
+            // backslashes, which an inline `format!` would emit as invalid JSON
+            // escapes.
+            serde_json::json!({
+                "file_path": path,
+                "old_string": "a",
+                "new_string": "b",
+            })
+            .to_string(),
         ),
     }
 }
@@ -98,9 +120,11 @@ async fn plan_mode_rejects_alnair_edit_outside_plan_file_despite_allow_all_permi
                 text.contains("Rejected: file edits are not allowed in plan mode"),
                 "rejection text: {text}"
             );
+            let plan_file = plan_file(&actor);
             assert!(
-                text.contains("/tmp/test-session/plan.md"),
-                "must name the plan file so the model knows the one editable path: {text}"
+                text.contains(&plan_file),
+                "must name the plan file ({plan_file}) so the model knows the one \
+                 editable path: {text}"
             );
             assert!(
                 !text.contains("exit_plan_mode"),
@@ -118,11 +142,8 @@ async fn plan_mode_allows_plan_file_edit() {
         .run_until(async {
             let actor = build_gate_actor().await;
             activate_plan_mode(&actor);
-            let result = prepare(
-                &actor,
-                search_replace_call("call_plan_file", "/tmp/test-session/plan.md"),
-            )
-            .await;
+            let plan_file = plan_file(&actor);
+            let result = prepare(&actor, search_replace_call("call_plan_file", &plan_file)).await;
             assert!(
                 result.is_ok(),
                 "plan-file edit must pass the gate and prepare; got {:?}",

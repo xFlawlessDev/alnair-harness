@@ -1,5 +1,5 @@
 use std::collections::{BTreeMap, HashMap};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::Arc;
 
 use crate::notification::ToolNotification;
@@ -12,32 +12,40 @@ use super::manager::{LspManager, drain_lsp_diagnostics};
 use super::restart::restart_monitor;
 use super::{LspBackend, LspError, LspOperation, LspToolInput, file_uri};
 
+// The mock servers below speak LSP over the raw stdio BYTES
+// (`sys.stdin.buffer` / `sys.stdout.buffer`). Text-mode stdio would translate
+// `"\n"` to `os.linesep`, so on Windows every `\r\n` header terminator would be
+// written as `\r\r\n` and the framing desynchronizes — the client then sees the
+// header lines as garbage and fails the handshake with
+// `InitFailed("service stopped")`. Buffers also keep `Content-Length` a byte
+// count, which text-mode `read(n)`/`len(body)` do not guarantee.
+
 const MOCK_LSP_SERVER: &str = r#"
 import json, sys
 
 def read_message():
     headers = {}
     while True:
-        line = sys.stdin.readline()
+        line = sys.stdin.buffer.readline()
         if not line:
             return None
-        if line.strip() == '':
+        if line.strip() == b'':
             break
-        if ':' in line:
-            key, value = line.split(':', 1)
+        if b':' in line:
+            key, value = line.split(b':', 1)
             headers[key.strip()] = value.strip()
-    length = int(headers.get('Content-Length', 0))
+    length = int(headers.get(b'Content-Length', b'0'))
     if length == 0:
         return None
-    body = sys.stdin.read(length)
+    body = sys.stdin.buffer.read(length)
     return json.loads(body)
 
 def send_message(msg):
-    body = json.dumps(msg)
-    header = f"Content-Length: {len(body)}\r\n\r\n"
-    sys.stdout.write(header)
-    sys.stdout.write(body)
-    sys.stdout.flush()
+    body = json.dumps(msg).encode('utf-8')
+    header = b"Content-Length: " + str(len(body)).encode('ascii') + b"\r\n\r\n"
+    sys.stdout.buffer.write(header)
+    sys.stdout.buffer.write(body)
+    sys.stdout.buffer.flush()
 
 def send_diagnostics(uri):
     send_message({
@@ -153,23 +161,25 @@ import json, sys, time
 def read_message():
     headers = {}
     while True:
-        line = sys.stdin.readline()
+        line = sys.stdin.buffer.readline()
         if not line:
             return None
-        if line.strip() == '':
+        if line.strip() == b'':
             break
-        if ':' in line:
-            key, value = line.split(':', 1)
+        if b':' in line:
+            key, value = line.split(b':', 1)
             headers[key.strip()] = value.strip()
-    length = int(headers.get('Content-Length', 0))
+    length = int(headers.get(b'Content-Length', b'0'))
     if length == 0:
         return None
-    return json.loads(sys.stdin.read(length))
+    return json.loads(sys.stdin.buffer.read(length))
 
 def send_message(msg):
-    body = json.dumps(msg)
-    sys.stdout.write(f"Content-Length: {len(body)}\r\n\r\n{body}")
-    sys.stdout.flush()
+    body = json.dumps(msg).encode('utf-8')
+    sys.stdout.buffer.write(
+        b"Content-Length: " + str(len(body)).encode('ascii') + b"\r\n\r\n" + body
+    )
+    sys.stdout.buffer.flush()
 
 while True:
     msg = read_message()
@@ -225,23 +235,25 @@ fn write_slow_init_server(delay_ms: u64) -> (tempfile::TempDir, std::path::PathB
 def read_message():
     headers = {{}}
     while True:
-        line = sys.stdin.readline()
+        line = sys.stdin.buffer.readline()
         if not line:
             return None
-        if line.strip() == '':
+        if line.strip() == b'':
             break
-        if ':' in line:
-            key, value = line.split(':', 1)
+        if b':' in line:
+            key, value = line.split(b':', 1)
             headers[key.strip()] = value.strip()
-    length = int(headers.get('Content-Length', 0))
+    length = int(headers.get(b'Content-Length', b'0'))
     if length == 0:
         return None
-    return json.loads(sys.stdin.read(length))
+    return json.loads(sys.stdin.buffer.read(length))
 
 def send_message(msg):
-    body = json.dumps(msg)
-    sys.stdout.write(f"Content-Length: {{len(body)}}\r\n\r\n{{body}}")
-    sys.stdout.flush()
+    body = json.dumps(msg).encode('utf-8')
+    sys.stdout.buffer.write(
+        b"Content-Length: " + str(len(body)).encode('ascii') + b"\r\n\r\n" + body
+    )
+    sys.stdout.buffer.flush()
 
 while True:
     msg = read_message()
@@ -301,23 +313,25 @@ INIT_ERROR = json.loads("{init_error_payload}")
 def read_message():
     headers = {{}}
     while True:
-        line = sys.stdin.readline()
+        line = sys.stdin.buffer.readline()
         if not line:
             return None
-        if line.strip() == '':
+        if line.strip() == b'':
             break
-        if ':' in line:
-            key, value = line.split(':', 1)
+        if b':' in line:
+            key, value = line.split(b':', 1)
             headers[key.strip()] = value.strip()
-    length = int(headers.get('Content-Length', 0))
+    length = int(headers.get(b'Content-Length', b'0'))
     if length == 0:
         return None
-    return json.loads(sys.stdin.read(length))
+    return json.loads(sys.stdin.buffer.read(length))
 
 def send_message(msg):
-    body = json.dumps(msg)
-    sys.stdout.write(f"Content-Length: {{len(body)}}\r\n\r\n{{body}}")
-    sys.stdout.flush()
+    body = json.dumps(msg).encode('utf-8')
+    sys.stdout.buffer.write(
+        b"Content-Length: " + str(len(body)).encode('ascii') + b"\r\n\r\n" + body
+    )
+    sys.stdout.buffer.flush()
 
 def increment_attempts():
     attempts = 0
@@ -906,8 +920,13 @@ async fn e2e_restart_monitor_preserves_replacement_client() {
             let mut mgr = single_server_manager(&script_path, &workspace).await;
 
             let original_lifecycle_id = mgr.clients.get("mock-ts").unwrap().lifecycle_id;
+            // A real file under the temp workspace, addressed by its own URI, so
+            // the replay path can actually read it on every platform (a literal
+            // `file:///tmp/...` is not a path Windows can open).
+            let replayed_path = workspace.path().join("replayed.ts");
+            std::fs::write(&replayed_path, "const x = 1;\n").unwrap();
             let tracked_docs = vec![(
-                "file:///tmp/replayed.ts".to_string(),
+                file_uri(&replayed_path).unwrap().to_string(),
                 "typescript".to_string(),
             )];
             let replacement_lifecycle_id = mgr.alloc_lifecycle_id();
@@ -1281,7 +1300,14 @@ async fn e2e_restart_replay_requeues_pending_diagnostics() {
     .expect("restart should succeed");
 
     for (uri_str, lang_id) in &tracked_docs {
-        let path = PathBuf::from(uri_str.strip_prefix("file://").unwrap());
+        // `strip_prefix("file://")` is a POSIX-only conversion: on Windows the
+        // URI is `file:///C:/...`, so stripping the scheme leaves `/C:/...`,
+        // which is not a valid path (ERROR_INVALID_NAME). Go through the url
+        // crate so the drive letter and separators come out native.
+        let path = lsp_types::Url::parse(uri_str)
+            .expect("tracked document uri should parse")
+            .to_file_path()
+            .expect("tracked document uri should be a file url");
         let content = std::fs::read_to_string(&path).unwrap();
         restarted.notify_file_change(&path, &content, lang_id);
         mgr.mark_path_pending_diagnostics("delayed", lifecycle_id, &path);

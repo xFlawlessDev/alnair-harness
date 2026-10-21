@@ -607,23 +607,30 @@ mod tests {
 
     #[test]
     fn tool_path_file_url_resolves_relative_against_cwd() {
-        let cwd = Path::new("/Users/me/project");
-        let url = tool_path_file_url("src/main.rs", Some(cwd)).expect("url");
+        // Host-native cwd: on Windows a `/`-rooted path has no drive and is
+        // not absolute, so `Url::from_file_path` could never encode it.
+        let cwd = PathBuf::from(host_abs("Users/me/project"));
+        let url = tool_path_file_url("src/main.rs", Some(&cwd)).expect("url");
         assert!(url.starts_with("file://"), "got {url}");
-        assert!(url.contains("/Users/me/project/src/main.rs"), "got {url}");
+        let expected = file_url(&cwd.join("src/main.rs").to_string_lossy());
+        assert_eq!(&*url, expected, "got {url}");
     }
 
     #[test]
     fn tool_path_file_url_accepts_absolute_without_existing_file() {
-        let url = tool_path_file_url("/tmp/does-not-exist-xyz/foo.rs", None).expect("url");
+        let path = host_abs("tmp/does-not-exist-xyz/foo.rs");
+        let url = tool_path_file_url(&path, None).expect("url");
         assert!(url.starts_with("file://"), "got {url}");
         assert!(url.contains("foo.rs"), "got {url}");
     }
 
     #[test]
     fn tool_path_file_url_preserves_parent_segments_for_os_resolution() {
-        let url = tool_path_file_url("/repo/link/../target.rs", None).expect("url");
-        assert!(url.contains("/repo/link/../target.rs"), "got {url}");
+        let path = host_abs("repo/link/../target.rs");
+        let url = tool_path_file_url(&path, None).expect("url");
+        // The URL keeps the un-collapsed `..` so the OS — not this code —
+        // resolves symlinks; only the separators are normalized.
+        assert!(url.contains("link/../target.rs"), "got {url}");
     }
 
     #[test]
@@ -687,6 +694,32 @@ mod tests {
                 .map(|(t, c)| RSpan::styled(t.to_string(), ratatui::style::Style::default().fg(c)))
                 .collect::<Vec<_>>(),
         )
+    }
+
+    /// Host-native absolute path for a `/`-separated suffix
+    /// (`Users/foo/src/main.rs`).
+    ///
+    /// On Windows a leading `/` is *rooted* but not *absolute* (it carries no
+    /// drive prefix), so `Url::from_file_path` — the production converter —
+    /// refuses it: a Windows host can never form a `file://` URL for a POSIX
+    /// path. These tests feed the native spelling instead, which is also the
+    /// spelling a Windows transcript prints.
+    fn host_abs(suffix: &str) -> String {
+        let (root, sep) = if cfg!(windows) {
+            ("C:\\", '\\')
+        } else {
+            ("/", '/')
+        };
+        format!("{root}{}", suffix.replace('/', &sep.to_string()))
+    }
+
+    /// The `file://` URL production builds for `path`. Delegating the encoding
+    /// to the same `url` crate keeps each test about *detection* and column
+    /// ranges rather than re-spelling per-platform URL rules.
+    fn file_url(path: &str) -> String {
+        url::Url::from_file_path(path)
+            .unwrap_or_else(|_| panic!("test path must be absolute: {path}"))
+            .to_string()
     }
 
     #[test]
@@ -812,12 +845,13 @@ mod tests {
 
     #[test]
     fn scan_detects_absolute_file_path() {
-        let line = make_line("Error in /Users/foo/src/main.rs at line 10");
+        let path = host_abs("Users/foo/src/main.rs");
+        let line = make_line(&format!("Error in {path} at line 10"));
         let mut overlay = LinkOverlay::new();
         scan_unjoined(std::iter::once((0, &line)), 0, &[], &mut overlay);
 
         assert_eq!(overlay.links().len(), 1);
-        assert_eq!(&*overlay.links()[0].url, "file:///Users/foo/src/main.rs");
+        assert_eq!(&*overlay.links()[0].url, file_url(&path));
     }
 
     #[test]
@@ -872,17 +906,15 @@ mod tests {
     fn scan_detects_alnair_session_media_path() {
         // Dot-directory (`.alnair`), percent-encoded session segment, and a
         // trailing sentence period — the shape of media-tool output prose.
-        let line =
-            make_line("Saved to /Users/alice/.alnair/sessions/%2Fabc/00000000/images/1.jpg.");
+        let path = host_abs("Users/alice/.alnair/sessions/%2Fabc/00000000/images/1.jpg");
+        let line = make_line(&format!("Saved to {path}."));
         let mut overlay = LinkOverlay::new();
         scan_unjoined(std::iter::once((0, &line)), 0, &[], &mut overlay);
 
         assert_eq!(overlay.links().len(), 1);
-        assert_eq!(
-            &*overlay.links()[0].url,
-            // `%` is itself percent-encoded (`%25`) when building the file URL.
-            "file:///Users/alice/.alnair/sessions/%252Fabc/00000000/images/1.jpg",
-        );
+        // `%` is itself percent-encoded (`%25`) when building the file URL.
+        assert_eq!(&*overlay.links()[0].url, file_url(&path));
+        assert!(overlay.links()[0].url.contains("%252Fabc"));
     }
 
     #[test]
@@ -891,48 +923,46 @@ mod tests {
         // across visual rows (`joiner: Some("")` mid-word break). earlier
         // each row was scanned in isolation, so only the `/Users/alice`
         // fragment on the first row matched and became clickable.
-        let row0 =
-            make_line("Image generated and saved to /Users/alice/.alnair/sessions/%2FUsers%2Fali");
-        let row1 = make_line("ce%2Fcode%2Fxai/00000000-0000-0000-0000-000000000001/images/1.jpg");
+        let prose = "Image generated and saved to ";
+        let full = "Users/alice/.alnair/sessions/%2FUsers%2Falice%2Fcode%2Fxai/\
+                    00000000-0000-0000-0000-000000000001/images/1.jpg";
+        // Split mid-word (`…%2Fali` | `ce%2Fcode…`) like the real wrap does.
+        let split_at = full.find("ce%2Fcode").expect("split marker");
+        let (row0_tail, row1_text) = full.split_at(split_at);
+        let row0_path = host_abs(row0_tail);
+        let row0 = make_line(&format!("{prose}{row0_path}"));
+        let row1 = make_line(row1_text);
         let rows: Vec<(u16, &Line<'static>, Option<&str>)> =
             vec![(3, &row0, None), (4, &row1, Some(""))];
         let mut overlay = LinkOverlay::new();
         scan_lines_for_url_overlays(rows.into_iter(), 2, &[], &mut overlay);
 
         assert_eq!(overlay.links().len(), 2, "one overlay region per row");
-        let expected_url = "file:///Users/alice/.alnair/sessions/%252FUsers%252Fali\
-                            ce%252Fcode%252Fxai/00000000-0000-0000-0000-000000000001/images/1.jpg";
+        let expected_url = file_url(&format!("{row0_path}{row1_text}"));
         for link in overlay.links() {
             assert_eq!(&*link.url, expected_url);
         }
         // Row 0: path starts after the prose and runs to the row's end.
-        let prose = "Image generated and saved to ";
         let l0 = &overlay.links()[0];
         assert_eq!(l0.screen_row, 3);
         assert_eq!(l0.col_start, 2 + UnicodeWidthStr::width(prose) as u16);
         assert_eq!(
             l0.col_end,
-            2 + UnicodeWidthStr::width(
-                "Image generated and saved to /Users/alice/.alnair/sessions/%2FUsers%2Fali"
-            ) as u16
+            2 + UnicodeWidthStr::width(row0.spans[0].content.as_ref()) as u16
         );
         // Row 1: the continuation fragment covers the entire row.
         let l1 = &overlay.links()[1];
         assert_eq!(l1.screen_row, 4);
         assert_eq!(l1.col_start, 2);
-        assert_eq!(
-            l1.col_end,
-            2 + UnicodeWidthStr::width(
-                "ce%2Fcode%2Fxai/00000000-0000-0000-0000-000000000001/images/1.jpg"
-            ) as u16
-        );
+        assert_eq!(l1.col_end, 2 + UnicodeWidthStr::width(row1_text) as u16);
     }
 
     #[test]
     fn scan_wrapped_path_trailing_sentence_period_excluded() {
         // Wrapped path ending mid-sentence: trailing `.` on the last row is
         // trimmed from the clickable region.
-        let row0 = make_line("Saved to /Users/me/.alnair/sessions/%2Fabc/019f3a86/ima");
+        let dir = host_abs("Users/me/.alnair/sessions/%2Fabc/019f3a86");
+        let row0 = make_line(&format!("Saved to {dir}{}ima", std::path::MAIN_SEPARATOR));
         let row1 = make_line("ges/1.jpg. Enjoy!");
         let rows: Vec<(u16, &Line<'static>, Option<&str>)> =
             vec![(0, &row0, None), (1, &row1, Some(""))];
@@ -940,11 +970,9 @@ mod tests {
         scan_lines_for_url_overlays(rows.into_iter(), 0, &[], &mut overlay);
 
         assert_eq!(overlay.links().len(), 2);
+        let expected = file_url(&PathBuf::from(&dir).join("images/1.jpg").to_string_lossy());
         for link in overlay.links() {
-            assert_eq!(
-                &*link.url,
-                "file:///Users/me/.alnair/sessions/%252Fabc/019f3a86/images/1.jpg"
-            );
+            assert_eq!(&*link.url, expected);
         }
         assert_eq!(overlay.links()[1].col_start, 0);
         assert_eq!(
@@ -999,7 +1027,10 @@ mod tests {
         // A `Some(" ")` joiner re-inserts the collapsed space, so a spaced
         // final segment (`Demo App.app`) wrapped at the space still
         // matches as one path.
-        let row0 = make_line("open /tmp/release/Demo");
+        let dir = host_abs("tmp/release");
+        let head = Path::new(&dir).join("Demo");
+        let head = head.to_string_lossy();
+        let row0 = make_line(&format!("open {head}"));
         let row1 = make_line("App.app now");
         let rows: Vec<(u16, &Line<'static>, Option<&str>)> =
             vec![(0, &row0, None), (1, &row1, Some(" "))];
@@ -1007,8 +1038,9 @@ mod tests {
         scan_lines_for_url_overlays(rows.into_iter(), 0, &[], &mut overlay);
 
         assert_eq!(overlay.links().len(), 2);
+        let expected = file_url(&Path::new(&dir).join("Demo App.app").to_string_lossy());
         for link in overlay.links() {
-            assert_eq!(&*link.url, "file:///tmp/release/Demo%20App.app");
+            assert_eq!(&*link.url, expected);
         }
         // Row 1's region covers only `App.app` (the joiner space belongs
         // to no row).
@@ -1023,7 +1055,8 @@ mod tests {
     fn scan_hard_break_rows_not_joined() {
         // `None` joiner = separate source lines: fragments must not be glued
         // into a single false path across rows.
-        let row0 = make_line("prefix /Users/alice");
+        let path = host_abs("Users/alice");
+        let row0 = make_line(&format!("prefix {path}"));
         let row1 = make_line("suffix.txt more");
         let rows: Vec<(u16, &Line<'static>, Option<&str>)> =
             vec![(0, &row0, None), (1, &row1, None)];
@@ -1031,7 +1064,7 @@ mod tests {
         scan_lines_for_url_overlays(rows.into_iter(), 0, &[], &mut overlay);
 
         assert_eq!(overlay.links().len(), 1);
-        assert_eq!(&*overlay.links()[0].url, "file:///Users/alice");
+        assert_eq!(&*overlay.links()[0].url, file_url(&path));
         assert_eq!(overlay.links()[0].screen_row, 0);
     }
 
@@ -1039,16 +1072,21 @@ mod tests {
     fn scan_path_split_across_styled_spans_single_row() {
         // Markdown styling can split one row into multiple spans; the path
         // must still be matched across span boundaries.
+        let head = host_abs("Users/foo");
+        let head_with_sep = format!("{head}{}", std::path::MAIN_SEPARATOR);
         let line = make_styled_line(vec![
             ("Saved to ", Color::Gray),
-            ("/Users/foo/", Color::Blue),
+            (head_with_sep.as_str(), Color::Blue),
             ("images/1.jpg", Color::Green),
         ]);
         let mut overlay = LinkOverlay::new();
         scan_unjoined(std::iter::once((0, &line)), 0, &[], &mut overlay);
 
         assert_eq!(overlay.links().len(), 1);
-        assert_eq!(&*overlay.links()[0].url, "file:///Users/foo/images/1.jpg");
+        assert_eq!(
+            &*overlay.links()[0].url,
+            file_url(&Path::new(&head).join("images/1.jpg").to_string_lossy())
+        );
         assert_eq!(
             overlay.links()[0].col_start,
             UnicodeWidthStr::width("Saved to ") as u16
@@ -1057,14 +1095,15 @@ mod tests {
 
     #[test]
     fn scan_file_path_stops_at_colon() {
-        let line = make_line("/Users/foo/bar.rs:45:10: error message");
+        let path = host_abs("Users/foo/bar.rs");
+        let line = make_line(&format!("{path}:45:10: error message"));
         let mut overlay = LinkOverlay::new();
         scan_unjoined(std::iter::once((0, &line)), 0, &[], &mut overlay);
 
         assert_eq!(overlay.links().len(), 1);
         assert_eq!(
             &*overlay.links()[0].url,
-            "file:///Users/foo/bar.rs",
+            file_url(&path),
             "colon-delimited line number should be excluded"
         );
     }
@@ -1099,47 +1138,44 @@ mod tests {
 
     #[test]
     fn scan_url_and_file_path_coexist() {
-        let line = make_line("See https://docs.rs/foo and /Users/me/src/lib.rs end.");
+        let path = host_abs("Users/me/src/lib.rs");
+        let line = make_line(&format!("See https://docs.rs/foo and {path} end."));
         let mut overlay = LinkOverlay::new();
         scan_unjoined(std::iter::once((0, &line)), 0, &[], &mut overlay);
 
         assert_eq!(overlay.links().len(), 2);
         let urls: Vec<&str> = overlay.links().iter().map(|l| &*l.url).collect();
         assert!(urls.contains(&"https://docs.rs/foo"));
-        assert!(urls.contains(&"file:///Users/me/src/lib.rs"));
+        assert!(urls.contains(&file_url(&path).as_str()));
     }
 
     #[test]
     fn scan_file_path_with_dots_and_hyphens() {
-        let line = make_line("Reading /tmp/alnair-impl-summary.md now.");
+        let path = host_abs("tmp/alnair-impl-summary.md");
+        let line = make_line(&format!("Reading {path} now."));
         let mut overlay = LinkOverlay::new();
         scan_unjoined(std::iter::once((0, &line)), 0, &[], &mut overlay);
 
         assert_eq!(overlay.links().len(), 1);
-        assert_eq!(
-            &*overlay.links()[0].url,
-            "file:///tmp/alnair-impl-summary.md"
-        );
+        assert_eq!(&*overlay.links()[0].url, file_url(&path));
     }
 
     #[test]
     fn scan_file_path_with_at_sign() {
-        let line = make_line("In /node_modules/@scope/package/index.js now.");
+        let path = host_abs("node_modules/@scope/package/index.js");
+        let line = make_line(&format!("In {path} now."));
         let mut overlay = LinkOverlay::new();
         scan_unjoined(std::iter::once((0, &line)), 0, &[], &mut overlay);
 
         assert_eq!(overlay.links().len(), 1);
-        assert_eq!(
-            &*overlay.links()[0].url,
-            "file:///node_modules/@scope/package/index.js"
-        );
+        assert_eq!(&*overlay.links()[0].url, file_url(&path));
     }
 
     #[test]
     fn scan_file_path_with_space_in_segment_quoted() {
         // Tutor report: path underline/click target stopped at the space in
         // `Demo App.app` (macOS app bundle name), inside quotes.
-        let path = "/Users/alice/src/app/release/mac-arm64/Demo App.app";
+        let path = host_abs("Users/alice/src/app/release/mac-arm64/Demo App.app");
         let line = make_line(&format!("open \"{path}\""));
         let mut overlay = LinkOverlay::new();
         scan_unjoined(std::iter::once((0, &line)), 0, &[], &mut overlay);
@@ -1151,7 +1187,8 @@ mod tests {
         );
         let link = &overlay.links()[0];
         assert_eq!(
-            &*link.url, "file:///Users/alice/src/app/release/mac-arm64/Demo%20App.app",
+            &*link.url,
+            file_url(&path),
             "space must be percent-encoded in the file URL"
         );
         // Clickable region must cover the *entire* displayed path, including
@@ -1160,7 +1197,7 @@ mod tests {
         assert_eq!(link.col_start, UnicodeWidthStr::width(prefix) as u16);
         assert_eq!(
             link.col_end,
-            (UnicodeWidthStr::width(prefix) + UnicodeWidthStr::width(path)) as u16
+            (UnicodeWidthStr::width(prefix) + UnicodeWidthStr::width(path.as_str())) as u16
         );
     }
 
@@ -1168,20 +1205,17 @@ mod tests {
     fn scan_file_path_with_space_in_segment_unquoted() {
         // Same filename without surrounding quotes — final segment has a
         // space plus extension, so the unquoted regex should still match.
-        let path = "/tmp/release/Demo App.app";
+        let path = host_abs("tmp/release/Demo App.app");
         let line = make_line(&format!("open {path} now"));
         let mut overlay = LinkOverlay::new();
         scan_unjoined(std::iter::once((0, &line)), 0, &[], &mut overlay);
 
         assert_eq!(overlay.links().len(), 1);
-        assert_eq!(
-            &*overlay.links()[0].url,
-            "file:///tmp/release/Demo%20App.app"
-        );
+        assert_eq!(&*overlay.links()[0].url, file_url(&path));
         assert_eq!(overlay.links()[0].col_start, 5);
         assert_eq!(
             overlay.links()[0].col_end,
-            5 + UnicodeWidthStr::width(path) as u16
+            5 + UnicodeWidthStr::width(path.as_str()) as u16
         );
     }
 
@@ -1189,15 +1223,19 @@ mod tests {
     fn scan_file_path_space_does_not_swallow_trailing_sentence() {
         // A space followed by prose (no `.ext` in the final segment) must not
         // extend the link past the real path.
-        let line = make_line("See /tmp/foo/bar here.");
+        let path = host_abs("tmp/foo/bar");
+        let line = make_line(&format!("See {path} here."));
         let mut overlay = LinkOverlay::new();
         scan_unjoined(std::iter::once((0, &line)), 0, &[], &mut overlay);
 
         assert_eq!(overlay.links().len(), 1);
-        assert_eq!(&*overlay.links()[0].url, "file:///tmp/foo/bar");
-        // "See " = 4 cols; path is 12 cols (`/tmp/foo/bar`).
+        assert_eq!(&*overlay.links()[0].url, file_url(&path));
+        // "See " = 4 cols; the path is `UnicodeWidthStr::width(path)` cols.
         assert_eq!(overlay.links()[0].col_start, 4);
-        assert_eq!(overlay.links()[0].col_end, 4 + 12);
+        assert_eq!(
+            overlay.links()[0].col_end,
+            4 + UnicodeWidthStr::width(path.as_str()) as u16
+        );
     }
 
     // Home-relative (`~/`) path detection

@@ -345,3 +345,30 @@ fn site_b_skips_agents_md_insert_on_verbatim_mirror_fork() {
         "no project-instructions item may be added at Site B on a verbatim fork"
     );
 }
+
+/// A mid-session revision must NOT satisfy the spawn-time guard on its own,
+/// and must not break it when the original is present. This is the reason the
+/// revision gets its own `ProjectInstructionsUpdate` tag rather than reusing
+/// `ProjectInstructions`.
+#[test]
+fn revision_does_not_impersonate_the_spawn_time_block() {
+    let only_revision = vec![
+        ConversationItem::system("SP"),
+        ConversationItem::project_instructions_update("AGENTS.md v2"),
+    ];
+    assert!(
+        !conversation_has_project_instructions(&only_revision),
+        "a revision alone must not read as 'the spawn-time block is present', \
+         or a resumed session would skip inserting the original"
+    );
+
+    let with_original = vec![
+        ConversationItem::system("SP"),
+        ConversationItem::project_instructions("AGENTS.md v1"),
+        ConversationItem::project_instructions_update("AGENTS.md v2"),
+    ];
+    assert!(
+        conversation_has_project_instructions(&with_original),
+        "the original must still be detected after a revision is appended"
+    );
+}

@@ -1738,11 +1738,12 @@ mod tests {
         // Home-is-a-git-repo (dotfiles in $HOME): for a cwd under home, the
         // repo-root walk must NOT reach $HOME and treat `~/.claude` as
         // project-tier (its env is injected into every spawned subprocess).
-        // Serialize + guard $HOME (find_repo_root reaches home via `.git`, and
-        // the guard reads dirs::home_dir()).
+        // Serialize + redirect home through the test seam: `dirs::home_dir()`
+        // ignores `HOME` on Windows, so an env override asserts nothing there.
         let _lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let home = tempfile::tempdir().unwrap();
-        let _home_guard = EnvVarGuard::set("HOME", home.path());
+        let _home_guard =
+            crate::trust::HomeOverride::set(Some(dunce::canonicalize(home.path()).unwrap()));
         git2::Repository::init(home.path()).unwrap();
         let claude_dir = home.path().join(".claude");
         std::fs::create_dir_all(&claude_dir).unwrap();

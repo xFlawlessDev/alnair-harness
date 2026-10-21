@@ -72,6 +72,18 @@ pub enum ConfigUpdate {
         yolo: bool,
         fork_secondary_model: Option<String>,
     },
+    /// A project-instructions file (`AGENTS.md`, `CLAUDE.md`, rules `*.md`)
+    /// changed under `cwd`'s discovery chain. Agent should fan out to sessions
+    /// whose cwd sits at or beneath `cwd` so each re-reads and appends a
+    /// `project_instructions_update` item at the next turn boundary.
+    ///
+    /// Distinct from [`Self::ProjectMcpServersChanged`] because the reload is
+    /// conversation state, not MCP state — it must never tear down and rebuild
+    /// MCP servers.
+    AgentInstructionsChanged {
+        /// The project root whose instruction files were edited.
+        cwd: PathBuf,
+    },
 }
 
 /// Runs on `tokio::spawn` (`Send`). Receives raw [`ConfigChangeEvent`]s from
@@ -84,6 +96,12 @@ pub struct ConfigReloader {
     /// redundant `ProjectMcpServersChanged` dispatches on mtime-only touches
     /// (see `hash_project_mcp_config`).
     last_project_mcp_hashes: HashMap<PathBuf, u64>,
+    /// Per-cwd content hash of the project-instruction files discovery would
+    /// read (see `hash_agent_instructions`). Same purpose as
+    /// `last_project_mcp_hashes`: the watcher matches a filename *superset*, so
+    /// an edit to a vendor surface the session's compat config disables — or an
+    /// mtime-only touch — must not re-inject anything.
+    last_agent_instructions_hashes: HashMap<PathBuf, u64>,
     alnair_home: PathBuf,
     auth_scope: String,
     remote_settings: Option<crate::util::config::RemoteSettings>,
@@ -109,6 +127,7 @@ impl ConfigReloader {
             last_auth_key_hash: initial_auth_key_hash,
             last_global_config: initial_config,
             last_project_mcp_hashes: HashMap::new(),
+            last_agent_instructions_hashes: HashMap::new(),
             alnair_home,
             auth_scope,
             remote_settings,
@@ -158,6 +177,7 @@ impl ConfigReloader {
             let has_config = has_global_config || has_project_config;
 
             let project_cwds = collect_project_cwds(&batch);
+            let agent_instructions_cwds = collect_agent_instructions_cwds(&batch);
 
             if has_auth {
                 let result =
@@ -240,6 +260,35 @@ impl ConfigReloader {
                 let _ = self
                     .config_update_tx
                     .send(ConfigUpdate::ProjectMcpServersChanged { cwd });
+            }
+
+            // One `AgentInstructionsChanged { cwd }` per affected project root.
+            // Deduped on the CONTENT of every file discovery would read, so a
+            // filename-superset match (a disabled vendor surface, an mtime-only
+            // touch) never re-injects an identical instructions block.
+            for cwd in agent_instructions_cwds {
+                let new_hash = hash_agent_instructions(&cwd).await;
+                let unchanged = match (new_hash, self.last_agent_instructions_hashes.get(&cwd)) {
+                    (Some(new), Some(&prev)) => new == prev,
+                    _ => false,
+                };
+                if unchanged {
+                    debug!(
+                        cwd = %cwd.display(),
+                        "AGENTS.md event with unchanged content, skipping reload"
+                    );
+                    continue;
+                }
+                if let Some(h) = new_hash {
+                    self.last_agent_instructions_hashes.insert(cwd.clone(), h);
+                }
+                info!(
+                    cwd = %cwd.display(),
+                    "project instructions change detected"
+                );
+                let _ = self
+                    .config_update_tx
+                    .send(ConfigUpdate::AgentInstructionsChanged { cwd });
             }
         }
     }
@@ -344,7 +393,15 @@ impl ConfigReloader {
         let new_model_table = new_global.get("model");
         let old_models_table = self.last_global_config.get("models");
         let new_models_table = new_global.get("models");
-        if old_model_table != new_model_table || old_models_table != new_models_table {
+        // `[platforms.*]` decides which models exist and which base URL/credential
+        // they ride (custom providers declare their whole catalog here), so a
+        // change must re-resolve the catalog — not just the `[model.*]` overrides.
+        let old_platforms_table = self.last_global_config.get("platforms");
+        let new_platforms_table = new_global.get("platforms");
+        if old_model_table != new_model_table
+            || old_models_table != new_models_table
+            || old_platforms_table != new_platforms_table
+        {
             info!("model config change detected");
             let _ = self.config_update_tx.send(ConfigUpdate::ModelsChanged);
         }
@@ -395,6 +452,77 @@ fn collect_project_cwds(batch: &[ConfigChangeEvent]) -> Vec<PathBuf> {
         }
     }
     out
+}
+
+/// Derive the unique project roots whose **project instructions** were touched
+/// in this debounce window.
+///
+/// The root is the directory a session must sit at-or-beneath to have read the
+/// edited file: discovery walks *upward* from the session cwd, so a file is
+/// visible exactly to sessions at or below its own directory. A session in
+/// `repo/sub` reads `repo/AGENTS.md` (ancestor), but a session in `repo` never
+/// reads `repo/sub/AGENTS.md` — hence the direction matters and this cannot
+/// collapse to the git root.
+fn collect_agent_instructions_cwds(batch: &[ConfigChangeEvent]) -> Vec<PathBuf> {
+    let mut out: Vec<PathBuf> = Vec::new();
+    for evt in batch {
+        let ConfigChangeEvent::AgentInstructionsChanged { path } = evt else {
+            continue;
+        };
+        // A rules file lives at `<root>/<vendor>/rules/<file>.md`, so the
+        // project root is two levels above its parent. A plain `AGENTS.md`
+        // sits directly in the project directory.
+        let dir = path.parent();
+        let cwd = match dir {
+            Some(d)
+                if d.file_name().and_then(|n| n.to_str()) == Some("rules")
+                    && d.parent()
+                        .and_then(|gp| gp.file_name())
+                        .and_then(|n| n.to_str())
+                        .is_some_and(|n| matches!(n, ".alnair" | ".claude" | ".cursor")) =>
+            {
+                d.parent()
+                    .and_then(|gp| gp.parent())
+                    .map(|p| p.to_path_buf())
+            }
+            Some(d) => Some(d.to_path_buf()),
+            None => None,
+        };
+        if let Some(cwd) = cwd
+            && !out.contains(&cwd)
+        {
+            out.push(cwd);
+        }
+    }
+    out
+}
+
+/// Content hash of the project-instruction files a session at `cwd` would read.
+///
+/// Deliberately computed through the **same** discovery function the session
+/// uses (`read_agents_config_with_paths`), so the hash cannot drift from the
+/// set the reload actually re-reads — the failure mode a hand-rolled path list
+/// invites. `CompatConfig::default()` (all-on) is the leader-global superset;
+/// a session whose real compat disables a vendor surface simply re-reads
+/// identical content and its own equality check turns the reload into a no-op.
+///
+/// Returns `None` on a read error so the caller dispatches rather than risk
+/// suppressing a real edit — the same contract as `hash_project_mcp_config`.
+async fn hash_agent_instructions(cwd: &Path) -> Option<u64> {
+    let cwd_str = cwd.to_string_lossy();
+    let files = alnair_agent::prompt::agents_md::read_agents_config_with_paths(
+        &cwd_str,
+        alnair_tools::types::compat::CompatConfig::default(),
+    )
+    .await;
+
+    let mut hasher = DefaultHasher::new();
+    files.len().hash(&mut hasher);
+    for f in &files {
+        f.file_path.hash(&mut hasher);
+        f.content.hash(&mut hasher);
+    }
+    Some(hasher.finish())
 }
 
 /// Content hash of the cwd-dependent MCP config files a
@@ -901,6 +1029,38 @@ base_url = "https://api.example.com/v1"
         assert_ne!(a.get("models"), b.get("models"));
     }
 
+    /// A `[platforms.*]` edit must re-resolve the catalog. Custom-provider
+    /// declarations carry their own model allowlist and base URL, so adding a
+    /// model there changes the picker without touching any `[model.*]` table —
+    /// before this, that edit was invisible to the reloader and required a
+    /// restart.
+    #[test]
+    fn platforms_table_change_is_detected() {
+        let a: toml::Value = toml::from_str(
+            r#"
+            [platforms.alnair]
+            api = "openai"
+            base_url = "http://127.0.0.1:7878/v1"
+            models = ["deepseek-v4-1-flash"]
+            "#,
+        )
+        .unwrap();
+        let b: toml::Value = toml::from_str(
+            r#"
+            [platforms.alnair]
+            api = "openai"
+            base_url = "http://127.0.0.1:7878/v1"
+            models = ["deepseek-v4-1-flash", "glm-5-3-flash"]
+            "#,
+        )
+        .unwrap();
+        assert_ne!(
+            a.get("platforms"),
+            b.get("platforms"),
+            "adding a model to [platforms.*] must register as a model change"
+        );
+    }
+
     #[test]
     fn mcp_servers_changed_detects_new_server() {
         let a = toml::Value::Table(toml::map::Map::new());
@@ -995,5 +1155,131 @@ command = "/bin/test"
         )
         .unwrap();
         assert_eq!(cfg.get("mcp_servers"), cfg.get("mcp_servers"));
+    }
+
+    /// `collect_agent_instructions_cwds` must map a plain `AGENTS.md` to its
+    /// own directory, and a rules file two levels up (`<root>/<vendor>/rules/`)
+    /// to the project root — that root is what the cwd-scoped fan-out matches.
+    #[test]
+    fn collect_agent_instructions_cwds_maps_files_to_project_roots() {
+        let batch = vec![
+            ConfigChangeEvent::AgentInstructionsChanged {
+                path: PathBuf::from("/repo/AGENTS.md"),
+            },
+            ConfigChangeEvent::AgentInstructionsChanged {
+                path: PathBuf::from("/repo/sub/CLAUDE.md"),
+            },
+            ConfigChangeEvent::AgentInstructionsChanged {
+                path: PathBuf::from("/repo/.alnair/rules/style.md"),
+            },
+        ];
+        let cwds = collect_agent_instructions_cwds(&batch);
+        assert_eq!(
+            cwds,
+            vec![PathBuf::from("/repo"), PathBuf::from("/repo/sub")],
+            "the rules file must resolve to /repo, and /repo must appear once"
+        );
+    }
+
+    /// Non-instruction events must not leak into the instructions fan-out.
+    #[test]
+    fn collect_agent_instructions_cwds_ignores_other_events() {
+        let batch = vec![
+            ConfigChangeEvent::McpConfigChanged {
+                path: PathBuf::from("/repo/.mcp.json"),
+            },
+            ConfigChangeEvent::GlobalConfigChanged,
+        ];
+        assert!(collect_agent_instructions_cwds(&batch).is_empty());
+    }
+
+    /// The hash must be stable for identical content and change on create and
+    /// edit — this is what makes the filename-superset watcher filter safe.
+    #[tokio::test]
+    async fn hash_agent_instructions_detects_create_and_change() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        git2::Repository::init(tmp.path()).unwrap();
+        let cwd = tmp.path();
+
+        let empty = hash_agent_instructions(cwd).await.expect("readable");
+        assert_eq!(
+            empty,
+            hash_agent_instructions(cwd).await.expect("stable"),
+            "identical content must hash identically"
+        );
+
+        std::fs::write(cwd.join("AGENTS.md"), "# v1").unwrap();
+        let created = hash_agent_instructions(cwd).await.expect("readable");
+        assert_ne!(empty, created, "creating AGENTS.md changes the hash");
+
+        std::fs::write(cwd.join("AGENTS.md"), "# v2").unwrap();
+        let changed = hash_agent_instructions(cwd).await.expect("readable");
+        assert_ne!(created, changed, "editing AGENTS.md changes the hash");
+    }
+
+    /// End-to-end through `run()`: the first event dispatches, an identical
+    /// re-touch is suppressed, and a real edit dispatches again.
+    #[tokio::test]
+    async fn reloader_dedupes_unchanged_agent_instructions() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        git2::Repository::init(tmp.path()).unwrap();
+        let cwd = tmp.path().to_path_buf();
+        let agents_md = cwd.join("AGENTS.md");
+        std::fs::write(&agents_md, "# v1").unwrap();
+
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let empty_config = toml::Value::Table(toml::map::Map::new());
+        let reloader = ConfigReloader::new(
+            tmp.path().to_path_buf(),
+            0,
+            empty_config,
+            "https://test.example.com".to_string(),
+            None,
+            tx,
+            false,
+            false,
+        );
+
+        let (event_tx, event_rx) = mpsc::unbounded_channel();
+        let cancel = CancellationToken::new();
+        let handle = tokio::spawn(reloader.run(event_rx, cancel.clone()));
+
+        let evt = || ConfigChangeEvent::AgentInstructionsChanged {
+            path: agents_md.clone(),
+        };
+
+        // First event → dispatch (no prior hash for this cwd).
+        event_tx.send(evt()).unwrap();
+        let update = tokio::time::timeout(std::time::Duration::from_secs(2), rx.recv())
+            .await
+            .expect("first event should dispatch within 2s")
+            .expect("channel open");
+        assert!(
+            matches!(update, ConfigUpdate::AgentInstructionsChanged { cwd: ref c } if *c == cwd),
+            "first instructions event must dispatch"
+        );
+
+        // Identical bytes → suppressed.
+        event_tx.send(evt()).unwrap();
+        let res = tokio::time::timeout(std::time::Duration::from_millis(400), rx.recv()).await;
+        assert!(
+            res.is_err(),
+            "an mtime-only touch must not re-inject the instructions"
+        );
+
+        // Real edit → dispatch again.
+        std::fs::write(&agents_md, "# v2 with new rules").unwrap();
+        event_tx.send(evt()).unwrap();
+        let update = tokio::time::timeout(std::time::Duration::from_secs(2), rx.recv())
+            .await
+            .expect("changed content should dispatch within 2s")
+            .expect("channel open");
+        assert!(
+            matches!(update, ConfigUpdate::AgentInstructionsChanged { cwd: ref c } if *c == cwd),
+            "changed instructions must dispatch"
+        );
+
+        cancel.cancel();
+        let _ = handle.await;
     }
 }

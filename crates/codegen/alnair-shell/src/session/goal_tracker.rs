@@ -882,7 +882,18 @@ impl GoalTracker {
         }
         // Only artifacts inside THIS goal's scratch root are at risk.
         let scratch_root = goal_scratch_root(&o.verifier_id);
-        if !src.starts_with(&scratch_root) {
+        // Compare CANONICAL forms. The stamped path is produced by a caller
+        // that canonicalized the temp dir (Windows yields an 8.3 short name
+        // like `ARIFPE~1` there), while `goal_scratch_root` joins
+        // `env::temp_dir()` verbatim. Comparing the two raw spellings made
+        // `starts_with` fail on Windows, so the rescue silently no-opped and
+        // the "See <path>" pointer dangled at a scratch file that `complete()`
+        // then deletes.
+        let canonical =
+            |p: &std::path::Path| dunce::canonicalize(p).unwrap_or_else(|_| p.to_path_buf());
+        let src_canonical = canonical(&src);
+        let scratch_root_canonical = canonical(&scratch_root);
+        if !src_canonical.starts_with(&scratch_root_canonical) {
             return;
         }
         // A symlink-squatted root could stage an attacker file for the

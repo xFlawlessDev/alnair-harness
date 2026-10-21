@@ -11,6 +11,35 @@ use std::sync::Arc as StdArc;
 use std::sync::atomic::{AtomicUsize, Ordering as SeqOrd};
 use tempfile::TempDir;
 
+/// Extract an absolute path the prompt embeds, starting at the first occurrence
+/// of `anchor` and extending to the end of that token.
+///
+/// Walks over characters a Windows path legitimately contains (`\`, `:`, `~`).
+/// The previous inline versions searched for a literal `"/plan.md"` and treated
+/// `:`/`\` as delimiters, so on Windows they found nothing and the stub never
+/// wrote the plan file.
+fn extract_embedded_path(prompt: &str, anchor: &str) -> Option<String> {
+    let start_idx = prompt.find(anchor)?;
+    let end = prompt[start_idx..]
+        .char_indices()
+        .take_while(|(_, c)| {
+            c.is_ascii_alphanumeric() || matches!(c, '/' | '\\' | '.' | '-' | '_' | ':' | '~')
+        })
+        .last()
+        .map(|(i, c)| start_idx + i + c.len_utf8())
+        .unwrap_or(start_idx + anchor.len());
+    let start = prompt[..start_idx]
+        .char_indices()
+        .rev()
+        .take_while(|(_, c)| {
+            c.is_ascii_alphanumeric() || matches!(c, '/' | '\\' | '.' | '-' | '_' | ':' | '~')
+        })
+        .last()
+        .map(|(i, _)| i)
+        .unwrap_or(start_idx);
+    Some(prompt[start..end].to_string())
+}
+
 /// Spawn behaviour knobs for the planner-coordinator stub.
 enum SpawnBehaviour {
     /// Parse `{PLAN_FILE}` out of the prompt, write `body` there,
@@ -69,17 +98,11 @@ fn spawn_planner_coordinator_capturing(
                     .lock()
                     .unwrap()
                     .push(req.runtime_overrides.model.clone());
-                // The prompt embeds the path several times; we
-                // just need any one. Walk left from the first
-                // `/plan.md` occurrence to find the absolute path.
-                let plan_path = req.prompt.find("/plan.md").map(|end_idx| {
-                    let end = end_idx + "/plan.md".len();
-                    let start = req.prompt[..end_idx]
-                        .rfind(|c: char| !c.is_ascii_graphic() || c == '`')
-                        .map(|i| i + 1)
-                        .unwrap_or(0);
-                    req.prompt[start..end].to_string()
-                });
+                // The prompt embeds the path several times; take the first.
+                // Must accept `\` and `:` so a Windows path is captured whole —
+                // a literal "/plan.md" search found nothing there, so the stub
+                // never wrote the plan and `plan_file` stayed `None`.
+                let plan_path = extract_embedded_path(&req.prompt, "plan.md");
                 let result = match &behaviour {
                     SpawnBehaviour::WritePlanThenDone { body } => {
                         if let Some(p) = plan_path.as_deref() {
@@ -807,14 +830,7 @@ async fn lifecycle_fail_pause_resume_retry_success() {
                 while let Some(ev) = rx.recv().await {
                     if let SubagentEvent::Spawn(req) = ev {
                         let n = count_task.fetch_add(1, SeqOrd::SeqCst);
-                        let plan_path = req.prompt.find("/plan.md").map(|end_idx| {
-                            let end = end_idx + "/plan.md".len();
-                            let start = req.prompt[..end_idx]
-                                .rfind(|c: char| !c.is_ascii_graphic() || c == '`')
-                                .map(|i| i + 1)
-                                .unwrap_or(0);
-                            req.prompt[start..end].to_string()
-                        });
+                        let plan_path = extract_embedded_path(&req.prompt, "plan.md");
                         if let Some(ref p) = plan_path {
                             targets_task.lock().unwrap().push(p.clone());
                         }

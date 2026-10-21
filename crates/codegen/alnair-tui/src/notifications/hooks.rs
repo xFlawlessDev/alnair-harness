@@ -342,16 +342,20 @@ mod tests {
         let event = test_event();
         run_hook(&hook, &event);
 
-        // Poll for the output file instead of a fixed sleep — the spawned
-        // thread + fork/exec may take variable time on loaded systems.
+        // Poll for the CONTENT, not just for the file: `Set-Content` (and
+        // `env > file`) create the file before the body is written, so a read
+        // that only waits for existence can observe an empty file and break
+        // immediately — which is exactly how this failed under a loaded
+        // full-suite run while passing in isolation.
         let deadline = Instant::now() + Duration::from_secs(20);
         let content = loop {
-            if let Ok(c) = std::fs::read_to_string(&out) {
-                break c;
+            let seen = std::fs::read_to_string(&out).unwrap_or_default();
+            if seen.contains("Turn complete") && seen.contains("test-session-123") {
+                break seen;
             }
             assert!(
                 Instant::now() < deadline,
-                "hook did not produce {} within 20s",
+                "hook did not produce {} within 20s (last read: {seen:?})",
                 out.display()
             );
             std::thread::sleep(Duration::from_millis(50));

@@ -1243,6 +1243,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[cfg(unix)]
     async fn test_kill_returns_signal() {
         let session_id = format!("s1-kill-{}", std::process::id());
         let tool_id = format!("t1-kill-{}", std::process::id());
@@ -1293,6 +1294,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[cfg(unix)]
     async fn test_ext_create_output_wait_release() {
         tokio::task::LocalSet::new()
             .run_until(async {
@@ -1323,6 +1325,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[cfg(unix)]
     async fn test_ext_release_cleans_up() {
         tokio::task::LocalSet::new()
             .run_until(async {
@@ -1350,6 +1353,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[cfg(unix)]
     async fn test_kill_and_release_all_kills_non_bg_and_preserves_bg() {
         tokio::task::LocalSet::new()
             .run_until(async {
@@ -1451,6 +1455,7 @@ mod tests {
     /// ProcessGroup::leader() to ProcessSession. A parent shell spawns
     /// a background child; killing the terminal should reap both.
     #[tokio::test]
+    #[cfg(unix)]
     async fn test_process_group_kill_with_session() {
         tokio::task::LocalSet::new()
             .run_until(async {
@@ -1501,6 +1506,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[cfg(unix)]
     async fn test_kill_and_release_all_noop_for_other_sessions() {
         tokio::task::LocalSet::new()
             .run_until(async {

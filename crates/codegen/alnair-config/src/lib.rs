@@ -25,6 +25,17 @@ pub mod signed_policy;
 mod validation;
 pub mod version_overrides;
 
+/// Serializes every test that reads or writes a process-global campaign env var
+/// (`ALNAIR_CAMPAIGNS`, `ALNAIR_CAMPAIGNS_OVERRIDE`).
+///
+/// These vars are read transitively — `campaigns_application_disabled` consults
+/// `ALNAIR_CAMPAIGNS`, and any test that resolves an effective config reaches
+/// it. A module-local mutex is therefore not enough: two different test modules
+/// mutating the same var race, and the reader observes the writer's value. One
+/// crate-wide lock is the only correct scope.
+#[cfg(test)]
+pub(crate) static CAMPAIGN_ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 pub use campaigns::{
     CampaignEntry, CampaignOverrides, filter_active_campaigns, ids_touching_paths,
 };

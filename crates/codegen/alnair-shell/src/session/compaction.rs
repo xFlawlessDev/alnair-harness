@@ -2124,7 +2124,7 @@ mod inline_auto_compact_flow_tests {
         gateway_tx: mpsc::UnboundedSender<alnair_acp_lib::AcpClientMessage>,
         persistence_tx: mpsc::UnboundedSender<PersistenceMsg>,
     ) -> SessionActor {
-        let cwd = AbsPathBuf::new(std::path::PathBuf::from("/tmp")).unwrap();
+        let cwd = AbsPathBuf::new(std::env::temp_dir()).unwrap();
         let fs = Arc::new(MockFs::new(cwd.to_path_buf()));
         let terminal = Arc::new(DummyTerminal {});
         let (hunk_tx, _hunk_rx) = tokio::sync::mpsc::unbounded_channel();
@@ -2246,6 +2246,7 @@ mod inline_auto_compact_flow_tests {
             max_turns: None,
             pending_interjections: InterjectionBuffer::new(),
             pending_skill_reminders: Mutex::new(Vec::new()),
+            pending_project_instructions: Mutex::new(None),
             idle_flush_timeout: None,
             dream_check_timeout: None,
             last_idle_flush_conversation_len: std::sync::atomic::AtomicUsize::new(0),
@@ -2625,6 +2626,12 @@ mod inline_auto_compact_flow_tests {
             .await;
     }
     /// Mock LLM endpoint answering every request with a deterministic 400.
+    ///
+    /// The request is read in full (headers, then `Content-Length` bytes)
+    /// before answering. Replying after a fixed-size read leaves the client
+    /// writing into a closed socket, and the resulting reset is classified as
+    /// a *transient* transport failure — which silently changes what the test
+    /// is asserting.
     async fn spawn_deterministic_400_server() -> String {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
@@ -2635,8 +2642,35 @@ mod inline_auto_compact_flow_tests {
                 };
                 tokio::spawn(async move {
                     use tokio::io::{AsyncReadExt, AsyncWriteExt};
-                    let mut buf = [0u8; 4096];
-                    let _ = stream.read(&mut buf).await;
+                    let mut buf = Vec::new();
+                    let mut chunk = [0u8; 8192];
+                    let header_end = loop {
+                        let Ok(n) = stream.read(&mut chunk).await else {
+                            return;
+                        };
+                        if n == 0 {
+                            return;
+                        }
+                        buf.extend_from_slice(&chunk[..n]);
+                        if let Some(pos) = buf.windows(4).position(|w| w == b"\r\n\r\n") {
+                            break pos + 4;
+                        }
+                    };
+                    let headers = String::from_utf8_lossy(&buf[..header_end]).to_ascii_lowercase();
+                    let content_length = headers
+                        .lines()
+                        .find_map(|line| line.strip_prefix("content-length:"))
+                        .and_then(|v| v.trim().parse::<usize>().ok())
+                        .unwrap_or(0);
+                    while buf.len() < header_end + content_length {
+                        let Ok(n) = stream.read(&mut chunk).await else {
+                            return;
+                        };
+                        if n == 0 {
+                            break;
+                        }
+                        buf.extend_from_slice(&chunk[..n]);
+                    }
                     let body =
                         r#"{"error":{"type":"invalid_request_error","message":"bad schema"}}"#;
                     let resp = format!(
@@ -2645,6 +2679,7 @@ mod inline_auto_compact_flow_tests {
                         body
                     );
                     let _ = stream.write_all(resp.as_bytes()).await;
+                    let _ = stream.flush().await;
                 });
             }
         });

@@ -171,6 +171,7 @@ impl SessionActor {
         };
         if became_idle {
             self.flush_pending_skill_reminders().await;
+            self.flush_pending_project_instructions().await;
             // Idle-gated: a stale completion must not clobber the promoted turn's resources.
             self.agent
                 .borrow()

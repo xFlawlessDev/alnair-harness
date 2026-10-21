@@ -167,6 +167,106 @@ impl SessionActor {
             .as_millis() as u64, "ensure_prefix_ready: done"
         );
     }
+    /// Re-read `AGENTS.md` / `CLAUDE.md` / rules files and queue a revised
+    /// instructions block for the next turn boundary.
+    ///
+    /// Deliberately does NOT touch the system prompt or replace the existing
+    /// `project_instructions` item: both would rewrite the request prefix and
+    /// invalidate the KV cache for the whole conversation. The revision is
+    /// appended as a `project_instructions_update` user item instead.
+    ///
+    /// Returns `true` when a revision was queued.
+    ///
+    /// `_edited_root` is diagnostic only — discovery is re-resolved from this
+    /// session's own cwd because compat config and the workspace user dir are
+    /// per-session, so the watcher's event path cannot stand in for it.
+    pub(super) async fn reload_project_instructions(&self, _edited_root: &std::path::Path) -> bool {
+        let cwd = self.session_info.cwd.clone();
+        let compat = self.rebuild_spec.compat;
+        let mut files =
+            alnair_agent::prompt::agents_md::read_agents_config_with_paths(&cwd, compat).await;
+
+        // Compare against what the live agent currently holds, so an mtime-only
+        // touch — or an edit to a vendor surface this session's compat disables
+        // — costs no conversation item.
+        //
+        // Compare CONTENT, not the rendered reminder: `AgentBuilder` rewrites
+        // each `file_path` to the session's display cwd (`prompt_working_directory`)
+        // before storing it in `prompt_context`, so a freshly read path would
+        // differ from the stored one on every event even when the text is
+        // identical — and every event would re-inject.
+        let unchanged = {
+            let agent = self.agent.borrow();
+            let stored = &agent.prompt_context().agents_md_files;
+            stored.len() == files.len()
+                && stored
+                    .iter()
+                    .zip(files.iter())
+                    .all(|(a, b)| a.file_name == b.file_name && a.content == b.content)
+        };
+        if unchanged {
+            tracing::debug!(
+                session_id = % self.session_info.id.0,
+                "project instructions unchanged on disk, nothing to inject"
+            );
+            return false;
+        }
+
+        // Apply the same display-cwd rewrite the builder performs, so the stored
+        // paths keep rendering identically to the spawn-time block.
+        if let Some(display_cwd) = self.display_cwd.get() {
+            for file in &mut files {
+                file.file_path = file.file_path.replace(&cwd, display_cwd);
+            }
+        }
+
+        let new_reminder = alnair_agent::prompt::agents_md::format_agents_md_section(&files);
+
+        // Keep `prompt_context` authoritative for compaction and the permission
+        // classifier before queueing, so those never see the stale text even if
+        // the turn boundary is far away.
+        self.agent.borrow_mut().replace_agents_md(files);
+
+        let Some(reminder) = new_reminder else {
+            // Every instructions file was deleted. `prompt_context` is now
+            // empty (set above), so compaction and the permission classifier
+            // stop re-injecting the text — but the conversation keeps the last
+            // block it already has. Deleting a file mid-session is far more
+            // likely a rebase/checkout accident than an intent to retract the
+            // rules, and an empty revision would silently drop them.
+            tracing::info!(
+                session_id = % self.session_info.id.0,
+                "project instructions removed on disk; conversation keeps the last known block"
+            );
+            return false;
+        };
+
+        let item =
+            alnair_sampling_types::conversation::ConversationItem::project_instructions_update(
+                reminder,
+            );
+        *self.pending_project_instructions.lock() = Some(item);
+
+        tracing::info!(
+            session_id = % self.session_info.id.0,
+            "project instructions changed on disk; queued a revision for the next turn"
+        );
+        true
+    }
+
+    /// Inject a queued project-instructions revision at a turn boundary.
+    ///
+    /// Called at the same safe points as [`Self::flush_pending_skill_reminders`]
+    /// so the item never lands mid-tool-batch, where it would be ambiguous
+    /// whether the model had already acted on the old text.
+    pub(super) async fn flush_pending_project_instructions(&self) {
+        let item = self.pending_project_instructions.lock().take();
+        let Some(item) = item else {
+            return;
+        };
+        self.chat_state_handle.push_user_message(item);
+    }
+
     /// Re-discover skills from disk, update the SkillManager baseline,
     /// and re-advertise slash commands to the client. Returns the number
     /// of skills discovered.

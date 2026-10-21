@@ -1399,7 +1399,12 @@ model: test-model
         std::fs::write(standard.join("SKILL.md"), "---\nname: mine\n---\n").unwrap();
 
         let paths = find_skill_paths(&cursor_dir);
-        let strs: Vec<String> = paths.iter().map(|p| p.display().to_string()).collect();
+        // Compare with forward slashes: `display()` uses the native separator,
+        // so the literal `skills/mine` never matches on Windows.
+        let strs: Vec<String> = paths
+            .iter()
+            .map(|p| p.display().to_string().replace('\\', "/"))
+            .collect();
         assert!(
             strs.iter().any(|p| p.contains("skills/mine")),
             "standard skills/ layout must still be found: {strs:?}"
@@ -1481,7 +1486,16 @@ model: test-model
             (alnair_shell.join("SKILL.md"), SkillScope::User),
         ]);
         assert_eq!(skills.len(), 1, "cursor builtin must be dropped");
-        assert!(skills[0].path.contains("/.alnair/"));
+        // `SkillInfo::path` is a lossy `Path::display` string, so it carries the
+        // native separator; assert on components rather than a `/`-joined literal.
+        let kept: Vec<String> = Path::new(&skills[0].path)
+            .components()
+            .map(|c| c.as_os_str().to_string_lossy().into_owned())
+            .collect();
+        assert!(
+            kept.iter().any(|c| c == ".alnair"),
+            "the user skill under .alnair must be the survivor: {kept:?}"
+        );
     }
 
     #[test]

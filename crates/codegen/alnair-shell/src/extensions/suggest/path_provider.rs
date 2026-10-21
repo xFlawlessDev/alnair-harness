@@ -392,7 +392,13 @@ mod tests {
             }
         }
 
-        let path_var = format!("{}:{}", bin1.to_str().unwrap(), bin2.to_str().unwrap());
+        // Join with the platform separator (`;` on Windows, `:` elsewhere);
+        // a literal `:` makes `split_paths` see one unusable path there.
+        let path_var = std::env::join_paths([&bin1, &bin2])
+            .unwrap()
+            .to_str()
+            .unwrap()
+            .to_owned();
         let result = scan_path_from(&path_var);
         assert_eq!(result, vec!["shared_cmd"]);
     }

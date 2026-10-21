@@ -306,12 +306,100 @@ release carries the protocol (checked at tag 0.82.0:
 `_vte_keymap_GDK_Return` encodes only Alt); a version cutoff for it is a
 bug, not a feature. `/terminal-setup` owns the per-terminal recipe.
 
+## Config hot-reload
+
+`ConfigFileWatcher` (notify + 1s debounce) feeds `ConfigReloader`, which diffs
+and emits `ConfigUpdate`. Two transports consume that stream, both in
+`agent/app.rs`:
+
+| Transport | Dispatcher | Used by |
+|---|---|---|
+| ACP request line injected into the inbound simplex | `run_config_update_dispatch` | `run_leader`, `run_stdio_agent` |
+| Direct `MvpAgent::dispatch_internal` over the `Rc` | `run_config_update_dispatch_direct` | in-process TUI spawn (`alnair-tui/src/acp/spawn.rs`) |
+
+The in-process transport has **no inbound simplex** — `spawn_agent_thread_direct`
+hands RPC straight to the agent — so stream injection is not available there.
+Both dispatchers must gain any new arm together; a reload kind that only works
+under a leader is a bug.
+
+**AGENTS.md / CLAUDE.md / rules `*.md` are watched as
+`ConfigChangeEvent::AgentInstructionsChanged`.** `is_agent_instructions_path`
+matches a deliberate *superset* (every compat `agent_filenames()` entry plus
+`*.md` in `<vendor>/rules`), because the watcher is leader-global with no
+per-session compat resolved — a false positive costs one content-hash compare,
+a false negative is permanent. Dedupe is the reloader's `hash_agent_instructions`,
+which hashes what discovery would actually read.
+
+`watch_cwd_dirs` also registers the **ancestor chain** cwd→git root, refcounted
+in `ancestor_watch_refs` because two sessions in one repo share it. Discovery
+walks upward, so a repo-root `AGENTS.md` is part of a session opened in
+`repo/crates/x/` and must be observed there.
+
+`SkillsFileWatcher` mirrors that split with `watch_cwd`/`unwatch_cwd`, driven
+from the leader's cwd drain: `start` resolves its dirs from the *process* cwd,
+but one leader serves every repo, so a session opened elsewhere would otherwise
+have no skills watch. Dirs `start` installed are `initial_dirs` — counted by
+`watch_cwd` but never re-watched or released, since they belong to the process.
+
+The revision is **appended, never substituted**: `SyntheticReason::
+ProjectInstructionsUpdate` is its own variant precisely so
+`conversation_has_project_instructions` keeps answering "the spawn-time block is
+present". Reusing `ProjectInstructions` would make the spawn/resume guard skip
+the update at every call site and break its documented never-replaced
+invariant. `reload_project_instructions` compares stored **content**, not the
+rendered reminder — `AgentBuilder` rewrites `file_path` to the display cwd, so a
+path-sensitive compare would re-inject on every event. Flush happens at the two
+`flush_pending_skill_reminders` sites (loop start, idle); the pending slot is an
+`Option` so a save-storm coalesces to the newest revision instead of replaying
+every intermediate state.
+
+`agents_md_files` is not an input to `PromptContext::render`/`placeholders`, so
+`Agent::replace_agents_md` cannot disturb the KV-cache prefix. Do not move it
+into the rendered prompt.
+
 ## Test seams
 
 Cross-crate test hooks are behind the `test-support` cargo feature
 (alnair-workspace, alnair-pager-render, alnair-config, alnair-tui), enabled via
 dependents' `[dev-dependencies]`. Don't expose new test seams as plain
 `#[cfg(test)]` items across crate boundaries.
+
+**`dirs::home_dir()` ignores `HOME` on Windows** (it reads the
+`FOLDERID_Profile` Known Folder), and so does `std::env::home_dir()` — a
+verified probe on the 1.97 toolchain returns the real profile with `HOME`
+pointed elsewhere. Any test that needs "this tempdir is home" therefore cannot
+use an env guard; it injects the home instead:
+`RepoDirChain::resolve_with_home`, `is_config_path_auto_trusted_with_home`,
+`refresh_local_installs_with_home`, and
+`alnair_workspace::trust::HomeOverride` (the RAII, process-global,
+`serial`-only seam behind `is_home_dir`). `HomeOverride` is test-builds-only on
+purpose: an environment hook would be fail-open, since "this is home" is the
+TRUSTED verdict for the folder-trust gate.
+
+`Theme::current()` quantizes through `color_support`, whose level is a
+write-once `OnceLock`. `cache::pin_theme()` therefore cannot rely on
+`color_support::set` — once anything resolves the level (and an ambient
+`NO_COLOR=1` decides `None`), the set is a no-op and EVERY theme color becomes
+`Color::Reset`, silently emptying any assertion that distinguishes two colors.
+`pin_theme` uses the `force_for_test` seam instead; a test needing a specific
+level must do the same.
+
+**Never sleep to sequence a test.** A fixed sleep is either too short (a
+loaded runner schedules the other side late) or wastefully long, and on Windows
+it is the usual cause of a suite that passes alone and fails in a sweep.
+Coordinate on the event instead: an `Arc<AtomicBool>` done-flag when the test
+owns both sides (`join()` is not an option where the handle must survive), a
+content poll rather than an existence check when a child writes a file, and a
+ready-marker handshake when a separate process must reach a state (the lock
+tests in `active_sessions` write the marker only after `$f.Lock(...)` returns).
+Every such wait carries a ceiling so a real hang fails with a message instead
+of blocking the run.
+
+A macro that emits `canonicalize` (rust-embed's derive does, to resolve its
+`#[folder]`) trips the repo-wide `disallowed-methods` ban from inside its own
+expansion, and an item-level `#[allow]` does not reach a generated item. Put
+the allow on a module wrapping the derive, and say in a comment why the
+canonicalized path never reaches runtime path handling.
 
 ## Graph mode (`/graph`, post-0.1.x — plan.md in the parent dir)
 

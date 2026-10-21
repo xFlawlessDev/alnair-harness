@@ -271,11 +271,17 @@ impl WorktreeDb {
 
     /// Look up by ID, label, or path.
     ///
-    /// If `id_or_path` contains `/`, it's treated as a path (canonicalized
-    /// before lookup). Otherwise it's looked up first as a DB ID, then as a
-    /// worktree label (stored in `metadata.label`).
+    /// If `id_or_path` looks like a path (it contains a `/`, or a `\` as every
+    /// Windows path does), it is treated as a path and canonicalized before
+    /// lookup. Otherwise it's looked up first as a DB ID, then as a worktree
+    /// label (stored in `metadata.label`).
+    ///
+    /// The `\` half is load-bearing on Windows: worktree paths are stored
+    /// canonicalized (`C:\Users\…`), so a separator test on `/` alone would
+    /// route every Windows path into the ID branch, miss, and then fall
+    /// through to a label lookup — silently resolving no worktree at all.
     pub fn get(&self, id_or_path: &str) -> Result<Option<WorktreeRecord>> {
-        if id_or_path.contains('/') {
+        if id_or_path.contains('/') || id_or_path.contains('\\') {
             let canon = PathBuf::from(id_or_path);
             let canon = dunce::canonicalize(&canon).unwrap_or(canon);
             queries::get_by_path(&self.conn, &canon)

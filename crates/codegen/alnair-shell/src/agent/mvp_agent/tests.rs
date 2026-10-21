@@ -713,9 +713,11 @@ fn make_test_handle(
             crate::session::feedback_manager::FeedbackManager::local_only("test"),
         ),
         tool_context: crate::tools::ToolContext::new_local_context(
-            alnair_paths::AbsPathBuf::new(std::path::PathBuf::from("/tmp")).unwrap(),
+            // `/tmp` is not absolute on Windows, and `AbsPathBuf::new` rejects
+            // non-absolute input — so the literal panicked in test setup there.
+            alnair_paths::AbsPathBuf::new(std::env::temp_dir()).unwrap(),
             std::sync::Arc::new(alnair_workspace::file_system::LocalFs::new(
-                std::path::PathBuf::from("/tmp"),
+                std::env::temp_dir(),
             )),
             std::sync::Arc::new(crate::terminal::LocalTerminalRunner),
         ),
@@ -942,8 +944,22 @@ async fn drain_finished_thread_returns_immediately() {
     let session_threads: RefCell<HashMap<acp::SessionId, crate::session::SessionThread>> =
         RefCell::new(HashMap::new());
     let sid = acp::SessionId::new("drain-test");
-    let handle = std::thread::spawn(|| {});
-    std::thread::sleep(std::time::Duration::from_millis(10));
+    // Coordinate on a flag instead of sleeping: a fixed 10 ms is a race on a
+    // loaded runner (the spawned thread may not have been scheduled yet), while
+    // `join` would consume the handle the test needs to keep.
+    let done = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let done_in_thread = done.clone();
+    let handle = std::thread::spawn(move || {
+        done_in_thread.store(true, std::sync::atomic::Ordering::Release);
+    });
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    while !done.load(std::sync::atomic::Ordering::Acquire) {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "trivial thread never ran"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
     session_threads.borrow_mut().insert(
         sid.clone(),
         crate::session::SessionThread::from_handle(handle),

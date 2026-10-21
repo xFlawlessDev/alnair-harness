@@ -2189,6 +2189,10 @@ mod tests {
 
     // try_read_image_from_path
 
+    // POSIX shells escape spaces/parens with a backslash; Windows terminals do
+    // not (`\` is a path separator there, and `shell_unescape` correctly skips
+    // Windows-looking paths), so the escaped form only exists on unix.
+    #[cfg(unix)]
     #[test]
     fn try_read_image_with_escaped_parens() {
         let dir = tempfile::tempdir().unwrap();
@@ -2211,6 +2215,7 @@ mod tests {
         );
     }
 
+    #[cfg(unix)]
     #[test]
     fn try_read_image_with_escaped_spaces() {
         let dir = tempfile::tempdir().unwrap();
@@ -2573,6 +2578,11 @@ mod tests {
         );
     }
 
+    // POSIX shell semantics: a backslash inside the quotes escapes the
+    // following space. On Windows `\` is a path separator, so `shell_unescape`
+    // deliberately leaves such a token alone and the escaped spelling is not a
+    // path at all.
+    #[cfg(unix)]
     #[test]
     fn quoted_path_with_internal_backslash_escape() {
         let dir = tempfile::tempdir().unwrap();
@@ -2598,7 +2608,11 @@ mod tests {
 
         // `file://localhost/...` is accepted by the `url` crate and
         // yields the same local path as `file:///...`. Pins behavior.
-        let pasted = format!("file://localhost{}", p.display());
+        // Encode the native path first (`file:///C:/…` on Windows) and only
+        // then add the authority: a hand-built `file://localhostC:\…` makes
+        // `localhostC` the host, which does not parse.
+        let encoded = url::Url::from_file_path(&p).expect("tempdir path is absolute");
+        let pasted = encoded.as_str().replacen("file://", "file://localhost", 1);
         assert!(try_read_image_from_path(&pasted).is_some());
     }
 
@@ -2913,6 +2927,11 @@ mod tests {
         // suffix as a query string.
         let dir = tempfile::tempdir().unwrap();
         let txt = dir.path().join("query?file.txt");
+        // Windows forbids `?` in a file name, so the on-disk (canonicalized)
+        // leg of this round-trip only exists on unix. The decoding contract
+        // itself — `%3F` becomes a literal `?` rather than a query separator —
+        // is platform-independent and asserted below for both.
+        #[cfg(unix)]
         std::fs::write(&txt, b"x").unwrap();
 
         let encoded = txt.display().to_string().replace('?', "%3F");
@@ -2924,6 +2943,17 @@ mod tests {
             1,
             "percent-encoded `?` must round-trip; got {non_images:?}"
         );
+        assert_eq!(
+            non_images[0].file_name().and_then(|n| n.to_str()),
+            Some("query?file.txt"),
+            "`%3F` must decode to a literal `?`, not start a query"
+        );
+        assert!(
+            !non_images[0].to_string_lossy().contains('%'),
+            "no percent-escape may survive decoding; got {:?}",
+            non_images[0]
+        );
+        #[cfg(unix)]
         assert_eq!(non_images[0], canon(&txt));
     }
 

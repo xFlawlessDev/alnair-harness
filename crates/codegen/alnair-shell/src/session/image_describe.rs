@@ -537,7 +537,14 @@ mod tests {
         let img = ImageContent::new(png, "image/png");
         let msg = persist_and_prepend_image_files(dir.path(), &[img], "hello").unwrap();
         assert!(msg.contains("<image_files>"));
-        assert!(msg.contains("/assets/image-"));
+        // The rendered path is native, so assert on its components rather than
+        // on a POSIX separator (Windows emits `…\assets\image-…`).
+        let assets = dir.path().join("assets");
+        assert!(
+            msg.contains(&assets.to_string_lossy().into_owned()),
+            "message must name the assets dir: {msg}"
+        );
+        assert!(msg.contains("image-"), "message must name the file: {msg}");
         assert!(msg.ends_with("hello") || msg.contains("\n\nhello"));
         let assets = std::fs::read_dir(dir.path().join("assets")).unwrap();
         assert_eq!(assets.count(), 1);

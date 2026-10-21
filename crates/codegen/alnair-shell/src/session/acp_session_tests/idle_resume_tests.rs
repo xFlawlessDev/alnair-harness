@@ -66,7 +66,7 @@ async fn test_e2e_idle_resume_refreshes_model_metadata() {
             tokio::time::sleep(std::time::Duration::from_millis(50)).await;
             let (gateway_tx, _) = mpsc::unbounded_channel::<alnair_acp_lib::AcpClientMessage>();
             let (persistence_tx, _) = mpsc::unbounded_channel::<PersistenceMsg>();
-            let cwd = alnair_paths::AbsPathBuf::new(std::path::PathBuf::from("/tmp")).unwrap();
+            let cwd = alnair_paths::AbsPathBuf::new(std::env::temp_dir()).unwrap();
             let fs = Arc::new(alnair_workspace::file_system::MockFs::new(
                 cwd.to_path_buf(),
             ));
@@ -210,6 +210,7 @@ async fn test_e2e_idle_resume_refreshes_model_metadata() {
                 max_turns: None,
                 pending_interjections: InterjectionBuffer::new(),
                 pending_skill_reminders: Mutex::new(Vec::new()),
+                pending_project_instructions: Mutex::new(None),
                 idle_flush_timeout: None,
                 dream_check_timeout: None,
                 last_idle_flush_conversation_len: std::sync::atomic::AtomicUsize::new(0),

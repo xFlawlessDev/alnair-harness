@@ -2754,7 +2754,26 @@ fn extract_exit_status(status: std::process::ExitStatus) -> ExitStatus {
 mod tests {
     use super::*;
     use crate::computer::types::TaskKind;
-    use std::path::PathBuf;
+
+    /// The terminal spawns through `alnair_config::shell::shell_command_argv`,
+    /// i.e. the *detected* shell, so a fixture must be written in that shell's
+    /// dialect: POSIX on Unix (and Git Bash on Windows), PowerShell otherwise.
+    /// (`cmd.exe`, reachable only via an explicit `ALNAIR_SHELL=cmd`, is not
+    /// covered — the default Windows cascade never picks it.)
+    fn sh(posix: &str, powershell: &str) -> String {
+        #[cfg(unix)]
+        {
+            let _ = powershell;
+            posix.to_owned()
+        }
+        #[cfg(not(unix))]
+        {
+            match alnair_config::shell::detect_windows_shell() {
+                alnair_config::shell::WindowsShell::GitBash(_) => posix.to_owned(),
+                _ => powershell.to_owned(),
+            }
+        }
+    }
 
     fn make_request(command: &str) -> TerminalRunRequest {
         let output_file = std::env::temp_dir().join(format!(
@@ -2768,7 +2787,7 @@ mod tests {
 
         TerminalRunRequest {
             command: command.to_string(),
-            working_directory: PathBuf::from("/tmp"),
+            working_directory: std::env::temp_dir(),
             env: HashMap::new(),
             timeout: Duration::from_secs(30),
             output_byte_limit: 10000,
@@ -2846,7 +2865,7 @@ mod tests {
 
         let request = TerminalRunRequest {
             command: "sleep 60".to_string(),
-            working_directory: PathBuf::from("/tmp"),
+            working_directory: std::env::temp_dir(),
             env: HashMap::new(),
             timeout: Duration::from_millis(200),
             output_byte_limit: 10000,
@@ -2877,7 +2896,7 @@ mod tests {
 
         let request = TerminalRunRequest {
             command: "sleep 60".to_string(),
-            working_directory: PathBuf::from("/tmp"),
+            working_directory: std::env::temp_dir(),
             env: HashMap::new(),
             timeout: Duration::from_millis(500),
             output_byte_limit: 10000,
@@ -2939,7 +2958,7 @@ mod tests {
 
         let request = TerminalRunRequest {
             command: "sleep 60".to_string(),
-            working_directory: PathBuf::from("/tmp"),
+            working_directory: std::env::temp_dir(),
             env: HashMap::new(),
             // 1h timeout, far longer than the 300ms budget.
             timeout: Duration::from_secs(3600),
@@ -3009,7 +3028,7 @@ mod tests {
 
         let request = TerminalRunRequest {
             command: "sleep 60".to_string(),
-            working_directory: PathBuf::from("/tmp"),
+            working_directory: std::env::temp_dir(),
             env: HashMap::new(),
             // Short timeout so the test is fast; auto_bg is OFF so the budget
             // must be ignored and the command killed on the timeout instead.
@@ -3056,7 +3075,7 @@ mod tests {
 
         let request = TerminalRunRequest {
             command: "sleep 60".to_string(),
-            working_directory: PathBuf::from("/tmp"),
+            working_directory: std::env::temp_dir(),
             env: HashMap::new(),
             timeout: Duration::from_secs(3600),
             output_byte_limit: 10000,
@@ -3107,7 +3126,7 @@ mod tests {
 
         let request = TerminalRunRequest {
             command: "sleep 60".to_string(),
-            working_directory: PathBuf::from("/tmp"),
+            working_directory: std::env::temp_dir(),
             env: HashMap::new(),
             // ~800ms kill/auto-bg timeout — short budget is disabled.
             timeout: Duration::from_millis(800),
@@ -3157,9 +3176,14 @@ mod tests {
             std::env::temp_dir().join(format!("terminal-test-size-{}.out", std::process::id()));
 
         let request = TerminalRunRequest {
-            // `yes` floods stdout forever.
-            command: "yes".to_string(),
-            working_directory: PathBuf::from("/tmp"),
+            // Floods stdout forever (`yes` has no PowerShell equivalent; the
+            // `[Console]::Out.Write` loop is raw and fast, ~1 MB/s, so the size
+            // guard trips on the first tick past the 2 KB cap either way).
+            command: sh(
+                "yes",
+                "$b = 'x' * 8192; while ($true) { [Console]::Out.Write($b); Start-Sleep -Milliseconds 20 }",
+            ),
+            working_directory: std::env::temp_dir(),
             env: HashMap::new(),
             // Long timeout: the SIZE guard, not the timeout, must fire.
             timeout: Duration::from_secs(30),
@@ -3190,7 +3214,15 @@ mod tests {
     #[tokio::test]
     async fn test_stderr_captured() {
         let backend = LocalTerminalBackend::new();
-        let result = backend.run(make_request("echo error >&2")).await.unwrap();
+        // PowerShell has no `>&2`; `[Console]::Error.WriteLine` is its stderr
+        // write (the child inherits the same redirected handle).
+        let result = backend
+            .run(make_request(&sh(
+                "echo error >&2",
+                "[Console]::Error.WriteLine('error')",
+            )))
+            .await
+            .unwrap();
 
         assert!(result.combined_output.contains("error"));
         assert_eq!(result.exit_code, Some(0));
@@ -3218,7 +3250,7 @@ mod tests {
 
         let request = TerminalRunRequest {
             command: "echo 'line1'; echo 'line2'; echo 'line3'".to_string(),
-            working_directory: PathBuf::from("/tmp"),
+            working_directory: std::env::temp_dir(),
             env: HashMap::new(),
             timeout: Duration::from_secs(30),
             output_byte_limit: 10000,
@@ -3254,7 +3286,7 @@ mod tests {
 
         let request = TerminalRunRequest {
             command: "echo background_test && sleep 0.1".to_string(),
-            working_directory: PathBuf::from("/tmp"),
+            working_directory: std::env::temp_dir(),
             env: HashMap::new(),
             timeout: Duration::from_secs(30),
             output_byte_limit: 10000,
@@ -3294,7 +3326,7 @@ mod tests {
 
         let request = TerminalRunRequest {
             command: "sleep 60".to_string(),
-            working_directory: PathBuf::from("/tmp"),
+            working_directory: std::env::temp_dir(),
             env: HashMap::new(),
             timeout: Duration::from_secs(300),
             output_byte_limit: 10000,
@@ -3329,7 +3361,10 @@ mod tests {
 
         let request = TerminalRunRequest {
             // Command that produces output over time (not all at once)
-            command: "for i in 1 2 3; do echo chunk_$i; sleep 0.15; done".to_string(),
+            command: sh(
+                "for i in 1 2 3; do echo chunk_$i; sleep 0.15; done",
+                "1..3 | ForEach-Object { \"chunk_$_\"; Start-Sleep -Milliseconds 150 }",
+            ),
             working_directory: tmp.path().to_path_buf(),
             env: HashMap::new(),
             timeout: Duration::from_secs(5),
@@ -3404,7 +3439,10 @@ mod tests {
         let request = TerminalRunRequest {
             // ~1.8 KB of ASCII over ~1.8s; far exceeds the 200-char limit so
             // truncation fires early and keeps firing on the shrinking tail.
-            command: "for i in $(seq 1 60); do printf 'LINE%03d-XXXXXXXXXXXXXXXXXXXX\\n' \"$i\"; sleep 0.03; done".to_string(),
+            command: sh(
+                "for i in $(seq 1 60); do printf 'LINE%03d-XXXXXXXXXXXXXXXXXXXX\\n' \"$i\"; sleep 0.03; done",
+                "1..60 | ForEach-Object { 'LINE{0:D3}-XXXXXXXXXXXXXXXXXXXX' -f $_; Start-Sleep -Milliseconds 30 }",
+            ),
             working_directory: tmp.path().to_path_buf(),
             env: HashMap::new(),
             timeout: Duration::from_secs(10),
@@ -3470,7 +3508,12 @@ mod tests {
         let output_file = tmp.path().join("output.log");
 
         let request = TerminalRunRequest {
-            command: format!("head -c {output_amount} /dev/zero | tr '\\0' 'x'"),
+            // ~4.9 MB of 'x' — far past the 5000-byte cap. (`/dev/zero` has no
+            // PowerShell equivalent, so the fixture writes the bytes directly.)
+            command: sh(
+                &format!("head -c {output_amount} /dev/zero | tr '\\0' 'x'"),
+                &format!("[Console]::Out.Write('x' * {output_amount})"),
+            ),
             working_directory: tmp.path().to_path_buf(),
             env: HashMap::new(),
             timeout: Duration::from_secs(30),
@@ -3505,7 +3548,12 @@ mod tests {
         let output_file = tmp.path().join("output.log");
 
         let request = TerminalRunRequest {
-            command: "head -c 200000 /dev/zero | tr '\\0' 'x'".to_string(),
+            // 200 KB of 'x': under the 64 MB retention cap, so the file keeps
+            // every byte. (PowerShell writes it directly; `/dev/zero` is POSIX.)
+            command: sh(
+                "head -c 200000 /dev/zero | tr '\\0' 'x'",
+                "[Console]::Out.Write('x' * 200000)",
+            ),
             working_directory: tmp.path().to_path_buf(),
             env: HashMap::new(),
             timeout: Duration::from_secs(10),
@@ -3653,7 +3701,7 @@ mod tests {
 
         let request = TerminalRunRequest {
             command: "sleep 60".to_string(),
-            working_directory: PathBuf::from("/tmp"),
+            working_directory: std::env::temp_dir(),
             env: HashMap::new(),
             timeout: Duration::from_millis(200),
             output_byte_limit: 10000,
@@ -3682,7 +3730,7 @@ mod tests {
 
         let request = TerminalRunRequest {
             command: "echo before_kill; sleep 60".to_string(),
-            working_directory: PathBuf::from("/tmp"),
+            working_directory: std::env::temp_dir(),
             env: HashMap::new(),
             timeout: Duration::from_secs(30),
             output_byte_limit: 10000,
@@ -3726,7 +3774,7 @@ mod tests {
 
         let request = TerminalRunRequest {
             command: "echo before_timeout; sleep 60".to_string(),
-            working_directory: PathBuf::from("/tmp"),
+            working_directory: std::env::temp_dir(),
             env: HashMap::new(),
             timeout: Duration::from_secs(2),
             output_byte_limit: 10000,
@@ -3755,7 +3803,7 @@ mod tests {
         let backend = LocalTerminalBackend::new();
         let request = TerminalRunRequest {
             command: "sleep 300 &\nsleep 1\necho done".to_string(),
-            working_directory: PathBuf::from("/tmp"),
+            working_directory: std::env::temp_dir(),
             env: HashMap::new(),
             timeout: Duration::from_secs(30),
             output_byte_limit: 10000,
@@ -3967,6 +4015,14 @@ mod tests {
     /// in `self.processes` for `COMPLETED_TASK_TTL`; if the actor kept the `Arc`
     /// that long, a `kill_all()` on exit could `killpg` a pid the OS recycled.
     /// Asserts the injected scope's live-group count goes 1 -> 0 across the reap.
+    ///
+    /// Unix-only: the early `Arc` drop this asserts is itself `#[cfg(unix)]` in
+    /// `poll_all_processes` / `kill_and_finalize`, precisely because the hazard
+    /// it closes (`killpg` on a recycled pid) cannot exist on Windows — there
+    /// the group is a `JobObject` HANDLE, so the `Arc` is released when the
+    /// `ProcessState` is evicted instead, and `live_count` legitimately stays 1
+    /// until then.
+    #[cfg(unix)]
     #[test]
     fn reaped_background_child_leaves_scope_empty() {
         let rt = tokio::runtime::Builder::new_current_thread()
@@ -4017,8 +4073,14 @@ mod tests {
         });
     }
 
+    #[cfg(unix)]
     #[tokio::test]
     async fn test_persistent_shell_cd_persists() {
+        // `persistent_shell` is a Unix-only spawn path: `spawn_command` takes
+        // `spawn_persistent_command` (fd 3/4 state snapshot) only under
+        // `#[cfg(unix)]`, so on Windows `with_persistent_shell()` is plain
+        // per-command spawning and no cwd can carry over. There is no Windows
+        // persistent-shell state to assert.
         let backend = LocalTerminalBackend::with_persistent_shell();
 
         // cd to /tmp
@@ -4035,8 +4097,10 @@ mod tests {
         );
     }
 
+    #[cfg(unix)]
     #[tokio::test]
     async fn test_persistent_shell_env_var_persists() {
+        // Unix-only: see `test_persistent_shell_cd_persists`.
         let backend = LocalTerminalBackend::with_persistent_shell();
 
         let result = backend
@@ -4057,8 +4121,10 @@ mod tests {
         );
     }
 
+    #[cfg(unix)]
     #[tokio::test]
     async fn test_persistent_shell_clears_gpg_tty() {
+        // Unix-only: see `test_persistent_shell_cd_persists`.
         // GPG_TTY must be forced empty on the live path even when supplied via the request env.
         let backend = LocalTerminalBackend::with_persistent_shell();
 
@@ -4076,8 +4142,10 @@ mod tests {
         );
     }
 
+    #[cfg(unix)]
     #[tokio::test]
     async fn test_persistent_shell_function_persists() {
+        // Unix-only: see `test_persistent_shell_cd_persists`.
         let backend = LocalTerminalBackend::with_persistent_shell();
 
         let result = backend
@@ -4095,8 +4163,10 @@ mod tests {
         );
     }
 
+    #[cfg(unix)]
     #[tokio::test]
     async fn test_persistent_shell_variable_capture() {
+        // Unix-only: see `test_persistent_shell_cd_persists`.
         let backend = LocalTerminalBackend::with_persistent_shell();
 
         // Set a variable via command substitution
@@ -4122,13 +4192,19 @@ mod tests {
         let backend = LocalTerminalBackend::new();
 
         let result = backend
-            .run(make_request("export SHOULD_NOT_PERSIST=yes"))
+            .run(make_request(&sh(
+                "export SHOULD_NOT_PERSIST=yes",
+                "$env:SHOULD_NOT_PERSIST = 'yes'",
+            )))
             .await
             .unwrap();
         assert_eq!(result.exit_code, Some(0));
 
         let result = backend
-            .run(make_request("echo ${SHOULD_NOT_PERSIST:-empty}"))
+            .run(make_request(&sh(
+                "echo ${SHOULD_NOT_PERSIST:-empty}",
+                "if ($env:SHOULD_NOT_PERSIST) { $env:SHOULD_NOT_PERSIST } else { 'empty' }",
+            )))
             .await
             .unwrap();
         assert_eq!(result.exit_code, Some(0));

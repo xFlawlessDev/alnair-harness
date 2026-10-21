@@ -414,11 +414,68 @@ fn git_derived_workspace_key(cwd: &Path) -> PathBuf {
 
 /// Whether `path` resolves to the user's home directory.
 pub fn is_home_dir(path: &Path) -> bool {
+    #[cfg(any(test, feature = "test-support"))]
+    if let Some(home) = home_override::current() {
+        return canonicalize_or_owned(path) == canonicalize_or_owned(&home);
+    }
     let Some(home) = dirs::home_dir() else {
         return false;
     };
     canonicalize_or_owned(path) == canonicalize_or_owned(&home)
 }
+
+/// Test-only override for "which directory is home", consulted by
+/// [`is_home_dir`] ahead of the platform lookup.
+///
+/// `dirs::home_dir()` reads the `FOLDERID_Profile` Known Folder on Windows and
+/// ignores `HOME`/`USERPROFILE`, so a test cannot point "home" at a tempdir
+/// through the environment there — the same reason
+/// [`alnair_agent::repo::RepoDirChain::resolve_with_home`] takes it as an
+/// argument.
+///
+/// Compiled only for test builds (`test-support` is a dev-dependency feature
+/// of the dependent crates), so production carries no override at all. An
+/// environment-variable hook would be a fail-open hole rather than a seam:
+/// "this is home" is the TRUSTED verdict, so a spoofed value would let a repo
+/// claim to be the unrecordable home root and skip the trust gate entirely.
+#[cfg(any(test, feature = "test-support"))]
+mod home_override {
+    use std::path::PathBuf;
+    use std::sync::Mutex;
+
+    static OVERRIDE: Mutex<Option<PathBuf>> = Mutex::new(None);
+
+    /// RAII home override: `set` for the test body, restore on drop.
+    ///
+    /// The value is process-global, so a test using this must also be
+    /// `#[serial_test::serial]` — a peer test resolving trust concurrently
+    /// would otherwise observe the temporary home.
+    pub struct HomeOverride(Option<PathBuf>);
+
+    impl HomeOverride {
+        /// Make `home` the home directory (or `None` to defer to the platform)
+        /// until the returned guard drops.
+        pub fn set(home: Option<PathBuf>) -> Self {
+            let mut slot = OVERRIDE.lock().unwrap_or_else(|e| e.into_inner());
+            let prev = std::mem::replace(&mut *slot, home);
+            drop(slot);
+            Self(prev)
+        }
+    }
+
+    impl Drop for HomeOverride {
+        fn drop(&mut self) {
+            *OVERRIDE.lock().unwrap_or_else(|e| e.into_inner()) = self.0.take();
+        }
+    }
+
+    pub(super) fn current() -> Option<PathBuf> {
+        OVERRIDE.lock().unwrap_or_else(|e| e.into_inner()).clone()
+    }
+}
+
+#[cfg(any(test, feature = "test-support"))]
+pub use home_override::HomeOverride;
 
 /// Whether `key` is too broad to ever be a safe trust root — refused on write
 /// and ignored on read (fail closed).
@@ -987,16 +1044,45 @@ mod tests {
     }
 
     #[test]
-    fn workspace_key_ignores_home_git_repo_for_subdir() {
-        // Home-is-a-git-repo (dotfiles in $HOME): a subdir launched from under
-        // home must key trust on the SUBDIR, not on $HOME — even though the git
-        // up-walk discovers home as the repo root. Serialize + guard $HOME
-        // (dirs::home_dir reads it) via the crate-shared env lock.
+    fn home_override_redirects_is_home_dir_and_restores() {
+        // The seam exists because `dirs::home_dir()` ignores `HOME` on Windows,
+        // so "is this the home dir?" cannot otherwise be asserted with a
+        // tempdir there. It is process-global, hence `serial`.
         let _lock = crate::ENV_TEST_LOCK
             .lock()
             .unwrap_or_else(|e| e.into_inner());
         let home = tempfile::tempdir().unwrap();
-        let _home_guard = crate::TestEnvGuard::set("HOME", home.path());
+        let home = canonicalize_or_owned(home.path());
+        assert!(
+            !is_home_dir(&home),
+            "the tempdir must not already be the platform home"
+        );
+        {
+            let _guard = HomeOverride::set(Some(home.clone()));
+            assert!(is_home_dir(&home), "the override must take effect");
+            assert!(
+                is_unsafe_trust_root(&home),
+                "an overridden home must be an unrecordable trust root"
+            );
+        }
+        assert!(
+            !is_home_dir(&home),
+            "dropping the guard must restore the platform home"
+        );
+    }
+
+    #[test]
+    fn workspace_key_ignores_home_git_repo_for_subdir() {
+        // Home-is-a-git-repo (dotfiles in $HOME): a subdir launched from under
+        // home must key trust on the SUBDIR, not on $HOME — even though the git
+        // up-walk discovers home as the repo root. Serialize + redirect home
+        // through the test seam: `dirs::home_dir()` ignores `HOME` on Windows,
+        // so an env override asserts nothing there.
+        let _lock = crate::ENV_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let home = tempfile::tempdir().unwrap();
+        let _home_guard = HomeOverride::set(Some(canonicalize_or_owned(home.path())));
         git2::Repository::init(home.path()).unwrap();
         let civ = home.path().join("Documents").join("civ");
         std::fs::create_dir_all(&civ).unwrap();

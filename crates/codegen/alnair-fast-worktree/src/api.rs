@@ -1513,32 +1513,11 @@ pub mod gc {
     }
 
     fn is_pid_alive(pid: u32) -> bool {
-        #[cfg(target_os = "linux")]
-        {
-            // pid 0 targets the caller's process group and pid > i32::MAX wraps to
-            // a negative pid_t (also a process group); neither is a real tracked
-            // pid (creator_pid is always our own process id), so treat as dead.
-            if pid == 0 || pid > i32::MAX as u32 {
-                return false;
-            }
-            // A null signal (sig 0) runs the kernel's existence/permission check
-            // without delivering a signal.
-            let ret = unsafe { libc::kill(pid as libc::pid_t, 0) };
-            let errno = std::io::Error::last_os_error().raw_os_error().unwrap_or(0);
-            pid_alive_from_kill(ret, errno)
-        }
-        #[cfg(not(target_os = "linux"))]
-        {
-            // No libc dependency off Linux; fall back to `kill -0` exit status.
-            let mut cmd = std::process::Command::new("kill");
-            alnair_tty_utils::detach_std_command(&mut cmd);
-            cmd.stdin(std::process::Stdio::null());
-            cmd.args(["-0", &pid.to_string()])
-                .stdout(std::process::Stdio::null())
-                .stderr(std::process::Stdio::null())
-                .status()
-                .is_ok_and(|s| s.success())
-        }
+        // Delegated to the shared primitive: the previous non-Linux fallback
+        // shelled out to `kill -0`, which does not exist on Windows — so every
+        // PID read as dead there and GC could reclaim a worktree a live session
+        // was still using.
+        alnair_tty_utils::is_process_alive(pid)
     }
 
     /// Physical CWDs of every readable running process, via the Linux `/proc`
@@ -1757,12 +1736,20 @@ pub mod gc {
 
         #[test]
         fn is_pid_alive_false_for_reaped_child() {
-            // A fully reaped child's pid is gone (ESRCH) and must read as dead.
+            // A fully reaped child's pid is gone and must read as dead.
+            // `true` is a Unix binary; Windows has no equivalent, so use a
+            // command that exists everywhere and exits immediately.
+            #[cfg(windows)]
+            let mut child = std::process::Command::new("cmd")
+                .args(["/C", "exit 0"])
+                .spawn()
+                .expect("spawn cmd");
+            #[cfg(not(windows))]
             let mut child = std::process::Command::new("true")
                 .spawn()
                 .expect("spawn `true`");
             let pid = child.id();
-            child.wait().expect("wait on `true`");
+            child.wait().expect("wait on the child");
             assert!(!is_pid_alive(pid));
         }
 

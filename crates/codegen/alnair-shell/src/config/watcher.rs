@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -96,6 +96,17 @@ pub enum ConfigChangeEvent {
     /// would silently skip sessions whose cwd doesn't sit under
     /// `$HOME`.
     HomeClaudeJsonChanged,
+    /// A project-instructions file (`AGENTS.md`, `CLAUDE.md`, …) or a rules
+    /// file under `.alnair/rules`/`.claude/rules`/`.cursor/rules` changed.
+    ///
+    /// The project root is derived from `path` by the reloader, which then
+    /// fans out to sessions whose discovery chain covers it. Detection alone
+    /// is not enough to dispatch — the reloader also content-hashes the whole
+    /// discovery set, so an mtime-only touch (or an edit to a vendor surface
+    /// the session's compat config has disabled) never re-injects anything.
+    AgentInstructionsChanged {
+        path: PathBuf,
+    },
 }
 
 /// Watches `~/.alnair/` for `auth.json`, `config.toml`, and `models_cache.json`
@@ -131,6 +142,13 @@ pub struct ConfigFileWatcher {
     /// that is no longer needed, bounding inotify-watch accumulation
     /// as sessions churn across directories.
     watched_cwds: HashSet<PathBuf>,
+    /// Refcounts for the **shared** ancestor directories of the cwd→git-root
+    /// chain (see [`ancestor_chain`]). Two sessions opened in different
+    /// subdirectories of one repo register the same repo root, so a plain
+    /// `HashSet` would let the first [`Self::unwatch_path`] tear the watch down
+    /// while the other session still needs it. Only the 0→1 and 1→0
+    /// transitions touch the OS watcher.
+    ancestor_watch_refs: HashMap<PathBuf, usize>,
 }
 
 impl ConfigFileWatcher {
@@ -206,6 +224,15 @@ impl ConfigFileWatcher {
                     Some(".mcp.json") | Some(".claude.json") => {
                         Some(ConfigChangeEvent::McpConfigChanged { path: path.clone() })
                     }
+                    // Checked AFTER the `.claude.json`/`.mcp.json` arms (those
+                    // are exact filenames and cannot collide) but BEFORE the
+                    // catch-all: `AGENTS.md` at any watched level is a
+                    // project-instructions change, including the repo-root and
+                    // intermediate-directory copies reached by the ancestor
+                    // watches.
+                    _ if is_agent_instructions_path(path) => {
+                        Some(ConfigChangeEvent::AgentInstructionsChanged { path: path.clone() })
+                    }
                     _ => None,
                 };
 
@@ -256,8 +283,10 @@ impl ConfigFileWatcher {
         // the recursion mode), so this is cosmetic — both
         // additions remain non-recursive, no event amplification.
         let mut watched_cwds = HashSet::new();
+        let mut ancestor_watch_refs = HashMap::new();
         if let Some(cwd) = cwd {
             watch_cwd_dirs(&mut debouncer, cwd);
+            watch_ancestors(&mut debouncer, &mut ancestor_watch_refs, cwd);
             watched_cwds.insert(cwd.to_path_buf());
         }
 
@@ -265,6 +294,7 @@ impl ConfigFileWatcher {
             alnair_home = %alnair_home.display(),
             extra_paths = extra_paths.len(),
             cwd = ?cwd,
+            ancestor_watches = ancestor_watch_refs.len(),
             debounce_ms = debounce.as_millis(),
             "config file watcher started"
         );
@@ -273,6 +303,7 @@ impl ConfigFileWatcher {
             Self {
                 debouncer,
                 watched_cwds,
+                ancestor_watch_refs,
             },
             rx,
         ))
@@ -305,6 +336,7 @@ impl ConfigFileWatcher {
             return;
         }
         watch_cwd_dirs(&mut self.debouncer, cwd);
+        watch_ancestors(&mut self.debouncer, &mut self.ancestor_watch_refs, cwd);
         self.watched_cwds.insert(cwd.to_path_buf());
     }
 
@@ -324,6 +356,7 @@ impl ConfigFileWatcher {
             return;
         }
         unwatch_cwd_dirs(&mut self.debouncer, cwd);
+        unwatch_ancestors(&mut self.debouncer, &mut self.ancestor_watch_refs, cwd);
     }
 }
 
@@ -368,6 +401,70 @@ fn watch_cwd_dirs(debouncer: &mut Debouncer<AccessFilteredWatcher>, cwd: &Path) 
     }
 }
 
+/// Directories **above** `cwd` up to (and including) the git root.
+///
+/// Project-instruction discovery walks this same chain
+/// (`read_agents_config_with_options`), so an `AGENTS.md` in an intermediate
+/// directory — `repo/AGENTS.md` for a session opened in `repo/crates/x/` — is
+/// part of the session's instructions even though it sits outside the two
+/// watches [`watch_cwd_dirs`] installs. Without these watches an edit there
+/// would never surface.
+///
+/// Uses [`RepoDirChain::resolve`] rather than re-walking by hand so the stop
+/// conditions match discovery exactly, including its "a dotfiles repo at
+/// `$HOME` is not a project root" rule. Excludes `cwd` itself (already watched)
+/// and is bounded by repo depth, not tree size, so it cannot exhaust the
+/// inotify quota the way a recursive watch would. Outside a git repo the chain
+/// is just `[cwd]`, leaving nothing to add.
+fn ancestor_chain(cwd: &Path) -> Vec<PathBuf> {
+    let mut dirs = alnair_agent::repo::RepoDirChain::resolve(cwd).dirs;
+    // `dirs` is cwd-first; drop the entry for `cwd` itself.
+    if dirs.first().is_some_and(|d| d == cwd) {
+        dirs.remove(0);
+    }
+    dirs
+}
+
+/// Register the ancestor chain for `cwd`, bumping each directory's refcount.
+/// Only the 0→1 transition installs an OS watch.
+fn watch_ancestors(
+    debouncer: &mut Debouncer<AccessFilteredWatcher>,
+    refs: &mut HashMap<PathBuf, usize>,
+    cwd: &Path,
+) {
+    for dir in ancestor_chain(cwd) {
+        let count = refs.entry(dir.clone()).or_insert(0);
+        *count += 1;
+        if *count == 1
+            && let Err(e) = debouncer.watcher().watch(&dir, RecursiveMode::NonRecursive)
+        {
+            log_watch_error(&e, "failed to watch ancestor directory for AGENTS.md");
+        }
+    }
+}
+
+/// Release the ancestor chain for `cwd`, dropping the OS watch only when the
+/// last referencing cwd goes away.
+fn unwatch_ancestors(
+    debouncer: &mut Debouncer<AccessFilteredWatcher>,
+    refs: &mut HashMap<PathBuf, usize>,
+    cwd: &Path,
+) {
+    for dir in ancestor_chain(cwd) {
+        let Some(count) = refs.get_mut(&dir) else {
+            continue;
+        };
+        *count -= 1;
+        if *count > 0 {
+            continue;
+        }
+        refs.remove(&dir);
+        if let Err(e) = debouncer.watcher().unwatch(&dir) {
+            tracing::debug!(error = %e, path = %dir.display(), "failed to unwatch ancestor directory");
+        }
+    }
+}
+
 /// Remove the two non-recursive watches added by [`watch_cwd_dirs`].
 /// Best-effort: a `WatchNotFound` (never watched / already removed) is
 /// expected and logged at `debug!`.
@@ -404,7 +501,21 @@ fn log_watch_error(err: &notify::Error, msg: &str) {
 /// When a change is detected the receiver gets a `()` signal. The caller is
 /// responsible for triggering a skill re-advertisement to connected clients.
 pub struct SkillsFileWatcher {
-    _debouncer: Debouncer<AccessFilteredWatcher>,
+    debouncer: Debouncer<AccessFilteredWatcher>,
+    /// Dirs registered by [`Self::watch_cwd`], refcounted per directory so
+    /// [`Self::unwatch_cwd`] only drops the OS watch when the last session
+    /// referencing it goes away.
+    ///
+    /// Holds **only** session-registered dirs. The dirs [`Self::start`]
+    /// installed belong to the process itself (the leader's own cwd) and are
+    /// never released — mixing them in here made the count start at 1 and
+    /// never reach 0, so the last `unwatch_cwd` left the watch installed.
+    watched_dirs: HashMap<PathBuf, usize>,
+    /// Dirs [`Self::start`] already installed; `watch_cwd` must not add a
+    /// second OS watch for them, but must still count the session so a later
+    /// `unwatch_cwd` is balanced.
+    initial_dirs: HashSet<PathBuf>,
+    alnair_home: PathBuf,
 }
 
 const SKILLS_DEBOUNCE: Duration = Duration::from_secs(2);
@@ -419,6 +530,49 @@ fn is_skill_change_path(p: &Path) -> bool {
         || (p.extension().is_some_and(|e| e == "md")
             && p.parent()
                 .is_some_and(|par| par.file_name().is_some_and(|n| n == "commands")))
+}
+
+/// True if an event path is a project-instructions change worth reloading.
+///
+/// Accepts the **conservative superset** of what discovery may read: every
+/// filename in [`CompatConfig::agent_filenames`](alnair_tools::types::compat::CompatConfig::agent_filenames),
+/// plus any `*.md` directly inside a rules directory. Watching a superset is
+/// deliberate and follows the `SkillsFileWatcher` precedent: this watcher is
+/// leader-global and has no per-session compat resolved, so gating vendor
+/// surfaces here could permanently miss an edit if a toggle later flips.
+///
+/// A file that discovery would not actually read yields an unchanged content
+/// hash downstream ([`super::reloader`]), which suppresses the dispatch. That
+/// makes a false positive here cheap and a false negative permanent — hence
+/// the superset.
+fn is_agent_instructions_path(p: &Path) -> bool {
+    let name = p.file_name().and_then(|n| n.to_str());
+    // Filenames are compared case-sensitively, exactly as discovery does
+    // (`find_agent_files` joins the name and stats it), so `agents.md` on a
+    // case-sensitive filesystem is genuinely not a match.
+    const AGENT_FILENAMES: &[&str] = &[
+        "Agents.md",
+        "Claude.md",
+        "CLAUDE.md",
+        "CLAUDE.local.md",
+        "AGENT.md",
+        "AGENTS.md",
+    ];
+    if name.is_some_and(|n| AGENT_FILENAMES.contains(&n)) {
+        return true;
+    }
+    // `.claude/CLAUDE.md` and `.claude/CLAUDE.local.md` are matched by the
+    // filename arm above; the parent-dir check below covers the rules dirs.
+    let is_md = p.extension().is_some_and(|e| e == "md");
+    is_md
+        && p.parent().is_some_and(|par| {
+            matches!(par.file_name().and_then(|n| n.to_str()), Some("rules"))
+                && par
+                    .parent()
+                    .and_then(|gp| gp.file_name())
+                    .and_then(|n| n.to_str())
+                    .is_some_and(|n| matches!(n, ".alnair" | ".claude" | ".cursor"))
+        })
 }
 
 /// True for a global/home-level config dir that must never be watched
@@ -544,12 +698,104 @@ impl SkillsFileWatcher {
 
         tracing::info!(dirs = watched, "skills file watcher started");
 
+        // Dirs `start` installed belong to the process, not to a session: they
+        // are recorded so `watch_cwd` can skip a duplicate OS watch, but they
+        // are NOT refcounted (see the field docs).
+        let mut initial_dirs = HashSet::new();
+        for dir in dirs_to_watch {
+            initial_dirs.insert(dir);
+        }
+
         Some((
             Self {
-                _debouncer: debouncer,
+                debouncer,
+                watched_dirs: HashMap::new(),
+                initial_dirs,
+                alnair_home,
             },
             rx,
         ))
+    }
+
+    /// Register the skill config dirs for an additional session cwd.
+    ///
+    /// One leader serves every repo (the tab strip spans repositories), but
+    /// `start` resolves its directory set once from the *process* cwd. A session
+    /// opened in a different repo therefore had no watch on
+    /// `<other-repo>/.alnair/skills`, and adding a skill there needed a restart.
+    ///
+    /// Refcounted per directory: two sessions in sibling subdirectories of one
+    /// repo resolve the same `<repo>/.alnair`, so only the 0→1 transition
+    /// touches the OS watcher and only the 1→0 transition removes it. Dirs that
+    /// `start` already installed are counted but never re-watched or released.
+    ///
+    /// **Non-fatal.** A cwd with no config dirs, a missing directory, or an
+    /// exhausted inotify quota all log and continue — the session still works,
+    /// it just falls back to the explicit reload.
+    pub fn watch_cwd(&mut self, cwd: &Path) {
+        let dirs = alnair_agent::prompt::skills::collect_skill_config_dirs(
+            Some(cwd),
+            alnair_agent::prompt::workspace_user::optional_workspace_user_dir().as_deref(),
+            &self.alnair_home,
+            &[],
+            alnair_tools::types::compat::CompatConfig::default(),
+        );
+
+        for dir in dirs {
+            let count = self.watched_dirs.entry(dir.clone()).or_insert(0);
+            *count += 1;
+            if *count > 1 || self.initial_dirs.contains(&dir) {
+                continue;
+            }
+            if is_global_config_dir(&dir, &self.alnair_home) {
+                watch_skill_subdirs(&mut self.debouncer, &dir);
+            } else if let Err(e) = self
+                .debouncer
+                .watcher()
+                .watch(&dir, RecursiveMode::Recursive)
+            {
+                log_watch_error(&e, "failed to watch session cwd for skill changes");
+            }
+        }
+    }
+
+    /// Release the skill watches registered for `cwd` via [`Self::watch_cwd`].
+    ///
+    /// **Callers must ref-count**: only call this once the *last* session
+    /// sharing the cwd closes.
+    pub fn unwatch_cwd(&mut self, cwd: &Path) {
+        let dirs = alnair_agent::prompt::skills::collect_skill_config_dirs(
+            Some(cwd),
+            alnair_agent::prompt::workspace_user::optional_workspace_user_dir().as_deref(),
+            &self.alnair_home,
+            &[],
+            alnair_tools::types::compat::CompatConfig::default(),
+        );
+
+        for dir in dirs {
+            let Some(count) = self.watched_dirs.get_mut(&dir) else {
+                continue;
+            };
+            *count -= 1;
+            if *count > 0 {
+                continue;
+            }
+            self.watched_dirs.remove(&dir);
+            // Process-owned dirs stay installed for the process lifetime.
+            if self.initial_dirs.contains(&dir) {
+                continue;
+            }
+            if is_global_config_dir(&dir, &self.alnair_home) {
+                for sub in ["skills", "commands"] {
+                    let _ = self.debouncer.watcher().unwatch(&dir.join(sub));
+                }
+            } else if let Err(e) = self.debouncer.watcher().unwatch(&dir) {
+                tracing::debug!(
+                    error = %e, path = %dir.display(),
+                    "failed to unwatch session cwd for skill changes"
+                );
+            }
+        }
     }
 }
 
@@ -645,6 +891,94 @@ mod tests {
         assert!(
             rx.try_recv().is_ok(),
             "changes under <dir>/skills must trigger a skills reload"
+        );
+    }
+
+    /// One leader serves every repo, but `start` resolves its dirs from the
+    /// *process* cwd. `watch_cwd` must add a second repo's skills dirs so a
+    /// session opened elsewhere still hot-reloads skills — and must refcount
+    /// them, or the first session to close would tear the watch out from under
+    /// its siblings.
+    #[test]
+    fn skills_watch_cwd_is_refcounted() {
+        let alnair_home = TempDir::new().unwrap();
+        let repo = TempDir::new().unwrap();
+        git2::Repository::init(repo.path()).unwrap();
+        let a = repo.path().join("a");
+        let b = repo.path().join("b");
+        let skills = repo.path().join(".alnair").join("skills").join("alpha");
+        fs::create_dir_all(&a).unwrap();
+        fs::create_dir_all(&b).unwrap();
+        fs::create_dir_all(&skills).unwrap();
+        fs::write(skills.join("SKILL.md"), "# alpha").unwrap();
+
+        let (mut watcher, _rx) = SkillsFileWatcher::start(Some(a.as_path()), None, &[])
+            .expect("skills watcher should start");
+
+        // Both sibling sessions resolve the same <repo>/.alnair.
+        watcher.watch_cwd(&a);
+        watcher.watch_cwd(&b);
+
+        let repo_alnair = repo.path().join(".alnair");
+        let count_for_repo = |w: &SkillsFileWatcher| {
+            w.watched_dirs
+                .iter()
+                .filter(|(p, _)| p.file_name() == repo_alnair.file_name())
+                .map(|(_, c)| *c)
+                .max()
+                .unwrap_or(0)
+        };
+        assert_eq!(
+            count_for_repo(&watcher),
+            2,
+            "both sessions must reference the shared <repo>/.alnair"
+        );
+
+        watcher.unwatch_cwd(&a);
+        assert_eq!(
+            count_for_repo(&watcher),
+            1,
+            "the shared repo dir must stay watched while a session still needs it"
+        );
+
+        watcher.unwatch_cwd(&b);
+        assert!(
+            !watcher
+                .watched_dirs
+                .iter()
+                .any(|(p, _)| p.file_name() == repo_alnair.file_name()),
+            "the last unwatch releases the shared dir"
+        );
+    }
+
+    /// Dirs `start` installed belong to the process. A session opening in the
+    /// same cwd must not install a second OS watch, and closing must not
+    /// release the process's own watch — that is the bug an earlier
+    /// "seed the refcount from start" version had: the count never reached 0.
+    #[test]
+    fn skills_watch_cwd_does_not_release_process_owned_dirs() {
+        let alnair_home = TempDir::new().unwrap();
+        let repo = TempDir::new().unwrap();
+        git2::Repository::init(repo.path()).unwrap();
+        let skills = repo.path().join(".alnair").join("skills").join("alpha");
+        fs::create_dir_all(&skills).unwrap();
+        fs::write(skills.join("SKILL.md"), "# alpha").unwrap();
+
+        let (mut watcher, _rx) =
+            SkillsFileWatcher::start(Some(repo.path()), None, &[]).expect("watcher should start");
+
+        let repo_alnair = repo.path().join(".alnair");
+        assert!(
+            watcher.initial_dirs.contains(&repo_alnair),
+            "start must record the dirs it owns"
+        );
+
+        watcher.watch_cwd(repo.path());
+        watcher.unwatch_cwd(repo.path());
+
+        assert!(
+            watcher.initial_dirs.contains(&repo_alnair),
+            "a session closing must not release a process-owned watch"
         );
     }
 
@@ -1061,5 +1395,184 @@ mod tests {
         assert!(!watcher.watched_cwds.contains(p));
         watcher.unwatch_path(p);
         assert!(!watcher.watched_cwds.contains(p));
+    }
+
+    /// The predicate must accept every filename discovery can read, plus rules
+    /// `*.md`, and reject ordinary source files and skill files (those route
+    /// through [`is_skill_change_path`] instead).
+    #[test]
+    fn is_agent_instructions_path_accepts_known_filenames() {
+        for name in [
+            "Agents.md",
+            "Claude.md",
+            "CLAUDE.md",
+            "CLAUDE.local.md",
+            "AGENT.md",
+            "AGENTS.md",
+        ] {
+            assert!(
+                is_agent_instructions_path(Path::new("/repo").join(name).as_path()),
+                "{name} must be recognized as project instructions"
+            );
+        }
+
+        for vendor in [".alnair", ".claude", ".cursor"] {
+            let p = PathBuf::from("/repo")
+                .join(vendor)
+                .join("rules")
+                .join("style.md");
+            assert!(
+                is_agent_instructions_path(&p),
+                "{vendor}/rules/*.md must be recognized"
+            );
+        }
+
+        for other in [
+            "/repo/src/main.rs",
+            "/repo/skills/x/SKILL.md",
+            "/repo/README.md",
+            "/repo/.claude/settings.json",
+            "/repo/rules/style.md",
+        ] {
+            assert!(
+                !is_agent_instructions_path(Path::new(other)),
+                "{other} must not be treated as project instructions"
+            );
+        }
+    }
+
+    /// A write to `<cwd>/AGENTS.md` must surface as
+    /// `AgentInstructionsChanged` — the detection half of the hot-reload path.
+    #[test]
+    #[cfg_attr(
+        target_os = "macos",
+        ignore = "flaky on macOS: FSEvents does not reliably deliver events in test harness"
+    )]
+    fn watcher_detects_agents_md_change() {
+        let alnair_home = TempDir::new().unwrap();
+        let cwd = TempDir::new().unwrap();
+        fs::write(cwd.path().join("AGENTS.md"), "# v1").unwrap();
+
+        let (_w, mut rx) = ConfigFileWatcher::start(
+            alnair_home.path(),
+            &[],
+            Some(cwd.path()),
+            Some(Duration::from_millis(100)),
+        )
+        .expect("watcher should start");
+
+        fs::write(cwd.path().join("AGENTS.md"), "# v2").unwrap();
+
+        let deadline = std::time::Instant::now() + Duration::from_secs(2);
+        let mut found = false;
+        while std::time::Instant::now() < deadline {
+            if let Ok(evt) = rx.try_recv()
+                && matches!(evt, ConfigChangeEvent::AgentInstructionsChanged { .. })
+            {
+                found = true;
+                break;
+            }
+            wait_ms(50);
+        }
+        assert!(
+            found,
+            "expected AgentInstructionsChanged for <cwd>/AGENTS.md within 2s"
+        );
+    }
+
+    /// Discovery walks cwd→git root, so an `AGENTS.md` in an ancestor
+    /// directory is part of the session's instructions. The ancestor watches
+    /// exist precisely so editing it is observed.
+    #[test]
+    #[cfg_attr(
+        target_os = "macos",
+        ignore = "flaky on macOS: FSEvents does not reliably deliver events in test harness"
+    )]
+    fn watcher_detects_ancestor_agents_md_change() {
+        let alnair_home = TempDir::new().unwrap();
+        let repo = TempDir::new().unwrap();
+        git2::Repository::init(repo.path()).unwrap();
+        let nested = repo.path().join("crates").join("inner");
+        fs::create_dir_all(&nested).unwrap();
+        fs::write(repo.path().join("AGENTS.md"), "# root v1").unwrap();
+
+        let (_w, mut rx) = ConfigFileWatcher::start(
+            alnair_home.path(),
+            &[],
+            Some(nested.as_path()),
+            Some(Duration::from_millis(100)),
+        )
+        .expect("watcher should start");
+
+        fs::write(repo.path().join("AGENTS.md"), "# root v2").unwrap();
+
+        let deadline = std::time::Instant::now() + Duration::from_secs(2);
+        let mut found = false;
+        while std::time::Instant::now() < deadline {
+            if let Ok(evt) = rx.try_recv()
+                && matches!(evt, ConfigChangeEvent::AgentInstructionsChanged { .. })
+            {
+                found = true;
+                break;
+            }
+            wait_ms(50);
+        }
+        assert!(
+            found,
+            "expected AgentInstructionsChanged for the repo-root AGENTS.md \
+             when the session cwd is nested below it"
+        );
+    }
+
+    /// Two sessions in one repo share the ancestor chain. The first
+    /// `unwatch_path` must not tear the repo-root watch out from under the
+    /// second.
+    #[test]
+    fn ancestor_watch_refcount_survives_sibling_unwatch() {
+        let alnair_home = TempDir::new().unwrap();
+        let repo = TempDir::new().unwrap();
+        git2::Repository::init(repo.path()).unwrap();
+        let a = repo.path().join("a");
+        let b = repo.path().join("b");
+        fs::create_dir_all(&a).unwrap();
+        fs::create_dir_all(&b).unwrap();
+
+        let (mut watcher, _rx) = ConfigFileWatcher::start(
+            alnair_home.path(),
+            &[],
+            None,
+            Some(Duration::from_millis(50)),
+        )
+        .expect("watcher should start");
+
+        watcher.watch_path(&a);
+        watcher.watch_path(&b);
+
+        let root = dunce::canonicalize(repo.path()).unwrap();
+        let count_for_root = || {
+            watcher
+                .ancestor_watch_refs
+                .iter()
+                .filter(|(p, _)| p.file_name() == root.file_name())
+                .map(|(_, c)| *c)
+                .max()
+                .unwrap_or(0)
+        };
+        assert!(
+            count_for_root() >= 2,
+            "both sessions must reference the shared repo root"
+        );
+
+        watcher.unwatch_path(&a);
+        assert!(
+            watcher.ancestor_watch_refs.values().any(|c| *c >= 1),
+            "the repo root must stay watched while one session still needs it"
+        );
+
+        watcher.unwatch_path(&b);
+        assert!(
+            watcher.ancestor_watch_refs.is_empty(),
+            "the last unwatch must release every ancestor watch"
+        );
     }
 }

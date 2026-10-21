@@ -753,7 +753,13 @@ mod tests {
 
         match result {
             BashToolOutput::Bash(bash) => {
-                assert_eq!(bash.output_file, "/sessions/abc/terminal/my-call-42.log");
+                // `session_folder.join("terminal").join(…)` renders with the
+                // NATIVE separator, so the expectation is built the same way
+                // rather than hardcoding a `/`-joined literal.
+                let expected = PathBuf::from("/sessions/abc")
+                    .join("terminal")
+                    .join("my-call-42.log");
+                assert_eq!(bash.output_file, expected.to_string_lossy());
             }
             BashToolOutput::BackgroundTaskStarted(_) => panic!("Expected foreground output"),
         }

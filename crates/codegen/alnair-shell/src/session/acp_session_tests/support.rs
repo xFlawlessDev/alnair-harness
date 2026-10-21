@@ -77,7 +77,11 @@ async fn test_agent_from_config(
     let ctx = SessionContext {
         backend,
         fs,
-        cwd: std::path::PathBuf::from("/tmp"),
+        // Absolute on every platform: `/tmp` is relative on Windows, and the
+        // session directory is derived from this cwd — a relative value made
+        // `session_dir` resolve somewhere unrelated to `env::temp_dir()`, so
+        // tests comparing rescued artifact paths disagreed with production.
+        cwd: std::env::temp_dir(),
         session_folder: std::env::temp_dir().join("alnair-test"),
         session_env: std::sync::Arc::new(std::collections::HashMap::new()),
         notification_handle: ToolNotificationHandle::noop(),
@@ -137,7 +141,11 @@ pub(crate) async fn create_test_actor_ex(
     SessionActor,
     tokio::sync::mpsc::UnboundedReceiver<SessionEvent>,
 ) {
-    let cwd = alnair_paths::AbsPathBuf::new(std::path::PathBuf::from("/tmp")).unwrap();
+    // `AbsPathBuf::new` rejects non-absolute input, and `/tmp` is not absolute
+    // on Windows. `temp_dir()` is absolute on every platform, so this keeps the
+    // helper (and every test built on it) runnable on Windows instead of
+    // panicking in setup.
+    let cwd = alnair_paths::AbsPathBuf::new(std::env::temp_dir()).unwrap();
     let fs = Arc::new(alnair_workspace::file_system::MockFs::new(
         cwd.to_path_buf(),
     ));
@@ -260,6 +268,7 @@ pub(crate) async fn create_test_actor_ex(
         max_turns: None,
         pending_interjections: InterjectionBuffer::new(),
         pending_skill_reminders: Mutex::new(Vec::new()),
+        pending_project_instructions: Mutex::new(None),
         idle_flush_timeout: None,
         dream_check_timeout: None,
         last_idle_flush_conversation_len: std::sync::atomic::AtomicUsize::new(0),
@@ -280,17 +289,25 @@ pub(crate) async fn create_test_actor_ex(
         turn_start_prompt_mode: parking_lot::Mutex::new(PromptMode::Agent),
         turn_prompt_mode: Arc::new(parking_lot::Mutex::new(PromptMode::Agent)),
         plan_mode: Arc::new(parking_lot::Mutex::new(
-            crate::session::plan_mode::PlanModeTracker::new(std::path::PathBuf::from(
-                "/tmp/test-session",
-            )),
+            // Platform-absolute: a hardcoded `/tmp/...` is a *relative* path on
+            // Windows, so the rejection text and the plan-file carve-out would
+            // disagree on the separator.
+            crate::session::plan_mode::PlanModeTracker::new(
+                std::env::temp_dir().join("test-session"),
+            ),
         )),
         goal_enabled: false,
         goal_harness_enabled: std::sync::atomic::AtomicBool::new(false),
         goal_harness_availability_reconciled: std::sync::atomic::AtomicBool::new(false),
         goal_tracker: Arc::new(parking_lot::Mutex::new(
-            crate::session::goal_tracker::GoalTracker::new(std::path::PathBuf::from(
-                "/tmp/test-session",
-            )),
+            // Rooted under the platform temp dir: the goal tracker derives its
+            // `goal/` artifact dir from this, and the classifier's rescue path
+            // compares against `env::temp_dir()`-rooted scratch. A hardcoded
+            // `/tmp/test-session` is not absolute on Windows, so the two never
+            // agreed and the rescue silently no-opped.
+            crate::session::goal_tracker::GoalTracker::new(
+                std::env::temp_dir().join("test-session"),
+            ),
         )),
         graph_enabled: false,
         graph_tracker: Arc::new(parking_lot::Mutex::new(

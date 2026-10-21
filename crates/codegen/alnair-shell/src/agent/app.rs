@@ -160,6 +160,359 @@ pub(crate) async fn run_auto_update_checker(
     }
 }
 
+/// Forward [`ConfigUpdate`]s to an agent that has **no ACP inbound stream** —
+/// the in-process TUI transport, where RPC is dispatched directly over an `Rc`.
+///
+/// Mirrors [`run_config_update_dispatch`] arm for arm, but calls
+/// [`MvpAgent::dispatch_internal`] instead of writing a request line. Kept as a
+/// separate function rather than a generic over the transport because the two
+/// paths genuinely differ (the stream path also forwards UI notifications to
+/// IPC clients, which the in-process path has no equivalent of).
+pub async fn run_config_update_dispatch_direct(
+    mut updates: mpsc::UnboundedReceiver<crate::config::reloader::ConfigUpdate>,
+    auth_manager: Arc<AuthManager>,
+    models_manager: crate::agent::models::ModelsManager,
+    agent: Rc<MvpAgent>,
+) {
+    use crate::config::reloader::ConfigUpdate;
+    while let Some(update) = updates.recv().await {
+        // Method + params for the arms that map 1:1 onto an extension call.
+        // The rest (auth, UI, informational) have no request to forward.
+        let call: Option<(&str, serde_json::Value)> = match update {
+            ConfigUpdate::Auth(auth) => {
+                info!(
+                    key_len = auth.key.len(),
+                    expires_at = ?auth.expires_at,
+                    "Auth token hot-reloaded from config watcher"
+                );
+                auth_manager.hot_swap(*auth);
+                models_manager.on_auth_changed().await;
+                Some((
+                    "alnair/internal/reload_all_mcp_servers",
+                    serde_json::json!({}),
+                ))
+            }
+            ConfigUpdate::AuthCleared => {
+                auth_manager.clear_in_memory();
+                models_manager.on_auth_changed().await;
+                info!("Auth cleared by config watcher");
+                None
+            }
+            ConfigUpdate::McpServersChanged => {
+                info!("MCP server config change detected — reloading active sessions");
+                Some((
+                    "alnair/internal/reload_all_mcp_servers",
+                    serde_json::json!({}),
+                ))
+            }
+            ConfigUpdate::ProjectMcpServersChanged { cwd } => {
+                info!(
+                    cwd = %cwd.display(),
+                    "project MCP config change detected — reloading matching sessions"
+                );
+                Some((
+                    "alnair/internal/reload_project_mcp_servers",
+                    serde_json::json!({ "cwd": cwd.to_string_lossy() }),
+                ))
+            }
+            ConfigUpdate::AgentInstructionsChanged { cwd } => {
+                info!(
+                    cwd = %cwd.display(),
+                    "project instructions change detected — reloading matching sessions"
+                );
+                Some((
+                    "alnair/internal/reload_project_instructions",
+                    serde_json::json!({ "cwd": cwd.to_string_lossy() }),
+                ))
+            }
+            ConfigUpdate::ModelsChanged => {
+                info!("Model config change detected — reloading agent model list");
+                Some(("alnair/internal/reload_models", serde_json::json!({})))
+            }
+            ConfigUpdate::ModelsCacheChanged => {
+                info!("Models cache change detected — reloading agent model catalog");
+                Some(("alnair/internal/reload_models_cache", serde_json::json!({})))
+            }
+            ConfigUpdate::Memory(mem) => {
+                info!(
+                    enabled = mem.enabled,
+                    "Memory config change detected by watcher"
+                );
+                None
+            }
+            ConfigUpdate::Skills(skills) => {
+                info!(
+                    paths = skills.paths.len(),
+                    "Skills config change detected by watcher"
+                );
+                None
+            }
+            ConfigUpdate::Compat(_compat) => {
+                info!(
+                    "Compat config change detected by watcher \
+                     (applies on next agent rebuild)"
+                );
+                None
+            }
+            ConfigUpdate::Ui { .. } => {
+                // No IPC client to notify: the in-process pager owns the UI
+                // state directly and re-reads its appearance config itself.
+                info!("UI config change detected by watcher");
+                None
+            }
+        };
+
+        if let Some((method, params)) = call
+            && let Err(e) = agent.dispatch_internal(method, params).await
+        {
+            warn!(error = ?e, method, "in-process config reload dispatch failed");
+        }
+    }
+}
+
+/// Start the config file watcher for `cwd` and spawn the reloader that diffs
+/// its events. Returns the watcher (must be kept alive) plus the receiver the
+/// caller forwards to [`run_config_update_dispatch`].
+///
+/// Shared by the leader and the stdio/in-process entrypoints. Without this the
+/// non-leader paths had no config hot-reload at all: `ConfigFileWatcher::start`
+/// was reachable only from `run_leader`, so `--no-leader`, `alnair agent stdio`
+/// and the in-process TUI silently required a restart for every config edit.
+pub fn start_config_hot_reload(
+    agent_config: &AgentConfig,
+    cwd: &std::path::Path,
+    cancel: &tokio_util::sync::CancellationToken,
+) -> Option<(
+    crate::config::watcher::ConfigFileWatcher,
+    mpsc::UnboundedReceiver<crate::config::reloader::ConfigUpdate>,
+)> {
+    let mut watch_paths = crate::config::find_project_configs(cwd);
+    watch_paths.extend(crate::util::config::mcp_json_candidate_paths(cwd));
+    if let Some(home) = dirs::home_dir() {
+        watch_paths.push(home.join(".claude.json"));
+    }
+    let auth_scope = agent_config.kimi_code_config.auth_scope();
+    // Gated on user_alnair_home() so a cwd-relative .alnair/auth.json is never
+    // read as the user auth store when no home resolves.
+    let initial_auth_key_hash = alnair_config::user_alnair_home()
+        .map(|g| g.join("auth.json"))
+        .and_then(|auth_path| crate::auth::read_auth_json(&auth_path).ok())
+        .and_then(|store| {
+            crate::auth::lookup_auth(&store, &auth_scope)
+                .map(|a| crate::config::reloader::hash_auth_key(&a.key))
+        })
+        .unwrap_or(0);
+
+    let (config_update_tx, config_update_rx) =
+        mpsc::unbounded_channel::<crate::config::reloader::ConfigUpdate>();
+    let (watcher, events_rx) = crate::config::watcher::ConfigFileWatcher::start(
+        &alnair_home::alnair_home(),
+        &watch_paths,
+        Some(cwd),
+        None,
+    )?;
+
+    let initial_config = crate::config::load_effective_config()
+        .unwrap_or_else(|_| toml::Value::Table(toml::map::Map::new()));
+    let reloader = crate::config::reloader::ConfigReloader::new(
+        alnair_home::alnair_home(),
+        initial_auth_key_hash,
+        initial_config,
+        auth_scope,
+        None,
+        config_update_tx,
+        agent_config.cli_experimental_memory,
+        agent_config.cli_no_memory,
+    );
+    tokio::spawn(reloader.run(events_rx, cancel.clone()));
+    Some((watcher, config_update_rx))
+}
+
+/// Forward [`ConfigUpdate`]s into the agent's ACP stream (and, for UI settings,
+/// the IPC stream). One implementation shared by every entrypoint so a new
+/// reload kind cannot work in leader mode but silently no-op elsewhere.
+async fn run_config_update_dispatch<W>(
+    mut updates: mpsc::UnboundedReceiver<crate::config::reloader::ConfigUpdate>,
+    auth_manager: Arc<AuthManager>,
+    models_manager: crate::agent::models::ModelsManager,
+    acp_incoming_tx: Arc<TokioMutex<W>>,
+    ipc_tx: Option<mpsc::UnboundedSender<String>>,
+) where
+    W: tokio::io::AsyncWrite + Unpin + Send + 'static,
+{
+    use crate::config::reloader::ConfigUpdate;
+    while let Some(update) = updates.recv().await {
+        match update {
+            ConfigUpdate::Auth(auth) => {
+                info!(
+                    key_len = auth.key.len(),
+                    expires_at = ?auth.expires_at,
+                    "Auth token hot-reloaded from config watcher"
+                );
+                alnair_log::unified_log::info(
+                    "auth hot-swapped from disk",
+                    None,
+                    Some(serde_json::json!({
+                        "key_len": auth.key.len(),
+                        "expires_at": auth.expires_at.map(|e| e.to_rfc3339()),
+                    })),
+                );
+                auth_manager.hot_swap(*auth);
+                models_manager.on_auth_changed().await;
+                let line = internal_reload_request_line(
+                    "config-auth-reloaded",
+                    "alnair/internal/reload_all_mcp_servers",
+                    serde_json::json!({}),
+                );
+                let mut tx = acp_incoming_tx.lock().await;
+                if let Err(e) = tx.write_all(line.as_bytes()).await {
+                    warn!(error = %e, "failed to inject MCP reload after auth hot-swap");
+                }
+            }
+            ConfigUpdate::AuthCleared => {
+                auth_manager.clear_in_memory();
+                models_manager.on_auth_changed().await;
+                alnair_log::unified_log::warn("auth cleared from disk", None, None);
+                info!("Auth cleared by config watcher");
+            }
+            ConfigUpdate::McpServersChanged => {
+                info!("MCP server config change detected — reloading active sessions");
+                let line = internal_reload_request_line(
+                    "config-reload-mcp",
+                    "alnair/internal/reload_all_mcp_servers",
+                    serde_json::json!({}),
+                );
+                let mut tx = acp_incoming_tx.lock().await;
+                if let Err(e) = tx.write_all(line.as_bytes()).await {
+                    warn!(error = %e, "failed to inject MCP reload into ACP stream");
+                }
+            }
+            ConfigUpdate::ProjectMcpServersChanged { cwd } => {
+                // Scope the reload to sessions whose cwd matches `cwd` (or is a
+                // descendant). The actual filtering happens in
+                // `handle_reload_project_mcp_servers` (extensions/session_admin.rs)
+                // — this arm just injects the ACP method with the cwd as a param.
+                info!(
+                    cwd = %cwd.display(),
+                    "project MCP config change detected — reloading matching sessions"
+                );
+                let line = internal_reload_request_line(
+                    "config-reload-project-mcp",
+                    "alnair/internal/reload_project_mcp_servers",
+                    serde_json::json!({ "cwd": cwd.to_string_lossy() }),
+                );
+                let mut tx = acp_incoming_tx.lock().await;
+                if let Err(e) = tx.write_all(line.as_bytes()).await {
+                    warn!(
+                        error = %e,
+                        "failed to inject project MCP reload into ACP stream"
+                    );
+                }
+            }
+            ConfigUpdate::AgentInstructionsChanged { cwd } => {
+                // Conversation-state reload, deliberately kept off the MCP
+                // path: re-reading AGENTS.md must not tear down and rebuild MCP
+                // servers. Same cwd scoping as the project MCP arm — the
+                // session-side handler filters, this arm only injects.
+                info!(
+                    cwd = %cwd.display(),
+                    "project instructions change detected — reloading matching sessions"
+                );
+                let line = internal_reload_request_line(
+                    "config-reload-project-instructions",
+                    "alnair/internal/reload_project_instructions",
+                    serde_json::json!({ "cwd": cwd.to_string_lossy() }),
+                );
+                let mut tx = acp_incoming_tx.lock().await;
+                if let Err(e) = tx.write_all(line.as_bytes()).await {
+                    warn!(
+                        error = %e,
+                        "failed to inject project instructions reload into ACP stream"
+                    );
+                }
+            }
+            ConfigUpdate::ModelsChanged => {
+                info!("Model config change detected — reloading agent model list");
+                let line = internal_reload_request_line(
+                    "config-reload-models",
+                    "alnair/internal/reload_models",
+                    serde_json::json!({}),
+                );
+                let mut tx = acp_incoming_tx.lock().await;
+                if let Err(e) = tx.write_all(line.as_bytes()).await {
+                    warn!(error = %e, "failed to inject model reload into ACP stream");
+                }
+            }
+            ConfigUpdate::ModelsCacheChanged => {
+                // External write to ~/.alnair/models_cache.json (another alnair
+                // process fetched a fresher /v1/models catalog). Injected into
+                // the agent's ACP stream — NOT applied directly on the manager —
+                // so it is serialized behind any `reload_models` from the same
+                // watcher batch: the `ModelsChanged` arm above only *injects* a
+                // request that completes asynchronously, and a direct call here
+                // could rebuild the catalog and notify clients before
+                // `apply_config` decided to accept or reject the new config. The
+                // agent processes stream requests in order, eliminating that
+                // interleaving. `reload_from_disk_cache` still content-dedupes
+                // the leader's own cache writes.
+                info!("Models cache change detected — reloading agent model catalog");
+                let line = internal_reload_request_line(
+                    "config-reload-models-cache",
+                    "alnair/internal/reload_models_cache",
+                    serde_json::json!({}),
+                );
+                let mut tx = acp_incoming_tx.lock().await;
+                if let Err(e) = tx.write_all(line.as_bytes()).await {
+                    warn!(
+                        error = %e,
+                        "failed to inject models-cache reload into ACP stream"
+                    );
+                }
+            }
+            ConfigUpdate::Memory(mem) => {
+                info!(
+                    enabled = mem.enabled,
+                    "Memory config change detected by watcher"
+                );
+            }
+            ConfigUpdate::Skills(skills) => {
+                info!(
+                    paths = skills.paths.len(),
+                    "Skills config change detected by watcher"
+                );
+            }
+            ConfigUpdate::Compat(_compat) => {
+                info!(
+                    "Compat config change detected by watcher \
+                     (applies on next agent rebuild)"
+                );
+            }
+            ConfigUpdate::Ui {
+                theme,
+                yolo,
+                fork_secondary_model,
+            } => {
+                info!("UI config change detected by watcher");
+                let notification = serde_json::json!({
+                    "jsonrpc": "2.0",
+                    "method": "alnair/config_changed",
+                    "params": {
+                        "section": "ui",
+                        "changes": {
+                            "theme": theme,
+                            "yolo": yolo,
+                            "fork_secondary_model": fork_secondary_model,
+                        }
+                    }
+                });
+                if let Some(ref ipc) = ipc_tx {
+                    let _ = ipc.send(notification.to_string());
+                }
+            }
+        }
+    }
+}
+
 /// Prefetch models from the API (must be called outside LocalSet).
 async fn prefetch_models(agent_config: &AgentConfig) -> Option<IndexMap<String, ModelEntry>> {
     let auth = agent_config.create_auth_manager().current();
@@ -243,7 +596,7 @@ fn internal_reload_request_line(id: &str, method: &str, params: serde_json::Valu
 fn spawn_skills_file_watcher<W>(
     acp_incoming_tx: &Arc<TokioMutex<W>>,
     skills_paths: &[String],
-) -> Option<crate::config::watcher::SkillsFileWatcher>
+) -> Option<Rc<std::cell::RefCell<crate::config::watcher::SkillsFileWatcher>>>
 where
     W: tokio::io::AsyncWrite + Unpin + Send + 'static,
 {
@@ -254,6 +607,9 @@ where
         workspace_user_dir.as_deref(),
         skills_paths,
     )?;
+    // Shared so the leader's cwd drain can register additional session cwds on
+    // the same watcher (one leader serves every repo).
+    let watcher = Rc::new(std::cell::RefCell::new(watcher));
     let skills_tx = acp_incoming_tx.clone();
     tokio::spawn(async move {
         while skills_rx.recv().await.is_some() {
@@ -273,6 +629,27 @@ where
         }
     });
     Some(watcher)
+}
+
+/// Start a skills file watcher for the **direct-dispatch** (in-process)
+/// transport, where there is no ACP inbound stream to inject into.
+///
+/// Returns the watcher guard plus the signal receiver; the caller spawns the
+/// drain loop on the agent's own local set and calls
+/// [`MvpAgent::dispatch_internal`] on each tick.
+pub fn start_skills_watch_direct(
+    skills_paths: &[String],
+) -> Option<(
+    crate::config::watcher::SkillsFileWatcher,
+    mpsc::UnboundedReceiver<()>,
+)> {
+    let cwd = std::env::current_dir().unwrap_or_default();
+    let workspace_user_dir = alnair_agent::prompt::workspace_user::optional_workspace_user_dir();
+    crate::config::watcher::SkillsFileWatcher::start(
+        Some(cwd.as_path()),
+        workspace_user_dir.as_deref(),
+        skills_paths,
+    )
 }
 
 /// Register the process-lifetime runtime so shared filesystem watchers
@@ -350,7 +727,7 @@ pub async fn run_stdio_agent(
     let result = local_set
         .run_until(async move {
             // Shut down the simplex writer on the LocalSet so it's cooperative with ACP handlers.
-            let simplex_tx = acp_incoming_tx;
+            let simplex_tx = acp_incoming_tx.clone();
             tokio::task::spawn_local(async move {
                 let _ = stdin_closed_rx.await;
                 tokio::time::sleep(Duration::from_millis(100)).await;
@@ -372,6 +749,45 @@ pub async fn run_stdio_agent(
 
             // Restore managed policy right before bootstrap reads it (no stale window after prefetch).
             crate::managed_config::ensure_managed_policy_present(&auth_manager).await;
+
+            // Config hot-reload. This entrypoint previously had none, so every
+            // config.toml / AGENTS.md edit required a restart unless the user
+            // happened to be running under a leader.
+            let cwd_for_watcher = std::env::current_dir().unwrap_or_default();
+            let hot_reload_cancel = tokio_util::sync::CancellationToken::new();
+            let _config_watcher = match start_config_hot_reload(
+                &agent_config,
+                &cwd_for_watcher,
+                &hot_reload_cancel,
+            ) {
+                Some((watcher, updates)) => {
+                    // The dispatch needs a models manager for the auth-change
+                    // arms. `spawn_agent_local` builds its own, so share the
+                    // same bootstrap product rather than creating a second,
+                    // divergent catalog.
+                    let models_manager =
+                        match bootstrap(&agent_config, &auth_manager, prefetched_models.clone()) {
+                            Ok((_, mgr)) => mgr,
+                            Err(e) => {
+                                warn!(error = %e, "hot-reload models manager bootstrap failed");
+                                return Err(anyhow::anyhow!(e));
+                            }
+                        };
+                    tokio::task::spawn_local(run_config_update_dispatch(
+                        updates,
+                        auth_manager.clone(),
+                        models_manager,
+                        acp_incoming_tx.clone(),
+                        None,
+                    ));
+                    Some(watcher)
+                }
+                None => {
+                    warn!("Config file watcher failed to start; hot-reload disabled");
+                    None
+                }
+            };
+
             let handle_io = spawn_agent_local(
                 agent_config,
                 auth_manager,
@@ -811,6 +1227,9 @@ pub async fn run_leader(
             // switch for the rollout).
             let watcher_cwd = recursive_config_watch_enabled.then_some(cwd_for_watcher.as_path());
 
+            let skills_watcher_handle =
+                spawn_skills_file_watcher(&acp_incoming_tx, &agent_config.skills.paths);
+
             let _config_watcher = if let Some((watcher, events_rx)) =
                 crate::config::watcher::ConfigFileWatcher::start(
                     &alnair_home::alnair_home(),
@@ -823,6 +1242,7 @@ pub async fn run_leader(
                 // is safe because both ends live inside the leader's `LocalSet`
                 // — the watcher type is not `Sync`-needed.
                 let watcher = std::rc::Rc::new(std::cell::RefCell::new(watcher));
+                let skills_for_drain = skills_watcher_handle.clone();
 
                 // Dynamic registration drain. Lives only when the
                 // recursive_config_watch flag is on AND the OS watcher started.
@@ -837,7 +1257,18 @@ pub async fn run_leader(
                                 biased;
                                 _ = cancel_for_drain.cancelled() => break,
                                 cwd = rx.recv() => match cwd {
-                                    Some(cwd) => watcher_for_drain.borrow_mut().watch_path(&cwd),
+                                    Some(cwd) => {
+                                        watcher_for_drain.borrow_mut().watch_path(&cwd);
+                                        // Same session cwd, second watcher: one
+                                        // leader serves every repo, so skills
+                                        // for a repo other than the leader's own
+                                        // cwd must be watched too. Without this
+                                        // a skill added in another repo needed a
+                                        // restart.
+                                        if let Some(skills) = skills_for_drain.as_ref() {
+                                            skills.borrow_mut().watch_cwd(&cwd);
+                                        }
+                                    }
                                     None => break,
                                 },
                             }
@@ -863,168 +1294,14 @@ pub async fn run_leader(
                 None
             };
 
-            let _skills_watcher =
-                spawn_skills_file_watcher(&acp_incoming_tx, &agent_config.skills.paths);
-
             let ipc_tx_for_config = agent_to_ipc_tx.clone();
-            let acp_tx_for_config = acp_incoming_tx.clone();
-            tokio::task::spawn_local(async move {
-                use crate::config::reloader::ConfigUpdate;
-                while let Some(update) = config_update_rx.recv().await {
-                    match update {
-                        ConfigUpdate::Auth(auth) => {
-                            info!(
-                                key_len = auth.key.len(),
-                                expires_at = ?auth.expires_at,
-                                "Auth token hot-reloaded from config watcher"
-                            );
-                            alnair_log::unified_log::info(
-                                "auth hot-swapped from disk",
-                                None,
-                                Some(serde_json::json!({
-                                    "key_len": auth.key.len(),
-                                    "expires_at": auth.expires_at.map(|e| e.to_rfc3339()),
-                                })),
-                            );
-                            auth_manager_for_config.hot_swap(*auth);
-                            models_manager_for_config.on_auth_changed().await;
-                            let line = internal_reload_request_line(
-                                "config-auth-reloaded",
-                                "alnair/internal/reload_all_mcp_servers",
-                                serde_json::json!({}),
-                            );
-                            let mut tx = acp_tx_for_config.lock().await;
-                            if let Err(e) = tx.write_all(line.as_bytes()).await {
-                                warn!(error = %e, "failed to inject MCP reload after auth hot-swap");
-                            }
-                        }
-                        ConfigUpdate::AuthCleared => {
-                            auth_manager_for_config.clear_in_memory();
-                            models_manager_for_config.on_auth_changed().await;
-                            alnair_log::unified_log::warn(
-                                "auth cleared from disk",
-                                None,
-                                None,
-                            );
-                            info!("Auth cleared by config watcher");
-                        }
-                        ConfigUpdate::McpServersChanged => {
-                            info!("MCP server config change detected — reloading active sessions");
-                            let line = internal_reload_request_line(
-                                "config-reload-mcp",
-                                "alnair/internal/reload_all_mcp_servers",
-                                serde_json::json!({}),
-                            );
-                            let mut tx = acp_tx_for_config.lock().await;
-                            if let Err(e) = tx.write_all(line.as_bytes()).await {
-                                warn!(error = %e, "failed to inject MCP reload into ACP stream");
-                            }
-                        }
-                        ConfigUpdate::ProjectMcpServersChanged { cwd } => {
-                            // Scope the reload to sessions whose cwd matches
-                            // `cwd` (or is a descendant). The actual filtering
-                            // happens in `handle_reload_project_mcp_servers`
-                            // (extensions/session_admin.rs) — this arm just
-                            // injects the ACP method with the cwd as a param.
-                            info!(
-                                cwd = %cwd.display(),
-                                "project MCP config change detected — reloading matching sessions"
-                            );
-                            let line = internal_reload_request_line(
-                                "config-reload-project-mcp",
-                                "alnair/internal/reload_project_mcp_servers",
-                                serde_json::json!({ "cwd": cwd.to_string_lossy() }),
-                            );
-                            let mut tx = acp_tx_for_config.lock().await;
-                            if let Err(e) = tx.write_all(line.as_bytes()).await {
-                                warn!(
-                                    error = %e,
-                                    "failed to inject project MCP reload into ACP stream"
-                                );
-                            }
-                        }
-                        ConfigUpdate::ModelsChanged => {
-                            info!("Model config change detected — reloading agent model list");
-                            let line = internal_reload_request_line(
-                                "config-reload-models",
-                                "alnair/internal/reload_models",
-                                serde_json::json!({}),
-                            );
-                            let mut tx = acp_tx_for_config.lock().await;
-                            if let Err(e) = tx.write_all(line.as_bytes()).await {
-                                warn!(error = %e, "failed to inject model reload into ACP stream");
-                            }
-                        }
-                        ConfigUpdate::ModelsCacheChanged => {
-                            // External write to ~/.alnair/models_cache.json
-                            // (another alnair process fetched a fresher /v1/models
-                            // catalog). Injected into the agent's ACP stream —
-                            // NOT applied directly on the manager — so it is
-                            // serialized behind any `reload_models` from the
-                            // same watcher batch: the `ModelsChanged` arm above
-                            // only *injects* a request that completes
-                            // asynchronously, and a direct call here could
-                            // rebuild the catalog and notify clients before
-                            // `apply_config` decided to accept or reject the
-                            // new config. The agent processes stream requests
-                            // in order, eliminating that interleaving.
-                            // `reload_from_disk_cache` still content-dedupes
-                            // the leader's own cache writes.
-                            info!("Models cache change detected — reloading agent model catalog");
-                            let line = internal_reload_request_line(
-                                "config-reload-models-cache",
-                                "alnair/internal/reload_models_cache",
-                                serde_json::json!({}),
-                            );
-                            let mut tx = acp_tx_for_config.lock().await;
-                            if let Err(e) = tx.write_all(line.as_bytes()).await {
-                                warn!(
-                                    error = %e,
-                                    "failed to inject models-cache reload into ACP stream"
-                                );
-                            }
-                        }
-                        ConfigUpdate::Memory(mem) => {
-                            info!(
-                                enabled = mem.enabled,
-                                "Memory config change detected by watcher"
-                            );
-                        }
-                        ConfigUpdate::Skills(skills) => {
-                            info!(
-                                paths = skills.paths.len(),
-                                "Skills config change detected by watcher"
-                            );
-                        }
-                        ConfigUpdate::Compat(_compat) => {
-                            info!(
-                                "Compat config change detected by watcher \
-                                 (applies on next agent rebuild)"
-                            );
-                        }
-                        ConfigUpdate::Ui {
-                            theme,
-                            yolo,
-                            fork_secondary_model,
-                        } => {
-                            info!("UI config change detected by watcher");
-                            let notification = serde_json::json!({
-                                "jsonrpc": "2.0",
-                                "method": "alnair/config_changed",
-                                "params": {
-                                    "section": "ui",
-                                    "changes": {
-                                        "theme": theme,
-                                        "yolo": yolo,
-                                        "fork_secondary_model": fork_secondary_model,
-                                    }
-                                }
-                            });
-                            let _ = ipc_tx_for_config.send(notification.to_string());
-                        }
-                    }
-                }
-            });
+            tokio::task::spawn_local(run_config_update_dispatch(
+                config_update_rx,
+                auth_manager_for_config,
+                models_manager_for_config,
+                acp_incoming_tx.clone(),
+                Some(ipc_tx_for_config),
+            ));
 
             // Wait for IPC server shutdown or cancellation.
             // ipc_handle is a JoinHandle from tokio::spawn — awaitable directly.

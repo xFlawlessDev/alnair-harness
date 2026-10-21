@@ -68,6 +68,18 @@ fn refresh_local_installs(
     trust: &TrustStore,
     force: bool,
 ) -> RefreshSummary {
+    refresh_local_installs_with_home(registry, trust, force, dirs::home_dir().as_deref())
+}
+
+/// [`refresh_local_installs`] with the home directory injected, so the
+/// under-home auto-trust rule is testable on Windows (where
+/// `dirs::home_dir()` ignores the environment).
+fn refresh_local_installs_with_home(
+    registry: &mut InstallRegistry,
+    trust: &TrustStore,
+    force: bool,
+    home: Option<&Path>,
+) -> RefreshSummary {
     let mut summary = RefreshSummary::default();
     let targets: Vec<RefreshTarget> = registry
         .list()
@@ -95,8 +107,8 @@ fn refresh_local_installs(
         expected,
     } in targets
     {
-        let refreshable =
-            TrustStore::is_config_path_auto_trusted(&source_path) || trust.is_trusted(&source_path);
+        let refreshable = TrustStore::is_config_path_auto_trusted_with_home(&source_path, home)
+            || trust.is_trusted(&source_path);
         if !source_path.is_dir() || !refreshable {
             summary.skipped += 1;
             continue;
@@ -414,7 +426,7 @@ mod tests {
         assert!(!installed.repo_path.join("agents/new.md").exists());
 
         let trust = TrustStore::load_from(home.join(".alnair").join("trusted-plugins"));
-        let summary = refresh_local_installs(&mut registry, &trust, false);
+        let summary = refresh_local_installs_with_home(&mut registry, &trust, false, Some(&home));
         assert_eq!(summary.refreshed, 1, "{summary:?}");
         assert!(installed.repo_path.join("agents/new.md").exists());
     }
@@ -435,7 +447,7 @@ mod tests {
         let snapshot = installed.repo_path.join("agents/old.md");
         let before = std::fs::metadata(&snapshot).unwrap().modified().unwrap();
         let trust = TrustStore::load_from(home.join(".alnair").join("trusted-plugins"));
-        let summary = refresh_local_installs(&mut registry, &trust, false);
+        let summary = refresh_local_installs_with_home(&mut registry, &trust, false, Some(&home));
         assert_eq!(summary.refreshed, 0, "{summary:?}");
         assert_eq!(summary.skipped, 1, "{summary:?}");
         let after = std::fs::metadata(&snapshot).unwrap().modified().unwrap();
@@ -462,7 +474,7 @@ mod tests {
         .unwrap();
 
         let trust = TrustStore::load_from(home.join(".alnair").join("trusted-plugins"));
-        let summary = refresh_local_installs(&mut registry, &trust, false);
+        let summary = refresh_local_installs_with_home(&mut registry, &trust, false, Some(&home));
         assert_eq!(
             summary.refreshed, 1,
             "rename must trigger refresh: {summary:?}"
@@ -488,7 +500,7 @@ mod tests {
         let trust = TrustStore::load_from(home.join(".alnair").join("trusted-plugins"));
         let summary = {
             let _fail = EnvVarGuard::set("ALNAIR_TEST_FAIL_REFRESH_PROMOTE", "1");
-            refresh_local_installs(&mut registry, &trust, false)
+            refresh_local_installs_with_home(&mut registry, &trust, false, Some(&home))
         };
 
         assert_eq!(summary.errors, 1, "{summary:?}");
@@ -511,7 +523,7 @@ mod tests {
 
         std::fs::write(source.join("extra.txt"), "x").unwrap();
         let trust = TrustStore::load_from(home.join("trusted-plugins"));
-        let summary = refresh_local_installs(&mut registry, &trust, false);
+        let summary = refresh_local_installs_with_home(&mut registry, &trust, false, Some(&home));
         assert_eq!(summary.skipped, 1, "{summary:?}");
         assert_eq!(summary.refreshed, 0, "{summary:?}");
         assert!(!installed.repo_path.join("extra.txt").exists());
@@ -533,7 +545,7 @@ mod tests {
         let installed = register_local_install(&mut registry, &source, None);
 
         write_agent_md(&source, "new");
-        let summary = refresh_local_installs(&mut registry, &trust, false);
+        let summary = refresh_local_installs_with_home(&mut registry, &trust, false, Some(&home));
         assert_eq!(summary.refreshed, 1, "{summary:?}");
         assert!(installed.repo_path.join("agents/new.md").exists());
     }
@@ -552,7 +564,7 @@ mod tests {
         write_agent_md(&workspace.join("plugins/a"), "x");
 
         let trust = TrustStore::load_from(home.join("trusted-plugins"));
-        let summary = refresh_local_installs(&mut registry, &trust, false);
+        let summary = refresh_local_installs_with_home(&mut registry, &trust, false, Some(&home));
         assert_eq!(summary.refreshed, 1, "{summary:?}");
         assert!(installed.repo_path.join("plugins/a/agents/x.md").exists());
 
@@ -584,7 +596,7 @@ mod tests {
 
         std::fs::write(source.join("extra.txt"), "x").unwrap();
         let trust = TrustStore::load_from(home.join("trusted-plugins"));
-        let summary = refresh_local_installs(&mut registry, &trust, false);
+        let summary = refresh_local_installs_with_home(&mut registry, &trust, false, Some(&home));
         assert_eq!(summary.refreshed, 1, "{summary:?}");
         assert!(!installed.repo_path.join("link-out/secret.txt").exists());
         assert!(installed.repo_path.join("extra.txt").exists());
@@ -636,7 +648,7 @@ mod tests {
 
         // force=true so the unchanged-skip can't mask the scope-identity guard.
         let trust = TrustStore::load_from(home.join(".alnair").join("trusted-plugins"));
-        let summary = refresh_local_installs(&mut registry, &trust, true);
+        let summary = refresh_local_installs_with_home(&mut registry, &trust, true, Some(&home));
 
         // Root-scope rediscovery would change the plugin set/scope, so keep stale:
         // no refresh, and repo.plugins / repo.kind must be untouched (no corruption).

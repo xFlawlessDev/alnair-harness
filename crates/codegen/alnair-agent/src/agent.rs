@@ -142,6 +142,22 @@ impl Agent {
         self.prompt_context.agents_md_user_reminder()
     }
 
+    /// Swap the project-instruction files after they changed on disk.
+    ///
+    /// Safe with respect to prompt caching: `agents_md_files` is **not** an
+    /// input to [`PromptContext::render`](crate::prompt::context::PromptContext::render)
+    /// or `placeholders()`, so the rendered system prompt is untouched and no
+    /// KV-cache prefix is disturbed. The new content reaches the model through
+    /// a `project_instructions_update` conversation item instead.
+    ///
+    /// Keeps `prompt_context` authoritative so later compaction
+    /// (`compaction.rs` re-reads `agents_md_user_reminder()`) and any
+    /// `agents_md_section()` consumer — the permission classifier — see the
+    /// revision rather than the spawn-time text.
+    pub fn replace_agents_md(&mut self, files: Vec<crate::prompt::agents_md::AgentConfigFile>) {
+        self.prompt_context.agents_md_files = files;
+    }
+
     /// Personas content formatted for user-message injection.
     ///
     /// Returns the `<system-reminder>` block to prepend as a user message,

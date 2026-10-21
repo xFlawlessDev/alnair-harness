@@ -311,10 +311,13 @@ pub fn pin_theme() -> std::sync::MutexGuard<'static, ()> {
     // assertion that distinguishes two accent slots. Pinning a theme must pin
     // the WHOLE resolution, not just the kind.
     set_terminal_native_lock(false);
-    // Color level is a write-once `OnceLock`; tests run without a TTY so it
-    // resolves to `TrueColor` anyway. Pin it explicitly (best-effort: ignore the
-    // already-initialized `Err`) so the measure path that reads it stays fixed.
-    let _ = super::color_support::set(super::color_support::ColorLevel::TrueColor);
+    // Color level is normally a write-once `OnceLock`. `set` only succeeds if
+    // nothing has resolved it yet, and the ambient environment can decide
+    // otherwise first: with `NO_COLOR=1` the level is `None`, which quantizes
+    // every theme color to `Color::Reset` and silently empties assertions that
+    // distinguish two colors. Force it instead, so pinning a theme pins the
+    // WHOLE resolution regardless of what ran before.
+    super::color_support::force_for_test(super::color_support::ColorLevel::TrueColor);
     guard
 }
 

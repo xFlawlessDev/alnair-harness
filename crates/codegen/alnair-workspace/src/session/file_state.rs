@@ -147,6 +147,18 @@ impl ToAbsPath for &FlexiblePath {
     }
 }
 
+/// Classify a persisted path string as absolute or relative.
+///
+/// `Path::is_absolute()` is not enough for a session file that may have been
+/// written on another platform: on Windows it requires a drive/UNC prefix, so a
+/// legacy POSIX absolute path (`/home/user/project/src/main.rs`) would parse as
+/// *relative*, and `normalize_to_relative` would then leave it as-is while the
+/// reverse map keys stopped matching. Treat a leading `/` as absolute
+/// everywhere — no relative path can start with one.
+fn is_absolute_spelling(s: &str) -> bool {
+    Path::new(s).is_absolute() || s.starts_with('/')
+}
+
 mod flexible_path_serde {
     use super::*;
     use serde::{Deserializer, Serializer};
@@ -164,6 +176,9 @@ mod flexible_path_serde {
     {
         let s = String::deserialize(deserializer)?;
         // Try to parse as RelPathBuf first (preferred)
+        if is_absolute_spelling(&s) {
+            return Ok(FlexiblePath::Absolute(PathBuf::from(s)));
+        }
         match RelPathBuf::try_from(s.clone()) {
             Ok(rel_path) => Ok(FlexiblePath::Relative(rel_path)),
             // Fall back to PathBuf for absolute paths from older sessions
@@ -201,9 +216,13 @@ mod flexible_path_map_serde {
         let mut result = HashMap::with_capacity(map.len());
         for (k, v) in map {
             // Try RelPathBuf first, fall back to PathBuf
-            let path = match RelPathBuf::try_from(k.clone()) {
-                Ok(rel_path) => FlexiblePath::Relative(rel_path),
-                Err(_) => FlexiblePath::Absolute(PathBuf::from(k)),
+            let path = if is_absolute_spelling(&k) {
+                FlexiblePath::Absolute(PathBuf::from(&k))
+            } else {
+                match RelPathBuf::try_from(k.clone()) {
+                    Ok(rel_path) => FlexiblePath::Relative(rel_path),
+                    Err(_) => FlexiblePath::Absolute(PathBuf::from(k)),
+                }
             };
             result.insert(path, v);
         }
@@ -1080,7 +1099,7 @@ mod tests {
     #[tokio::test]
     async fn test_rewind_point_creation() {
         let tracker = FileStateTracker::new();
-        let cwd = AbsPathBuf::new(PathBuf::from("/test")).unwrap();
+        let cwd = AbsPathBuf::new(std::env::temp_dir().join("test")).unwrap();
         let fs = Arc::new(MockFs::new(cwd.to_path_buf()));
         let fs_wrapper = crate::file_system::AsyncFsWrapper::new(fs);
         let ctx = ToolContext::new_local_context(cwd.to_path_buf(), fs_wrapper, Arc::new(()));
@@ -1102,7 +1121,7 @@ mod tests {
     #[tokio::test]
     async fn test_truncate_from() {
         let tracker = FileStateTracker::new();
-        let cwd = AbsPathBuf::new(PathBuf::from("/test")).unwrap();
+        let cwd = AbsPathBuf::new(std::env::temp_dir().join("test")).unwrap();
         let fs = Arc::new(MockFs::new(cwd.to_path_buf()));
         let fs_wrapper = crate::file_system::AsyncFsWrapper::new(fs);
         let ctx = ToolContext::new_local_context(cwd.to_path_buf(), fs_wrapper, Arc::new(()));

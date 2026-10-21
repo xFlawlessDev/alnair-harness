@@ -478,15 +478,22 @@ pub fn resolve_model_path(
     let input = sanitize_model_path_arg(input);
     let expanded = shellexpand::tilde(input);
     let input_path = std::path::Path::new(expanded.as_ref());
+    // Models spell absolute paths POSIX-style (`/home/user/project/src/main.rs`)
+    // regardless of the host, and on Windows `Path::is_absolute()` requires a
+    // drive prefix — so a leading `/` must count here or the display-cwd
+    // rewrite silently never fires and the model's path leaks through as the
+    // result. `Path::strip_prefix` compares components, so the rooted spelling
+    // matches a rooted `display_cwd` on either platform.
+    let is_absolute_spelling = input_path.is_absolute() || expanded.starts_with('/');
     if let Some(display) = display_cwd
-        && input_path.is_absolute()
+        && is_absolute_spelling
     {
         if let Ok(suffix) = input_path.strip_prefix(display) {
             return cwd.join(suffix);
         }
         return input_path.to_path_buf();
     }
-    if !input_path.is_absolute() && !expanded.is_empty() {
+    if !is_absolute_spelling && !expanded.is_empty() {
         let as_absolute = std::path::PathBuf::from(format!("/{}", expanded.as_ref()));
         let effective_base = display_cwd.unwrap_or(cwd);
         if as_absolute.starts_with(effective_base)

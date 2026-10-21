@@ -22,7 +22,24 @@ Configuration is resolved in this order (highest priority first):
 
 Location: `~/.alnair/config.toml`
 
-If the file does not exist, Alnair uses built-in defaults. Specify only the values you want to override.
+If the file does not exist, Alnair uses built-in defaults. Specify only the values you want to overwrite.
+
+### What Applies Without a Restart
+
+Most of `config.toml` is picked up live. Alnair watches the file and re-applies these sections on save, in every mode (leader, `--no-leader`, and `alnair agent stdio`):
+
+| Section | Applies live |
+|---|---|
+| `[mcp_servers]` | yes — servers are restarted with the new config |
+| `[platforms.*]`, `[model.*]`, `[models]` | yes — the model catalog is re-resolved |
+| `[skills]`, `[compat]`, `[memory]` | yes |
+| `[ui]` theme / `yolo` / `fork_secondary_model` | yes |
+
+Everything else (for example `[cli]`, `[endpoints]`, `[tabs]`, `[session]`, `[harness]`, and the remaining `[ui]` keys) is read once at startup and needs a restart.
+
+`AGENTS.md`, `CLAUDE.md`, `AGENT.md`, and any `*.md` under `.alnair/rules`, `.claude/rules`, or `.cursor/rules` are watched too — including copies in parent directories up to the repo root. An edit is delivered as a *revised* instruction block at the start of the next turn, so the conversation keeps the original text and simply sees the newer rules after it.
+
+Skills under `~/.alnair/skills`, `~/.agents/skills`, `<repo>/.alnair/skills`, and any `[skills].paths` entry reload on save as well.
 
 ### General Settings
 

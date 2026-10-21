@@ -35,6 +35,16 @@ fn replace_file_inner(tmp: &Path, dest: &Path) -> io::Result<()> {
 
 #[cfg(windows)]
 fn replace_file_inner(tmp: &Path, dest: &Path) -> io::Result<()> {
+    // A missing tmp is a caller bug, and the delete-first retry below would
+    // destroy `dest` before discovering it: fail before touching anything.
+    // (`std::fs::rename` reports this on Unix for free; on Windows the retry
+    // loop's `remove_file(dest)` runs first.)
+    if !tmp.try_exists()? {
+        return Err(io::Error::new(
+            io::ErrorKind::NotFound,
+            format!("replace_file: tmp {} does not exist", tmp.display()),
+        ));
+    }
     let mut last = match std::fs::rename(tmp, dest) {
         Ok(()) => return Ok(()),
         Err(e) => e,

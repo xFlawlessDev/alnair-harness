@@ -596,7 +596,8 @@ mod tests {
     #[tokio::test]
     async fn falls_back_to_cwd_when_no_plan_file_path_resource() {
         let mut resources = Resources::new();
-        resources.insert(Cwd(PathBuf::from("/workspace/my-project")));
+        let cwd = PathBuf::from("/workspace/my-project");
+        resources.insert(Cwd(cwd.clone()));
         let shared = resources.into_shared();
 
         let result = alnair_tool_runtime::Tool::run(
@@ -610,7 +611,14 @@ mod tests {
         let EnterPlanModeOutput::Entered {
             ref plan_file_path, ..
         } = result;
-        assert_eq!(plan_file_path, "/workspace/my-project/.alnair/plan.md");
+        // Build the expectation with `Path::join` rather than a literal: the
+        // display string carries the platform separator, so a hardcoded
+        // `/workspace/my-project/.alnair/plan.md` only matches on unix.
+        let expected = cwd
+            .join(crate::types::resources::PLAN_FILE_RELATIVE_PATH)
+            .display()
+            .to_string();
+        assert_eq!(plan_file_path, &expected);
     }
 
     #[tokio::test]

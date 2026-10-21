@@ -386,7 +386,12 @@ mod tests {
             &mut out,
         );
 
-        assert!(out.contains("src/main.rs"), "transcript: {out:?}");
+        // Compare path components, not a literal separator: the renderer emits
+        // the platform's own (`src\main.rs` on Windows).
+        assert!(
+            out.contains("src") && out.contains("main.rs"),
+            "transcript: {out:?}"
+        );
         assert!(
             !out.contains("/alternate/worktree"),
             "session prefix should be elided: {out:?}"

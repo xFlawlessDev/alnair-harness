@@ -1079,6 +1079,7 @@ pub(crate) async fn spawn_session_actor(
         max_retries: alnair_sampler::resolve_max_retries(max_retries),
         pending_interjections: InterjectionBuffer::new(),
         pending_skill_reminders: Mutex::new(Vec::new()),
+        pending_project_instructions: Mutex::new(None),
         idle_flush_timeout: memory_config
             .as_ref()
             .and_then(|mc| mc.flush.idle_timeout_secs)

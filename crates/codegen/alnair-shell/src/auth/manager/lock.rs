@@ -573,7 +573,11 @@ mod tests {
 
         let lock = try_lock_auth_file_nonblocking(&path).expect("uncontended non-blocking acquire");
 
-        let content = std::fs::read_to_string(&lock_path).unwrap();
+        // Read through the HOLDER's handle. Windows `LockFileEx` denies
+        // ordinary opens of the locked range even with full sharing, so a
+        // path-based read panics before the assertion runs; Unix reads the path
+        // normally because flock is advisory.
+        let content = lock.read_holder_info().expect("read holder info");
         let (pid, _ts) =
             parse_holder_info(&content).expect("non-blocking acquire must write parseable info");
         assert_eq!(pid, std::process::id());
@@ -749,8 +753,12 @@ mod tests {
         let lock = try_lock_auth_file_async(&path, StdDuration::from_secs(1)).await;
         assert!(lock.is_some(), "should acquire lock");
 
-        let lock_path = path.with_file_name("auth.json.lock");
-        let content = std::fs::read_to_string(&lock_path).unwrap();
+        // Same Windows reason as the non-blocking test: read via the holder.
+        let content = lock
+            .as_ref()
+            .unwrap()
+            .read_holder_info()
+            .expect("read holder info");
         let (pid, _ts) = parse_holder_info(&content).unwrap();
         assert_eq!(pid, std::process::id());
 

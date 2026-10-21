@@ -598,6 +598,15 @@ pub enum SessionCommand {
     /// Re-discover skills from disk, update the SkillManager baseline,
     /// and re-advertise slash commands to the client.
     ReloadSkills,
+    /// Re-read `AGENTS.md` / `CLAUDE.md` / rules files from disk and queue a
+    /// `project_instructions_update` item for the next turn boundary.
+    ///
+    /// Carries the edited project root only for logging: the actor re-resolves
+    /// discovery from its own cwd, since compat config and the workspace user
+    /// dir are per-session.
+    ReloadProjectInstructions {
+        cwd: std::path::PathBuf,
+    },
     /// Dispatch session_start hook using the actor's loaded HookRegistry.
     DispatchSessionStartHook {
         /// "new" for brand new sessions, "load" for sessions loaded from disk.

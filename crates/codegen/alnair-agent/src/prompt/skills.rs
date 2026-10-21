@@ -964,8 +964,28 @@ mod tests {
         assert_eq!(paths.len(), 2);
 
         let path_strs: Vec<String> = paths.iter().map(|p| p.display().to_string()).collect();
-        assert!(path_strs.iter().any(|p| p.contains("parent/SKILL.md")));
-        assert!(path_strs.iter().any(|p| p.contains("child/SKILL.md")));
+        // Compare on path COMPONENTS, not on a `/`-joined string: `display()`
+        // uses the platform separator, so a literal "parent/SKILL.md" never
+        // matches on Windows.
+        let ends_with = |suffix: &[&str]| {
+            path_strs.iter().any(|p| {
+                let parts: Vec<&str> = p
+                    .rsplit(['/', '\\'])
+                    .collect::<Vec<_>>()
+                    .into_iter()
+                    .rev()
+                    .collect();
+                parts.len() >= suffix.len() && parts[parts.len() - suffix.len()..] == *suffix
+            })
+        };
+        assert!(
+            ends_with(&["parent", "SKILL.md"]),
+            "missing the parent skill in {path_strs:?}"
+        );
+        assert!(
+            ends_with(&["child", "SKILL.md"]),
+            "missing the child skill in {path_strs:?}"
+        );
     }
 
     // extract_first_paragraph
@@ -2698,6 +2718,12 @@ mod tests {
             .find(|s| s.name == "zz-copyfix-japandi2")
             .unwrap();
         assert_eq!(rekeyed.display_name.as_deref(), Some("zz-copyfix-japandi"));
-        assert!(rekeyed.path.ends_with("zz-copyfix-japandi2/SKILL.md"));
+        // `Path::ends_with` compares whole components and accepts either
+        // separator on Windows, unlike a `/`-joined string suffix check.
+        assert!(
+            std::path::Path::new(&rekeyed.path).ends_with("zz-copyfix-japandi2/SKILL.md"),
+            "expected the rekeyed copy's path, got {}",
+            rekeyed.path
+        );
     }
 }

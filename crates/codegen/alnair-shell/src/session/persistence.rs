@@ -1956,6 +1956,12 @@ fn collect_session_files_recursive(base: &Path, dir: &Path, files: &mut Vec<Copi
             let Some(name) = rel_path.to_str() else {
                 continue;
             };
+            // These names are ARCHIVE KEYS — the caller tars them and uploads
+            // them, and a reader elsewhere re-joins them. They must be
+            // `/`-separated on every platform: `Path::to_str` yields `\` on
+            // Windows, which would produce a different key for the same session
+            // and break any consumer that splits on `/`.
+            let name = name.replace('\\', "/");
             let data = match std::fs::read(&path) {
                 Ok(c) => c,
                 Err(e) => {

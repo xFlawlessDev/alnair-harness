@@ -679,14 +679,17 @@ mod tests {
     }
 
     /// `ALNAIR_CAMPAIGNS=0` disables campaign application regardless of config.
-    /// `ALNAIR_CAMPAIGNS` is process-global, so this test serializes itself with a
-    /// module-local mutex and save/restores the prior value. (This crate has no
-    /// `serial_test` dev-dep and no other test reads this var, so a local guard
-    /// is sufficient.)
+    ///
+    /// `ALNAIR_CAMPAIGNS` is process-global and read *transitively* by every
+    /// effective-config resolution, so this takes the crate-wide
+    /// [`CAMPAIGN_ENV_LOCK`](crate::CAMPAIGN_ENV_LOCK) rather than a
+    /// module-local mutex — a local one let readers in other test modules
+    /// observe this writer's value.
     #[test]
     fn kill_switch_env_var_disables() {
-        static ENV_GUARD: std::sync::Mutex<()> = std::sync::Mutex::new(());
-        let _g = ENV_GUARD.lock().unwrap_or_else(|p| p.into_inner());
+        let _g = crate::CAMPAIGN_ENV_LOCK
+            .lock()
+            .unwrap_or_else(|p| p.into_inner());
         let prior = std::env::var_os("ALNAIR_CAMPAIGNS");
         let empty = toml::Value::Table(Default::default());
 

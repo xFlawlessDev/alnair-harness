@@ -232,7 +232,13 @@ impl LeaderLock {
     /// Write our PID to the lock file. Call after acquiring lock.
     pub fn write_pid(&mut self) -> Result<(), LockError> {
         if let Some(ref mut file) = self.lock_file {
+            use std::io::{Seek as _, SeekFrom};
+            // `set_len(0)` truncates but leaves the cursor where it was, so a
+            // reused handle would write the PID at a non-zero offset and
+            // `read_pid` (which reads from the start) would parse an empty or
+            // leading-NUL prefix.
             file.set_len(0)?;
+            file.seek(SeekFrom::Start(0))?;
             write!(file, "{}", std::process::id())?;
             file.sync_all()?;
         }
@@ -240,12 +246,42 @@ impl LeaderLock {
     }
 
     pub fn read_pid(&self) -> Option<u32> {
+        // Prefer the holder's own handle: on Windows `LockFileEx` denies reads
+        // of the locked range to ANY other handle (share mode only controls
+        // open/delete, not the byte-range lock), so `read_pid_from_path` cannot
+        // see a PID the leader itself is holding.
+        if let Some(ref file) = self.lock_file {
+            use std::io::{Read as _, Seek as _, SeekFrom};
+            if let Ok(mut f) = file.try_clone() {
+                let mut content = String::new();
+                if f.seek(SeekFrom::Start(0)).is_ok()
+                    && f.read_to_string(&mut content).is_ok()
+                    && let Ok(pid) = content.trim().parse()
+                {
+                    return Some(pid);
+                }
+            }
+        }
         Self::read_pid_from_path(&self.lock_path)
     }
 
     pub fn read_pid_from_path(path: &Path) -> Option<u32> {
+        // Open with FULL SHARING. The leader holds an exclusive `flock` on this
+        // file for its whole lifetime, and on Windows `LockFileEx` makes a
+        // plain `File::open` fail with ERROR_LOCK_VIOLATION while that range is
+        // locked — so every PID read returned `None` there and leader-liveness
+        // checks silently saw "no leader". Unix needs no share mode because
+        // `flock` is advisory.
+        let mut opts = File::options();
+        opts.read(true);
+        #[cfg(windows)]
+        {
+            use std::os::windows::fs::OpenOptionsExt;
+            // FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE
+            opts.share_mode(0x1 | 0x2 | 0x4);
+        }
         let mut content = String::new();
-        File::open(path)
+        opts.open(path)
             .and_then(|mut f| f.read_to_string(&mut content))
             .ok()?;
         content.trim().parse().ok()
@@ -385,6 +421,12 @@ mod tests {
 
         let pid = lock.read_pid().unwrap();
         assert_eq!(pid, std::process::id());
+        // Cross-handle read. This works on Unix (advisory flock) but NOT on
+        // Windows: `LockFileEx` denies reads of a locked range to every handle
+        // but the owner's, regardless of share mode. The production-relevant
+        // path there is `read_pid()` above, which reads through the holder's
+        // own handle.
+        #[cfg(unix)]
         assert_eq!(
             LeaderLock::read_pid_from_path(lock.lock_path()),
             Some(std::process::id())

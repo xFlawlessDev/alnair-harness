@@ -348,29 +348,44 @@ pub(crate) async fn run_read_file(
             }
             let display_dcwd = display_cwd_or_cwd(&cwd, display_cwd.as_deref());
             let display_path = display_dcwd.join(&input.path);
-            return Ok(match e.io_error_kind() {
-                Some(std::io::ErrorKind::NotFound) => {
-                    let msg = crate::util::format_not_found_error(
-                        &display_path,
-                        &path,
-                        &cwd,
-                        &display_dcwd,
-                        hints_enabled,
-                    )
-                    .await;
-                    ReadFileOutput::FileNotFound(msg)
+            // Windows answers `ERROR_ACCESS_DENIED` (→ `PermissionDenied`) when a
+            // directory is opened for reading; `IsADirectory` is the unix EISDIR
+            // errno and never surfaces there. Probe the path so a directory read
+            // still reports "is a directory, not a file" instead of a bogus
+            // permission error the model would try to work around.
+            let read_error_is_directory = match e.io_error_kind() {
+                Some(std::io::ErrorKind::IsADirectory) => true,
+                Some(std::io::ErrorKind::PermissionDenied) => {
+                    tokio::fs::metadata(&path).await.is_ok_and(|m| m.is_dir())
                 }
-                Some(std::io::ErrorKind::IsADirectory) => ReadFileOutput::IsADirectory(format!(
+                _ => false,
+            };
+            return Ok(if read_error_is_directory {
+                ReadFileOutput::IsADirectory(format!(
                     "Error: {} is a directory, not a file.",
                     display_path.display()
-                )),
-                Some(std::io::ErrorKind::PermissionDenied) => ReadFileOutput::PermissionDenied(
-                    format!("Permission denied: {}", display_path.display()),
-                ),
-                _ => ReadFileOutput::FileReadError(format!(
-                    "Failed to read file: {}, {e}",
-                    display_path.display()
-                )),
+                ))
+            } else {
+                match e.io_error_kind() {
+                    Some(std::io::ErrorKind::NotFound) => {
+                        let msg = crate::util::format_not_found_error(
+                            &display_path,
+                            &path,
+                            &cwd,
+                            &display_dcwd,
+                            hints_enabled,
+                        )
+                        .await;
+                        ReadFileOutput::FileNotFound(msg)
+                    }
+                    Some(std::io::ErrorKind::PermissionDenied) => ReadFileOutput::PermissionDenied(
+                        format!("Permission denied: {}", display_path.display()),
+                    ),
+                    _ => ReadFileOutput::FileReadError(format!(
+                        "Failed to read file: {}, {e}",
+                        display_path.display()
+                    )),
+                }
             });
         }
     };

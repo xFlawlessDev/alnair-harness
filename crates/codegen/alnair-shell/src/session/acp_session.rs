@@ -525,6 +525,14 @@ pub(crate) struct SessionActor {
     /// cancel/idle. The flush also delivers the plan tracker's buffered
     /// mid-turn activation reminder (see `activate_plan_mode_mid_turn`).
     pub(crate) pending_skill_reminders: Mutex<Vec<ConversationItem>>,
+    /// A revised project-instructions block waiting for the next turn boundary.
+    ///
+    /// `Option`, not `Vec`: only the newest revision matters. Several edits
+    /// arriving before the next turn (an editor save-storm, a git checkout
+    /// touching many files) would otherwise replay every intermediate state
+    /// into the conversation, costing context for text that is already
+    /// superseded.
+    pub(crate) pending_project_instructions: Mutex<Option<ConversationItem>>,
     /// Idle flush timeout: `None` = disabled, `Some(duration)` = flush after inactivity.
     pub(crate) idle_flush_timeout: Option<std::time::Duration>,
     /// Periodic dream check interval: `None` = disabled.
@@ -1251,6 +1259,10 @@ mod plan_mode_midturn_tests;
 #[cfg(test)]
 #[path = "acp_session_tests/project_instructions_idempotence_tests.rs"]
 mod project_instructions_idempotence_tests;
+/// AGENTS.md hot-reload: queued revisions and turn-boundary flush.
+#[cfg(test)]
+#[path = "acp_session_tests/project_instructions_reload_tests.rs"]
+mod project_instructions_reload_tests;
 #[cfg(test)]
 #[path = "acp_session_tests/prompt_mode_transition_tests.rs"]
 mod prompt_mode_transition_tests;

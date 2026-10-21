@@ -131,6 +131,45 @@ This is a small, fixed set of environment-wide knobs. Settings that identify a s
 
 > **Note on `stream_tool_calls`:** this one affects request *shape*, not just sampling. A few endpoints (some BYOK providers) expect it left unset; if a global `stream_tool_calls = true` causes problems for such a model, opt that model out with `stream_tool_calls = false` in its `[model.<id>]` block.
 
+### Shared Capability and Reasoning-Effort Menus
+
+Two more list-valued settings can be declared once under `[models]` and inherited by every model that declares none of its own: `capabilities` and `reasoning_efforts`.
+
+```toml
+[models]
+capabilities      = ["thinking"]
+reasoning_efforts = ["low", "medium", "high", "max"]
+```
+
+Without this, a fleet of custom models sharing one menu had to repeat the whole block per model:
+
+```toml
+# Before: identical six-line block repeated for every model
+[[model."alnair/deepseek-v4-1-flash".reasoning_efforts]]
+value = "low"
+label = "Low"
+
+[[model."alnair/deepseek-v4-1-flash".reasoning_efforts]]
+value = "max"
+label = "Max"
+# ...and again for openscale-deepseek, glm-5-3, ...
+
+# After: declare it once, then only what differs per model
+[model."alnair/deepseek-v4-1-flash"]
+context_window = 1000000
+
+# A model that wants a different menu still just says so:
+[model."alnair/legacy-model"]
+reasoning_efforts = ["none", "medium"]
+```
+
+The inheritance rule matches the other global defaults: a per-model `[model.<id>]` list always wins outright, and the global only fills in a model that left the field empty. Because an empty list and an unset list are indistinguishable for an array, `[models]` is the only place a *default* can be expressed -- a model with no menu inherits it, and there is no way to opt a single model out other than giving it its own list.
+
+Two notes on the reasoning-effort menu:
+
+- Each entry may be a bare string (`"high"`) or a table (`{ value = "high", label = "High", default = true }`). Bare strings get an auto-capitalized label, and the *first* entry becomes the default when none is marked `default`.
+- `[models] default_reasoning_effort` is a separate setting: it picks which effort a model **starts** at, while `reasoning_efforts` declares which efforts it **offers**. Set both if you want a starting point other than the first menu entry.
+
 ---
 
 ## Overriding Built-in Models

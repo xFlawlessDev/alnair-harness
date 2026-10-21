@@ -62,6 +62,28 @@ pub async fn discover_skills(root_cwd: &Path, config: &SkillsConfig) -> Vec<Valu
 
 // AGENTS.md discovery
 
+/// Whether `file_path` names a rules file under `.alnair/rules` or
+/// `.claude/rules`.
+///
+/// Matched on path components rather than a `/`-joined literal, because the
+/// paths are native: the Windows spelling (`...\.alnair\rules\...`) would never
+/// match a `/`-separated needle.
+fn is_rules_file_path(file_path: &str) -> bool {
+    let mut components = Path::new(file_path).components().peekable();
+    while let Some(component) = components.next() {
+        let name = component.as_os_str();
+        let is_vendor = name == ".alnair" || name == ".claude";
+        if is_vendor
+            && components
+                .next()
+                .is_some_and(|next| next.as_os_str() == "rules")
+        {
+            return true;
+        }
+    }
+    false
+}
+
 /// Discover project-instruction files (AGENTS.md, Claude.md, rules) from the workspace root up to the git root.
 pub async fn discover_agents_md(root_cwd: &Path) -> Vec<Value> {
     let cwd_str = root_cwd.to_string_lossy();
@@ -75,9 +97,12 @@ pub async fn discover_agents_md(root_cwd: &Path) -> Vec<Value> {
         .into_iter()
         .map(|mut file| {
             // Strip rules-file YAML frontmatter so it does not leak as raw YAML (matches alnair render).
-            if file.file_path.contains("/.alnair/rules/")
-                || file.file_path.contains("/.claude/rules/")
-            {
+            //
+            // Compare path COMPONENTS, not a `/`-joined literal: `file_path` is
+            // native, so on Windows it is `...\.alnair\rules\...` and a
+            // separator-sensitive match would silently skip the strip — leaking
+            // the raw `---\nglobs: [...]\n---` block into the model's context.
+            if is_rules_file_path(&file.file_path) {
                 file.content =
                     alnair_tools::implementations::skills::skill::extract_skill_body(&file.content);
             }
@@ -365,9 +390,11 @@ mod tests {
         let rule = files
             .iter()
             .find(|f| {
+                // Component-wise: the path is native, so a literal
+                // `/.alnair/rules/...` never matches on Windows.
                 f["file_path"]
                     .as_str()
-                    .is_some_and(|p| p.ends_with("/.alnair/rules/xyzzy-discover-agents-md-test.md"))
+                    .is_some_and(|p| p.ends_with("xyzzy-discover-agents-md-test.md"))
             })
             .expect("should discover the rules file");
         let content = rule["content"].as_str().unwrap();
@@ -379,6 +406,30 @@ mod tests {
             !content.contains("globs:"),
             "YAML frontmatter must be stripped: {content}"
         );
+    }
+
+    /// The rules-path predicate must accept BOTH separator spellings: the paths
+    /// it sees are native, and a `/`-only needle silently skipped the strip on
+    /// Windows (leaking raw YAML into the model's context).
+    #[test]
+    fn is_rules_file_path_accepts_native_and_posix_spellings() {
+        for path in [
+            "/home/u/repo/.alnair/rules/a.md",
+            "/home/u/repo/.claude/rules/a.md",
+            r"C:\Users\u\repo\.alnair\rules\a.md",
+            r"C:\Users\u\repo\.claude\rules\a.md",
+        ] {
+            assert!(is_rules_file_path(path), "{path} must be a rules file");
+        }
+        for path in [
+            "/home/u/repo/AGENTS.md",
+            "/home/u/repo/.alnair/config.toml",
+            "/home/u/repo/.alnair/rulesx/a.md",
+            r"C:\Users\u\repo\.alnair\rulesx\a.md",
+            "/home/u/repo/rules/a.md",
+        ] {
+            assert!(!is_rules_file_path(path), "{path} must not be a rules file");
+        }
     }
 
     #[tokio::test]

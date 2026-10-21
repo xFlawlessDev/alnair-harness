@@ -210,6 +210,28 @@ pub fn path_for_tool_surface(
 mod tests {
     use super::*;
 
+    /// Host-native absolute path for a `/`-separated suffix
+    /// (`Users/me/project`). On Windows a `/`-rooted path carries no drive and
+    /// is therefore *not* absolute, so a test that means "somewhere on this
+    /// machine" must spell the native form.
+    fn host_abs(suffix: &str) -> PathBuf {
+        let (root, sep) = if cfg!(windows) {
+            ("C:\\", '\\')
+        } else {
+            ("/", '/')
+        };
+        PathBuf::from(format!("{root}{}", suffix.replace('/', &sep.to_string())))
+    }
+
+    /// `rel` joined with the platform separator — what a native `PathBuf`
+    /// renders for the same components.
+    fn native(rel: &str) -> String {
+        rel.split('/')
+            .collect::<PathBuf>()
+            .to_string_lossy()
+            .into_owned()
+    }
+
     #[test]
     fn shorten_path_fits() {
         assert_eq!(shorten_path("src/main.rs", 20), "src/main.rs");
@@ -281,36 +303,40 @@ mod tests {
 
     #[test]
     fn expanded_surface_normalizes_and_classifies_against_cwd() {
-        let cwd = Path::new("/Users/me/project");
+        let cwd = host_abs("Users/me/project");
         assert_eq!(
             path_for_tool_surface(
-                "/Users/me/project/src/main.rs",
+                cwd.join("src/main.rs").to_str().unwrap(),
                 ToolPathSurface::Expanded,
-                Some(cwd),
+                Some(&cwd),
                 None,
                 0
             ),
-            "src/main.rs"
+            native("src/main.rs")
         );
         assert_eq!(
             path_for_tool_surface(
                 "src/./nested/../main.rs",
                 ToolPathSurface::Expanded,
-                Some(cwd),
+                Some(&cwd),
                 None,
                 0
             ),
-            "src/main.rs"
+            native("src/main.rs")
         );
         assert_eq!(
             path_for_tool_surface(
                 "../outside.rs",
                 ToolPathSurface::Expanded,
-                Some(cwd),
+                Some(&cwd),
                 None,
                 0
             ),
-            "/Users/me/outside.rs"
+            cwd.parent()
+                .unwrap()
+                .join("outside.rs")
+                .to_string_lossy()
+                .into_owned()
         );
     }
 
@@ -347,36 +373,56 @@ mod tests {
 
     #[test]
     fn expanded_outside_cwd_stays_normalized_target() {
-        let cwd = Path::new("/Users/me/project");
-        let got =
-            path_for_tool_surface("/etc/hosts", ToolPathSurface::Expanded, Some(cwd), None, 0);
+        let cwd = host_abs("Users/me/project");
+        let outside = host_abs("etc/hosts");
+        let got = path_for_tool_surface(
+            outside.to_str().unwrap(),
+            ToolPathSurface::Expanded,
+            Some(&cwd),
+            None,
+            0,
+        );
         assert!(Path::new(&got).is_absolute(), "got {got}");
         assert!(got.ends_with("hosts"), "got {got}");
-        assert!(!got.starts_with("/Users/me/project"), "got {got}");
+        assert!(
+            !Path::new(&got).starts_with(&cwd),
+            "an outside path must not be classified under cwd; got {got}"
+        );
     }
 
     #[test]
     fn expanded_surface_uses_worktree_cwd() {
-        let cwd = Path::new("/Users/me/.alnair/worktrees/foo");
-        let path = "/Users/me/.alnair/worktrees/foo/crates/x/a.rs";
+        let cwd = host_abs("Users/me/.alnair/worktrees/foo");
+        let path = cwd.join("crates/x/a.rs");
         assert_eq!(
-            path_for_tool_surface(path, ToolPathSurface::Expanded, Some(cwd), None, 0),
-            "crates/x/a.rs"
+            path_for_tool_surface(
+                path.to_str().unwrap(),
+                ToolPathSurface::Expanded,
+                Some(&cwd),
+                None,
+                0
+            ),
+            native("crates/x/a.rs")
         );
     }
 
     #[test]
     fn fullscreen_surface_uses_anchored_or_honestly_relative_target() {
-        let cwd = Path::new("/Users/me/project");
+        let cwd = host_abs("Users/me/project");
         assert_eq!(
             path_for_tool_surface(
                 "src/main.rs",
                 ToolPathSurface::Fullscreen,
-                Some(cwd),
+                Some(&cwd),
                 None,
                 0
             ),
-            "/Users/me/project/src/main.rs"
+            // Production normalizes lexically, so the emitted separators are
+            // native even though `join("src/main.rs")` would keep the `/`.
+            cwd.join("src")
+                .join("main.rs")
+                .to_string_lossy()
+                .into_owned()
         );
         let relative = resolve_tool_path("src/../main.rs", None);
         assert_eq!(relative.display_path, PathBuf::from("main.rs"));

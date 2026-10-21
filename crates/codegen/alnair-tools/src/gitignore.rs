@@ -97,7 +97,14 @@ mod tests {
     #[test]
     fn regression_no_panic_on_absolute_path_without_git_root() {
         let gi = build_gitignore(Path::new("."), &["node_modules/", "*.log"]);
-        let abs_path = Path::new("/Users/someone/home/AGENTS.md");
+        // A genuinely absolute path on this host: `Path::is_absolute()` is what
+        // `is_ignored`'s no-git-root guard keys on, and a POSIX-only literal
+        // (`/Users/...`) is rooted-but-not-absolute on Windows, so it would
+        // exercise the matcher instead of the guard.
+        let abs_path = &std::env::temp_dir()
+            .join("alnair-gitignore-regression")
+            .join("AGENTS.md");
+        assert!(abs_path.is_absolute(), "{abs_path:?}");
 
         // Proves the raw crate panics with these inputs.
         assert!(

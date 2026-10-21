@@ -739,6 +739,23 @@ pub struct ModelsConfig {
     pub inference_idle_timeout_secs: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub stream_tool_calls: Option<bool>,
+    /// Default reasoning-effort menu for models that declare none of their own.
+    ///
+    /// Exists because the per-model `reasoning_efforts` list cannot express
+    /// "inherit": it is a `Vec`, where empty already means "no menu". A fleet of
+    /// custom models sharing one menu therefore had to repeat the whole
+    /// `[[model."<id>".reasoning_efforts]]` block per model — six blocks of
+    /// identical text in the common config. Declaring it once here and letting
+    /// each `[model.*]` override only what differs removes that duplication.
+    ///
+    /// Accepts the same shapes as the per-model field: bare strings
+    /// (`["low", "high"]`) or tables (`[{ value = "high", default = true }]`).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub reasoning_efforts: Vec<ReasoningEffortOption>,
+    /// Default capability set for models that declare none of their own.
+    /// Same "empty means inherit" rule as `reasoning_efforts`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub capabilities: Vec<alnair_models::ModelCapability>,
 }
 /// `[platforms.<id>]` section from config.toml (PRD F2): API keys for the
 /// fixed platform registry ([`alnair_models::PlatformId`]).
@@ -2842,6 +2859,17 @@ fn apply_global_scalar_defaults(
         }
         if let Some(v) = models.stream_tool_calls {
             info.stream_tool_calls.get_or_insert(v);
+        }
+        // Collection defaults are "fallback, not clamp" like the scalars above:
+        // a model that declares its own menu keeps it, and only a model with no
+        // menu at all inherits the `[models]` one. Empty cannot be distinguished
+        // from unset for a `Vec`, which is exactly why the *global* value lives
+        // in `[models]` and the per-model value stays authoritative when present.
+        if info.reasoning_efforts.is_empty() && !models.reasoning_efforts.is_empty() {
+            info.reasoning_efforts = models.reasoning_efforts.clone();
+        }
+        if info.capabilities.is_empty() && !models.capabilities.is_empty() {
+            info.capabilities = models.capabilities.clone();
         }
     }
 }
@@ -10246,5 +10274,109 @@ default = "alnair-4.5"
         let r = resolve_mcp_recursive_config_watch(None, None, None, None, Some(false));
         assert!(!r.value);
         assert_eq!(r.source, ConfigSource::Remote);
+    }
+
+    /// `[models] reasoning_efforts` is a fallback for models that declare no
+    /// menu of their own — the whole point of the field is to stop repeating
+    /// an identical `[[model.*.reasoning_efforts]]` block per model.
+    #[test]
+    fn models_reasoning_efforts_apply_to_models_without_their_own() {
+        let raw_config: toml::Value = toml::from_str(
+            r#"
+            [models]
+            reasoning_efforts = ["low", "medium", "high", "max"]
+
+            [model.a]
+            model = "a"
+            base_url = "https://api.example.com/v1"
+
+            [model.b]
+            model = "b"
+            base_url = "https://api.example.com/v1"
+            "#,
+        )
+        .unwrap();
+        let cfg = Config::new_from_toml_cfg(&raw_config).expect("config should parse");
+        let resolved = resolve_model_list(&cfg, None, &Default::default());
+
+        for key in ["a", "b"] {
+            let info = &resolved.get(key).expect(key).info;
+            let ids: Vec<_> = info
+                .reasoning_efforts
+                .iter()
+                .map(|o| o.id.as_str())
+                .collect();
+            assert_eq!(
+                ids,
+                ["low", "medium", "high", "max"],
+                "model {key} must inherit the [models] menu"
+            );
+            assert!(
+                info.supports_reasoning_effort,
+                "an inherited menu must flip the support gate on"
+            );
+            assert_eq!(
+                info.reasoning_effort,
+                Some(ReasoningEffort::Low),
+                "no entry is marked default, so derivation falls back to the first"
+            );
+        }
+    }
+
+    /// A per-model menu stays authoritative — the global one is a fallback, not
+    /// a clamp.
+    #[test]
+    fn per_model_reasoning_efforts_beat_the_models_default() {
+        let raw_config: toml::Value = toml::from_str(
+            r#"
+            [models]
+            reasoning_efforts = ["low", "max"]
+
+            [model.a]
+            model = "a"
+            base_url = "https://api.example.com/v1"
+            reasoning_efforts = ["high"]
+            "#,
+        )
+        .unwrap();
+        let cfg = Config::new_from_toml_cfg(&raw_config).expect("config should parse");
+        let resolved = resolve_model_list(&cfg, None, &Default::default());
+        let ids: Vec<_> = resolved
+            .get("a")
+            .expect("a")
+            .info
+            .reasoning_efforts
+            .iter()
+            .map(|o| o.id.as_str())
+            .collect();
+        assert_eq!(ids, ["high"], "the per-model list must win outright");
+    }
+
+    /// `[models] capabilities` follows the same fallback rule, so the
+    /// `capabilities = ["thinking"]` line no longer needs repeating per model.
+    #[test]
+    fn models_capabilities_apply_to_models_without_their_own() {
+        let raw_config: toml::Value = toml::from_str(
+            r#"
+            [models]
+            capabilities = ["thinking"]
+
+            [model.a]
+            model = "a"
+            base_url = "https://api.example.com/v1"
+            "#,
+        )
+        .unwrap();
+        let cfg = Config::new_from_toml_cfg(&raw_config).expect("config should parse");
+        let resolved = resolve_model_list(&cfg, None, &Default::default());
+        assert!(
+            resolved
+                .get("a")
+                .expect("a")
+                .info
+                .capabilities
+                .contains(&alnair_models::ModelCapability::Thinking),
+            "the [models] capability set must reach a model with none of its own"
+        );
     }
 }

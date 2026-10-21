@@ -601,16 +601,18 @@ async fn debug_mode_bypasses_idle_wait() {
             SessionActor::maybe_fire_laziness_check(actor.clone()).await;
             let elapsed = started.elapsed();
             drop(Arc::try_unwrap(actor).ok().unwrap());
-            // 2s ceiling: the bypass path still does a chat-state
+            // Ceiling: the bypass path still does a chat-state
             // MPSC roundtrip, two tool-bridge reads,
             // `prepare_chat_completion` + JWT refresh, a TCP
             // connect attempt against localhost, and a JSONL
             // append — all of which can run slowly on shared CI.
-            // 2s is still 30_000× faster than the configured
-            // 60_000ms idle threshold, so the bypass signal is
-            // unambiguous.
+            // 10s is still 6_000× faster than the configured
+            // 60_000ms idle threshold, so the bypass signal stays
+            // unambiguous. (The original 2s bound held on Linux
+            // and macOS but not on Windows, where the loopback
+            // connect and the sampler build alone measured ~2.4s.)
             assert!(
-                elapsed < std::time::Duration::from_millis(2000),
+                elapsed < std::time::Duration::from_secs(10),
                 "idle threshold must be bypassed in debug mode (took {elapsed:?})",
             );
             // Sanity: the classifier did reach the sampler and

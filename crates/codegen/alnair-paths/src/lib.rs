@@ -428,8 +428,16 @@ mod tests {
 
     #[test]
     fn test_rel_path_buf_new_absolute_fails() {
-        let result = RelPathBuf::new("/absolute/path");
-        assert!(result.is_err());
+        // A POSIX `/absolute/path` is NOT absolute on Windows (`Path::is_absolute`
+        // needs a drive/UNC prefix), so pin the property with a path that is
+        // absolute under the running platform's rules.
+        let abs = if cfg!(windows) {
+            Path::new(r"C:\absolute\path")
+        } else {
+            Path::new("/absolute/path")
+        };
+        let result = RelPathBuf::new(abs);
+        assert!(result.is_err(), "{abs:?} must be rejected as absolute");
     }
 
     #[cfg(unix)]
@@ -539,9 +547,13 @@ mod tests {
 
     #[test]
     fn test_rel_path_buf_serde_absolute_fails() {
-        let json = "\"/absolute/path\"";
+        let json = if cfg!(windows) {
+            r#""C:\\absolute\\path""#
+        } else {
+            "\"/absolute/path\""
+        };
         let result: Result<RelPathBuf, _> = serde_json::from_str(json);
-        assert!(result.is_err());
+        assert!(result.is_err(), "{json} must be rejected as absolute");
     }
 
     // Tests for ToAbsPath on &str and String

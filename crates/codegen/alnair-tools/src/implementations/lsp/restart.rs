@@ -33,10 +33,12 @@ fn replay_tracked_documents(
     tracked_docs
         .iter()
         .filter_map(|(uri_str, lang_id)| {
-            let path = uri_str
-                .strip_prefix("file://")
-                .map(PathBuf::from)
-                .unwrap_or_else(|| PathBuf::from(uri_str));
+            // Decode through `Url::to_file_path`, never by stripping the
+            // `file://` prefix: a Windows URI is `file:///C:/repo/x.ts`, so
+            // stripping the scheme leaves `/C:/repo/x.ts` — not a path the OS
+            // can open. That silently dropped every entry, so a restarted
+            // server got no `didOpen` replay and no re-armed URIs at all.
+            let path = Url::parse(uri_str).ok()?.to_file_path().ok()?;
             let content = std::fs::read_to_string(&path).ok()?;
             restarted_client.notify_file_change(&path, &content, lang_id);
             file_uri(&path).ok()

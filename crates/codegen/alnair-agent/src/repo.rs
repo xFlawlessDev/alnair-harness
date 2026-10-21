@@ -28,13 +28,23 @@ pub struct RepoDirChain {
 
 impl RepoDirChain {
     pub fn resolve(cwd: &Path) -> Self {
+        Self::resolve_with_home(cwd, dirs::home_dir().as_deref())
+    }
+
+    /// [`Self::resolve`] with the home directory injected.
+    ///
+    /// `dirs::home_dir()` reads the `FOLDERID_Profile` Known Folder on Windows
+    /// and ignores `HOME`/`USERPROFILE`, so a test cannot redirect it through
+    /// the environment. Injecting it keeps the "a git repo at $HOME is not a
+    /// project root" rule assertable on every platform.
+    pub fn resolve_with_home(cwd: &Path, home: Option<&Path>) -> Self {
         let git_root = git2::Repository::discover(cwd)
             .ok()
             .and_then(|repo| repo.workdir().map(|p| p.to_path_buf()))
             // Dotfiles in $HOME make home itself a repo; treating that subtree
             // as repo-local would promote home-level `.alnair`/`.mcp.json`/plugins
             // to project config. Dropping the root makes cwd behave as no-repo.
-            .filter(|root| !is_home_dir(root));
+            .filter(|root| !is_home_dir_impl(root, home));
 
         let mut dirs = Vec::new();
         if let Some(ref root) = git_root {
@@ -64,15 +74,19 @@ impl RepoDirChain {
     }
 }
 
-/// Whether `path` canonicalizes to the user's home directory. Duplicated here
-/// instead of reused from `alnair-workspace`, which depends on THIS crate, to keep
-/// the dep edge one-way.
-fn is_home_dir(path: &Path) -> bool {
-    let Some(home) = dirs::home_dir() else {
+/// Whether `path` canonicalizes to the user's home directory, with the home
+/// injected. Duplicated logic instead of reused from `alnair-workspace`, which
+/// depends on THIS crate, to keep the dep edge one-way.
+///
+/// Takes `home` explicitly because `dirs::home_dir()` reads the
+/// `FOLDERID_Profile` Known Folder on Windows and ignores `HOME`, so tests
+/// cannot redirect it through the environment.
+fn is_home_dir_impl(path: &Path, home: Option<&Path>) -> bool {
+    let Some(home) = home else {
         return false;
     };
     let canon = |p: &Path| dunce::canonicalize(p).unwrap_or_else(|_| p.to_path_buf());
-    canon(path) == canon(&home)
+    canon(path) == canon(home)
 }
 
 /// Existing `<dir>/<subdir>` directories under each dir of a precomputed
@@ -94,31 +108,6 @@ pub(crate) fn existing_subdirs_along(chain_dirs: &[PathBuf], subdirs: &[&str]) -
 #[cfg(test)]
 mod tests {
     use super::*;
-    use serial_test::serial;
-
-    /// Restores the prior value (or unsets) on drop, so a test never leaves
-    /// process-global env pointing at a dropped tempdir.
-    struct EnvVarGuard {
-        key: &'static str,
-        prev: Option<std::ffi::OsString>,
-    }
-
-    impl EnvVarGuard {
-        fn set(key: &'static str, value: impl AsRef<std::ffi::OsStr>) -> Self {
-            let prev = std::env::var_os(key);
-            unsafe { std::env::set_var(key, value) };
-            Self { key, prev }
-        }
-    }
-
-    impl Drop for EnvVarGuard {
-        fn drop(&mut self) {
-            match self.prev.take() {
-                Some(v) => unsafe { std::env::set_var(self.key, v) },
-                None => unsafe { std::env::remove_var(self.key) },
-            }
-        }
-    }
 
     #[test]
     fn resolve_in_repo_yields_cwd_to_root_chain() {
@@ -161,35 +150,32 @@ mod tests {
     }
 
     #[test]
-    #[serial(home_env)]
     fn resolve_treats_home_git_repo_as_no_repo() {
-        // $HOME is process-global (`dirs::home_dir` reads it) so it needs the
-        // guard, and canonicalized to match the comparison in `is_home_dir`.
+        // The home dir is injected rather than set through `$HOME`:
+        // `dirs::home_dir()` reads the FOLDERID_Profile Known Folder on Windows
+        // and ignores the environment, so the env guard had no effect there.
         let tmp = tempfile::tempdir().unwrap();
         let home = dunce::canonicalize(tmp.path()).unwrap();
         git2::Repository::init(&home).unwrap();
-        let _home_guard = EnvVarGuard::set("HOME", &home);
         let sub = home.join("proj");
         std::fs::create_dir_all(&sub).unwrap();
 
-        let chain = RepoDirChain::resolve(&sub);
+        let chain = RepoDirChain::resolve_with_home(&sub, Some(&home));
         assert_eq!(chain.git_root, None, "a home-dir git root must be dropped");
         assert_eq!(chain.dirs, vec![sub]);
     }
 
     #[test]
-    #[serial(home_env)]
     fn resolve_keeps_non_home_git_root() {
-        // The guard is home-EXACT, so $HOME points at an unrelated dir here to
-        // prove a non-home git root still resolves normally.
+        // Home points at an unrelated dir, proving a non-home git root still
+        // resolves normally. Injected for the same Windows reason as above.
         let home = tempfile::tempdir().unwrap();
-        let _home_guard = EnvVarGuard::set("HOME", home.path());
         let repo = tempfile::tempdir().unwrap();
         git2::Repository::init(repo.path()).unwrap();
         let sub = repo.path().join("pkg");
         std::fs::create_dir_all(&sub).unwrap();
 
-        let chain = RepoDirChain::resolve(&sub);
+        let chain = RepoDirChain::resolve_with_home(&sub, Some(home.path()));
         let root = chain.git_root.expect("a non-home git root must be kept");
         assert_eq!(
             dunce::canonicalize(&root).unwrap(),

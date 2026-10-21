@@ -110,7 +110,9 @@ mod tests {
         // controlled search dir so it doesn't depend on the test host's PATH.
         let dir = tempfile::tempdir().unwrap();
         assert!(which::which_in("gh", Some(dir.path()), dir.path()).is_err());
-        let gh = dir.path().join("gh");
+        // Windows resolves executables by PATHEXT extension, not by the mode
+        // bit, so the fixture needs the `.exe` suffix there.
+        let gh = dir.path().join(if cfg!(windows) { "gh.exe" } else { "gh" });
         std::fs::write(&gh, b"#!/bin/sh\nexit 0\n").unwrap();
         #[cfg(unix)]
         {

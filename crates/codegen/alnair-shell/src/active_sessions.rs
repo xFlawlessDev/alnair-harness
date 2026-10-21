@@ -113,9 +113,33 @@ where
             let _ = lock_file.unlock();
             result.map(Some)
         }
-        Err(e) if e.kind() == io::ErrorKind::WouldBlock => Ok(None),
+        // "Someone else holds it" is not an error — the caller declines.
+        //
+        // The kind test alone is not portable: on Windows `LockFileEx` reports
+        // ERROR_LOCK_VIOLATION (raw 33), which `fs2` surfaces as
+        // `ErrorKind::Uncategorized`, NOT `WouldBlock`. Testing only the kind
+        // made every contended call on Windows return `Err`, so callers that
+        // treat an error as fatal (rather than as "try later") failed instead
+        // of backing off.
+        Err(e) if is_lock_contended(&e) => Ok(None),
         Err(e) => Err(e),
     }
+}
+
+/// Whether a `try_lock_*` failure means "another holder has it" rather than a
+/// real I/O fault.
+fn is_lock_contended(e: &io::Error) -> bool {
+    if e.kind() == io::ErrorKind::WouldBlock {
+        return true;
+    }
+    // ERROR_LOCK_VIOLATION (33) and ERROR_SHARING_VIOLATION (32): the first is
+    // an overlapping byte-range lock, the second a share-mode conflict. Both
+    // mean "contended" for our purposes.
+    #[cfg(windows)]
+    if matches!(e.raw_os_error(), Some(32) | Some(33)) {
+        return true;
+    }
+    false
 }
 
 fn locked_mutate<F, R>(data_path: &Path, tmp_path: &Path, mutate: F) -> io::Result<R>
@@ -250,16 +274,88 @@ mod tests {
         assert_eq!(list_in(dir.path()).unwrap().len(), 10);
     }
 
+    /// A concurrent holder must make `try_unregister_in` decline instead of
+    /// blocking.
+    ///
+    /// The holder is a **separate process**, not a second handle in this one:
+    /// `LockFileEx` (behind `fs2` on Windows) fails with `ERROR_LOCK_VIOLATION`
+    /// for an overlapping lock requested by the same process, so
+    /// `lock_exclusive()` here would panic before the assertion ever ran. On
+    /// Unix the same-process double lock succeeds, which is why the original
+    /// form passed there.
     #[test]
     fn try_unregister_skips_if_locked() {
         let dir = TempDir::new().unwrap();
         let s = make_session("s1", std::process::id());
         register_in(dir.path(), s.clone()).unwrap();
 
-        let lock_file = open_lock_file(&dir.path().join(LOCK_FILENAME)).unwrap();
-        lock_file.lock_exclusive().unwrap();
-        assert!(!try_unregister_in(dir.path(), &s.session_id).unwrap());
-        lock_file.unlock().unwrap();
+        let lock_path = dir.path().join(LOCK_FILENAME);
+        #[cfg(windows)]
+        let ready_path = dir.path().join("lock-holder-ready");
+        // A child that takes the lock and holds it until we signal by closing
+        // stdin. `flock` is POSIX; Windows uses a PowerShell FileStream lock.
+        #[cfg(unix)]
+        let mut holder = std::process::Command::new("sh")
+            .args([
+                "-c",
+                &format!("exec 9>>'{}'; flock -x 9; read _", lock_path.display()),
+            ])
+            .stdin(std::process::Stdio::piped())
+            .spawn()
+            .expect("spawn lock holder");
+        #[cfg(windows)]
+        let mut holder = std::process::Command::new("powershell")
+            .args([
+                "-NoProfile",
+                "-Command",
+                &format!(
+                    // `ReadWrite` sharing (not `None`): the assertion path still
+                    // has to OPEN the file to attempt its lock. `None` denies the
+                    // open itself, which surfaces as ERROR_SHARING_VIOLATION
+                    // before the lock is ever tried. `FileStream.Lock` then takes
+                    // the byte-range lock that `try_lock_exclusive` collides with.
+                    //
+                    // The ready-marker line is the handshake with the assertion
+                    // below: PowerShell's cold start is far slower than the
+                    // ~500 ms a fixed sleep allowed, so under a loaded full-suite
+                    // run the lock was sometimes not held yet and the "must
+                    // decline" assertion saw a free lock.
+                    "$f=[IO.File]::Open('{lock}','OpenOrCreate','ReadWrite','ReadWrite'); \
+                     $f.Lock(0,[Int64]::MaxValue); \
+                     Set-Content -NoNewline -Path '{ready}' -Value 'ok'; \
+                     [Console]::In.ReadLine() | Out-Null; $f.Close()",
+                    lock = lock_path.display(),
+                    ready = ready_path.display(),
+                ),
+            ])
+            .stdin(std::process::Stdio::piped())
+            .spawn()
+            .expect("spawn lock holder");
+
+        // Wait for the holder to actually take the lock (see the ready-marker
+        // comment above) instead of racing a fixed sleep.
+        #[cfg(windows)]
+        {
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+            while !ready_path.exists() {
+                assert!(
+                    std::time::Instant::now() < deadline,
+                    "lock holder never signalled readiness"
+                );
+                std::thread::sleep(std::time::Duration::from_millis(25));
+            }
+        }
+        #[cfg(unix)]
+        std::thread::sleep(std::time::Duration::from_millis(500));
+
+        assert!(
+            !try_unregister_in(dir.path(), &s.session_id).unwrap(),
+            "a held lock must make try_unregister decline"
+        );
+
+        // Release: closing stdin lets the holder exit and drop its lock.
+        drop(holder.stdin.take());
+        let _ = holder.wait();
         assert_eq!(list_in(dir.path()).unwrap().len(), 1);
     }
 

@@ -1860,10 +1860,12 @@ pool_size = 3
         let base = pool_base_directory();
         let instance_dir = base.join("test-instance-uuid");
         assert!(instance_dir.starts_with(&base));
+        // Component-wise: `display()` uses the platform separator, so a literal
+        // "worktree_pool/test-instance-uuid" never matches on Windows.
         assert!(
-            instance_dir
-                .to_string_lossy()
-                .contains("worktree_pool/test-instance-uuid")
+            instance_dir.ends_with("worktree_pool/test-instance-uuid"),
+            "expected the instance dir under worktree_pool/, got {}",
+            instance_dir.display()
         );
     }
 

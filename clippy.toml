@@ -21,6 +21,11 @@ large-error-threshold = 256
 # Enforcement boundary: this ban is applied by the per-crate cargo clippy
 # presubmits only — the Bazel lint aspect pins the repo-root //:clippy.toml,
 # (Upstream Bazel-only crates are not part of this workspace.)
+#
+# A macro that emits `canonicalize` (rust-embed's derive does, to resolve its
+# `#[folder]`) trips this ban from inside its own expansion. An item-level
+# `#[allow]` does not reach a generated item — put the allow on a module that
+# wraps the derive, and say why the canonicalized path never reaches runtime.
 disallowed-methods = [
     { path = "std::fs::canonicalize", reason = "returns \\\\?\\ verbatim paths on Windows; use dunce::canonicalize" },
     { path = "std::path::Path::canonicalize", reason = "returns \\\\?\\ verbatim paths on Windows; use dunce::canonicalize" },

@@ -1661,6 +1661,7 @@ impl SessionActor {
             loop_index += 1;
             self.drain_pending_interjections().await;
             self.flush_pending_skill_reminders().await;
+            self.flush_pending_project_instructions().await;
             self.inject_pending_monitor_events().await;
             let memory_reminder = self.first_turn_memory_reminder().await;
             if memory_reminder.is_some() {

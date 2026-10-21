@@ -67,6 +67,26 @@ pub async fn spawn_alnair_shell(
     // pager can share the same refreshing bearer.
     let auth_manager_for_pager = auth_manager.clone();
 
+    // Config hot-reload for the in-process transport. There is no ACP inbound
+    // simplex here, so the watcher's updates are dispatched DIRECTLY against
+    // the agent (`run_config_update_dispatch_direct`) rather than injected as
+    // request lines. Without this, `--no-leader` had no hot-reload at all.
+    let cwd_for_watcher = std::env::current_dir().unwrap_or_default();
+    let hot_reload_cancel = agent_cancel.clone();
+    let hot_reload = alnair_shell::agent::app::start_config_hot_reload(
+        &agent_config,
+        &cwd_for_watcher,
+        &hot_reload_cancel,
+    );
+    let auth_manager_for_reload = auth_manager.clone();
+    let models_manager_for_reload = models_manager.clone();
+
+    // Skills hot-reload, same transport split as config: direct dispatch, no
+    // inbound stream. Previously only leader and `agent stdio` had this, so
+    // adding a skill under `--no-leader` needed a restart.
+    let skills_watch =
+        alnair_shell::agent::app::start_skills_watch_direct(&agent_config.skills.paths);
+
     let spawn_fn: Box<dyn FnOnce(AcpClientTx) -> Result<Rc<MvpAgent>> + Send + 'static> = {
         Box::new(move |client_tx| {
             let gateway = AcpGatewaySender::new(client_tx);
@@ -76,7 +96,49 @@ pub async fn spawn_alnair_shell(
             if let Some(mc) = memory_config {
                 agent.set_memory_config(mc);
             }
-            Ok(Rc::new(agent))
+            let agent = Rc::new(agent);
+
+            // The dispatch task must live on the agent's thread: `MvpAgent` is
+            // `!Send`, so the update receiver is moved into the closure and
+            // driven here, on the same LocalSet that runs the agent.
+            if let Some((watcher, updates)) = hot_reload {
+                let agent_for_reload = agent.clone();
+                tokio::task::spawn_local(async move {
+                    // Hold the watcher for the task's lifetime; dropping it
+                    // stops the OS watches.
+                    let _watcher = watcher;
+                    alnair_shell::agent::app::run_config_update_dispatch_direct(
+                        updates,
+                        auth_manager_for_reload,
+                        models_manager_for_reload,
+                        agent_for_reload,
+                    )
+                    .await;
+                });
+            }
+
+            if let Some((watcher, mut skills_rx)) = skills_watch {
+                let agent_for_skills = agent.clone();
+                tokio::task::spawn_local(async move {
+                    let _watcher = watcher;
+                    while skills_rx.recv().await.is_some() {
+                        tracing::info!("Skill directory changed on disk, reloading skills");
+                        if let Err(e) = agent_for_skills
+                            .dispatch_internal(
+                                "alnair/internal/reload_skills",
+                                serde_json::json!({}),
+                            )
+                            .await
+                        {
+                            tracing::warn!(
+                                error = ?e,
+                                "in-process skills reload dispatch failed"
+                            );
+                        }
+                    }
+                });
+            }
+            Ok(agent)
         })
     };
 

@@ -11,6 +11,7 @@
 //! - `alnair/internal/reload_all_mcp_servers` config hot-reload, all sessions
 //! - `alnair/internal/reload_project_mcp_servers` config hot-reload, cwd-scoped
 //! - `alnair/internal/reload_skills`          skills file watcher fan-out
+//! - `alnair/internal/reload_project_instructions` AGENTS.md/rules file watcher fan-out
 //! - `alnair/internal/reload_models`          model list hot-reload from config.toml
 //! - `alnair/internal/reload_models_cache`    model catalog hot-reload from disk cache
 //! - `alnair/plugins/reload`                  rebuild shared plugin registry
@@ -43,6 +44,9 @@ pub async fn handle(agent: &MvpAgent, args: &acp::ExtRequest) -> ExtResult {
             handle_reload_project_mcp_servers(agent, args).await
         }
         "alnair/internal/reload_skills" => handle_reload_skills(agent),
+        "alnair/internal/reload_project_instructions" => {
+            handle_reload_project_instructions(agent, args).await
+        }
         "alnair/internal/reload_models" => handle_reload_models(agent),
         "alnair/internal/reload_models_cache" => handle_reload_models_cache(agent),
         "alnair/plugins/reload" => handle_plugins_reload(agent).await,
@@ -251,6 +255,53 @@ fn handle_reload_skills(agent: &MvpAgent) -> ExtResult {
         .map_err(|e| acp::Error::internal_error().data(e.to_string()))
 }
 
+/// Reload project instructions (`AGENTS.md` / `CLAUDE.md` / rules) for every
+/// session whose cwd sits at or beneath `cwd`. Called by the config file
+/// watcher when one of those files changes.
+///
+/// The cwd filter is the point: a session only reads instructions at or above
+/// its own directory, so a file edited in `repo/sub` must not touch a session
+/// opened in `repo`. Each surviving session re-reads from disk itself — the
+/// watcher's event path is not forwarded, because discovery is per-session
+/// (compat config, workspace user dir) and only the session can resolve it.
+async fn handle_reload_project_instructions(agent: &MvpAgent, args: &acp::ExtRequest) -> ExtResult {
+    #[derive(Deserialize)]
+    struct Params {
+        cwd: String,
+    }
+    let params: Params = parse_params(args)?;
+    let edited_root = Path::new(&params.cwd);
+
+    let targets: Vec<_> = agent
+        .sessions
+        .borrow()
+        .iter()
+        .filter(|(_, h)| Path::new(&h.info.cwd).starts_with(edited_root))
+        .map(|(sid, h)| (sid.clone(), h.cmd_tx.clone()))
+        .collect();
+
+    let mut reloaded = 0u32;
+    for (sid, tx) in targets {
+        if tx
+            .send(SessionCommand::ReloadProjectInstructions {
+                cwd: edited_root.to_path_buf(),
+            })
+            .is_ok()
+        {
+            reloaded += 1;
+        } else {
+            tracing::debug!(
+                session_id = %sid.0,
+                "project instructions reload: session channel closed"
+            );
+        }
+    }
+
+    ExtMethodResult::success(serde_json::json!({ "reloaded": reloaded }))
+        .to_ext_response()
+        .map_err(|e| acp::Error::internal_error().data(e.to_string()))
+}
+
 /// Reload MCP servers for ALL active sessions. Called by the config
 /// hot-reload watcher when `[mcp_servers]` changes in config.toml.
 async fn handle_reload_all_mcp_servers(agent: &MvpAgent) -> ExtResult {
@@ -426,6 +477,18 @@ fn handle_reload_models(agent: &MvpAgent) -> ExtResult {
         let mut agent_config = agent.cfg.borrow_mut();
         agent_config.models = toml_config.models.clone();
         agent_config.config_models = toml_config.config_models.clone();
+        // `[platforms.*]` drives catalog assembly: it decides which models exist
+        // (custom-provider declarations carry their own allowlist) and which
+        // base URL + credential each rides. Without copying it here, editing the
+        // table changed nothing until restart — the reload re-ran catalog
+        // assembly against the stale platforms snapshot.
+        agent_config.platforms = toml_config.platforms.clone();
+        // Derived from `platforms` by `new_from_toml_cfg`; must move with it or
+        // a newly declared custom provider is still classified as a
+        // session-coding endpoint and has its own key replaced by the Kimi
+        // bearer (CREDENTIAL RULE in AGENTS.md).
+        agent_config.endpoints.custom_provider_bases =
+            toml_config.endpoints.custom_provider_bases.clone();
         agent_config.session_summary_model = overrides.session_summary;
         agent_config.image_description_model = overrides.image_description;
         agent_config.prompt_suggest_model_pin = overrides.prompt_suggestion;

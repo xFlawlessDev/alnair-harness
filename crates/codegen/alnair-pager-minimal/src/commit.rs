@@ -1027,7 +1027,12 @@ mod tests {
                 text.push_str(buf[(x, y)].symbol());
             }
         }
-        assert!(text.contains("src/main.rs"), "rendered text: {text:?}");
+        // Compare path components, not a literal separator: the renderer emits
+        // the platform's own (`src\main.rs` on Windows).
+        assert!(
+            text.contains("src") && text.contains("main.rs"),
+            "rendered text: {text:?}"
+        );
         assert!(
             !text.contains("/alternate/worktree"),
             "session prefix should be elided: {text:?}"

@@ -1930,121 +1930,144 @@ fn bundled_personas_and_roles_have_lowest_priority_in_resolve_order() {
     let tmp = tempfile::TempDir::new().unwrap();
     let home = tmp.path().join("home");
     let workspace = tmp.path().join("workspace");
-    let bundled = home.join(".alnair").join("bundled");
-    std::fs::create_dir_all(workspace.join(".alnair").join("roles")).unwrap();
-    std::fs::create_dir_all(workspace.join(".alnair").join("personas")).unwrap();
-    std::fs::create_dir_all(home.join(".alnair").join("roles")).unwrap();
-    std::fs::create_dir_all(home.join(".alnair").join("personas")).unwrap();
-    std::fs::create_dir_all(bundled.join("roles")).unwrap();
-    std::fs::create_dir_all(bundled.join("personas")).unwrap();
+    let bundled = tmp.path().join("bundled");
+    for sub in ["roles", "personas"] {
+        std::fs::create_dir_all(workspace.join(".alnair").join(sub)).unwrap();
+        std::fs::create_dir_all(home.join(".alnair").join(sub)).unwrap();
+        std::fs::create_dir_all(bundled.join(sub)).unwrap();
+    }
     std::fs::write(
-            bundled.join("roles/reviewer.toml"),
-            r#"description = "Bundled reviewer""#,
-        )
-        .unwrap();
+        bundled.join("roles/reviewer.toml"),
+        r#"description = "Bundled reviewer""#,
+    )
+    .unwrap();
     std::fs::write(
-            bundled.join("personas/reviewer.toml"),
-            r#"instructions = "Bundled persona""#,
-        )
-        .unwrap();
+        bundled.join("personas/reviewer.toml"),
+        r#"instructions = "Bundled persona""#,
+    )
+    .unwrap();
     std::fs::write(
-            home.join(".alnair/roles/reviewer.toml"),
-            r#"description = "User reviewer""#,
-        )
-        .unwrap();
+        home.join(".alnair/roles/reviewer.toml"),
+        r#"description = "User reviewer""#,
+    )
+    .unwrap();
     std::fs::write(
-            home.join(".alnair/personas/reviewer.toml"),
-            r#"instructions = "User persona""#,
-        )
-        .unwrap();
+        home.join(".alnair/personas/reviewer.toml"),
+        r#"instructions = "User persona""#,
+    )
+    .unwrap();
     std::fs::write(
-            workspace.join(".alnair/roles/reviewer.toml"),
-            r#"description = "Project reviewer""#,
-        )
-        .unwrap();
+        workspace.join(".alnair/roles/reviewer.toml"),
+        r#"description = "Project reviewer""#,
+    )
+    .unwrap();
     std::fs::write(
-            workspace.join(".alnair/personas/reviewer.toml"),
-            r#"instructions = "Project persona""#,
-        )
-        .unwrap();
-    with_env_var(
-        "HOME",
-        home.to_str().unwrap(),
-        || {
-            let config = toml::from_str::<
-                toml::Value,
-            >(
-                    r#"
-                [subagents]
-                enabled = true
+        workspace.join(".alnair/personas/reviewer.toml"),
+        r#"instructions = "Project persona""#,
+    )
+    .unwrap();
 
-                [subagents.roles.reviewer]
-                description = "Inline reviewer"
+    // Roots are injected rather than read from `dirs::home_dir()`: on Windows
+    // that reads the FOLDERID_Profile Known Folder and ignores every env var,
+    // so an env-based redirect silently pointed at the developer's real home
+    // and the assertions read whatever happened to be installed there.
+    let resolve = || {
+        let config: toml::Value = toml::from_str(
+            r#"
+            [subagents]
+            enabled = true
+            "#,
+        )
+        .unwrap();
+        SubagentsConfig::resolve_with_roots(
+            true,
+            &config,
+            Some(&workspace),
+            Some(&home),
+            &bundled,
+        )
+    };
 
-                [subagents.personas.reviewer]
-                instructions = "Inline persona"
-                "#,
-                )
-                .unwrap();
-            let resolved = SubagentsConfig::resolve(true, &config, Some(&workspace));
-            assert_eq!(
-                resolved.get_role("reviewer").unwrap().description, "Inline reviewer"
-            );
-            assert_eq!(
-                resolved.get_persona("reviewer").unwrap().instructions.as_deref(),
-                Some("Inline persona")
-            );
-        },
+    // Workspace beats home beats bundled.
+    let resolved = resolve();
+    assert_eq!(
+        resolved.get_role("reviewer").unwrap().description,
+        "Project reviewer"
     );
+    assert_eq!(
+        resolved.get_persona("reviewer").unwrap().instructions.as_deref(),
+        Some("Project persona")
+    );
+
     std::fs::remove_file(workspace.join(".alnair/roles/reviewer.toml")).unwrap();
     std::fs::remove_file(workspace.join(".alnair/personas/reviewer.toml")).unwrap();
-    with_env_var(
-        "HOME",
-        home.to_str().unwrap(),
-        || {
-            let config = toml::from_str::<
-                toml::Value,
-            >(
-                    r#"
-                [subagents]
-                enabled = true
-                "#,
-                )
-                .unwrap();
-            let resolved = SubagentsConfig::resolve(true, &config, Some(&workspace));
-            assert_eq!(
-                resolved.get_role("reviewer").unwrap().description, "User reviewer"
-            );
-            assert_eq!(
-                resolved.get_persona("reviewer").unwrap().instructions.as_deref(),
-                Some("User persona")
-            );
-        },
+    let resolved = resolve();
+    assert_eq!(
+        resolved.get_role("reviewer").unwrap().description,
+        "User reviewer"
     );
+    assert_eq!(
+        resolved.get_persona("reviewer").unwrap().instructions.as_deref(),
+        Some("User persona")
+    );
+
     std::fs::remove_file(home.join(".alnair/roles/reviewer.toml")).unwrap();
     std::fs::remove_file(home.join(".alnair/personas/reviewer.toml")).unwrap();
-    with_env_var(
-        "HOME",
-        home.to_str().unwrap(),
-        || {
-            let config = toml::from_str::<
-                toml::Value,
-            >(
-                    r#"
-                [subagents]
-                enabled = true
-                "#,
-                )
-                .unwrap();
-            let resolved = SubagentsConfig::resolve(true, &config, Some(&workspace));
-            assert_eq!(
-                resolved.get_role("reviewer").unwrap().description, "Bundled reviewer"
-            );
-            assert_eq!(
-                resolved.get_persona("reviewer").unwrap().instructions.as_deref(),
-                Some("Bundled persona")
-            );
-        },
+    let resolved = resolve();
+    assert_eq!(
+        resolved.get_role("reviewer").unwrap().description,
+        "Bundled reviewer"
+    );
+    assert_eq!(
+        resolved.get_persona("reviewer").unwrap().instructions.as_deref(),
+        Some("Bundled persona")
+    );
+}
+
+/// Inline `[subagents.roles.*]` / `[subagents.personas.*]` beat every
+/// file-based source, including the workspace copy.
+#[test]
+fn inline_subagent_config_beats_file_discovery() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let home = tmp.path().join("home");
+    let workspace = tmp.path().join("workspace");
+    let bundled = tmp.path().join("bundled");
+    for sub in ["roles", "personas"] {
+        std::fs::create_dir_all(workspace.join(".alnair").join(sub)).unwrap();
+    }
+    std::fs::write(
+        workspace.join(".alnair/roles/reviewer.toml"),
+        r#"description = "Project reviewer""#,
+    )
+    .unwrap();
+    std::fs::write(
+        workspace.join(".alnair/personas/reviewer.toml"),
+        r#"instructions = "Project persona""#,
+    )
+    .unwrap();
+
+    let config: toml::Value = toml::from_str(
+        r#"
+        [subagents]
+        enabled = true
+
+        [subagents.roles.reviewer]
+        description = "Inline reviewer"
+
+        [subagents.personas.reviewer]
+        instructions = "Inline persona"
+        "#,
+    )
+    .unwrap();
+    let resolved =
+        SubagentsConfig::resolve_with_roots(true, &config, Some(&workspace), Some(&home), &bundled);
+    assert_eq!(
+        resolved.get_role("reviewer").unwrap().description,
+        "Inline reviewer"
+    );
+    assert_eq!(
+        resolved.get_persona("reviewer").unwrap().instructions.as_deref(),
+        Some("Inline persona")
     );
 }
 #[test]
@@ -2472,7 +2495,16 @@ fn validate_hooks_path_rejects_relative_path() {
 }
 #[test]
 fn validate_hooks_path_rejects_outside_alnair_home() {
-    let result = validate_hooks_path("/tmp/evil-hooks");
+    // Must be an ABSOLUTE path that is not under ~/.alnair, or the earlier
+    // "must be absolute" check rejects it first and this test stops covering
+    // the home-restriction branch. `/tmp` is not absolute on Windows, so build
+    // the path from the platform's own root.
+    #[cfg(windows)]
+    let outside = std::path::Path::new("C:\\").join("evil-hooks");
+    #[cfg(not(windows))]
+    let outside = std::path::PathBuf::from("/tmp/evil-hooks");
+
+    let result = validate_hooks_path(outside.to_str().unwrap());
     assert!(result.is_err());
     let msg = result.unwrap_err().to_string();
     assert!(

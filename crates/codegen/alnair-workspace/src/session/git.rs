@@ -2694,21 +2694,21 @@ mod tests {
     }
     #[test]
     fn test_effective_worktree_cwd_single_level_offset() {
-        let result = effective_worktree_cwd(
-            "/home/user/.alnair/worktrees/repo/ab-123-a",
-            Path::new("src"),
-        );
-        assert_eq!(result, "/home/user/.alnair/worktrees/repo/ab-123-a/src");
+        let root = "/home/user/.alnair/worktrees/repo/ab-123-a";
+        let result = effective_worktree_cwd(root, Path::new("src"));
+        // Joined natively: on Windows the separator is `\`, so build the
+        // expectation with `PathBuf::join` instead of a literal.
+        assert_eq!(result, Path::new(root).join("src").to_string_lossy());
     }
     #[test]
     fn test_effective_worktree_cwd_nested_offset() {
-        let result = effective_worktree_cwd(
-            "/home/user/.alnair/worktrees/repo/ab-123-b",
-            Path::new("packages/frontend/src"),
-        );
+        let root = "/home/user/.alnair/worktrees/repo/ab-123-b";
+        let result = effective_worktree_cwd(root, Path::new("packages/frontend/src"));
         assert_eq!(
             result,
-            "/home/user/.alnair/worktrees/repo/ab-123-b/packages/frontend/src"
+            Path::new(root)
+                .join("packages/frontend/src")
+                .to_string_lossy()
         );
     }
     #[test]
@@ -2781,7 +2781,13 @@ mod tests {
         let (offset, _git_root) = compute_subdir_offset(&sub.to_string_lossy());
         let worktree_root = "/home/user/.alnair/worktrees/myrepo/ab-test-a";
         let effective = effective_worktree_cwd(worktree_root, &offset);
-        assert_eq!(effective, format!("{}/src/lib", worktree_root));
+        // Native separator: `compute_subdir_offset` yields `src/lib` on POSIX
+        // and `src\lib` on Windows, and `effective_worktree_cwd` joins it as
+        // one relative path.
+        assert_eq!(
+            effective,
+            Path::new(worktree_root).join(&offset).to_string_lossy()
+        );
     }
     #[test]
     fn test_find_git_root_from_repo_root() {

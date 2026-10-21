@@ -230,6 +230,10 @@ mod tests {
     use std::fs;
     use tempfile::TempDir;
 
+    // The loader shells out to `/bin/bash` (with direnv stubs) — neither exists
+    // on Windows, where `load_envrc` correctly yields `None`. Gating keeps these
+    // asserting the loader rather than the platform's shell support.
+    #[cfg(unix)]
     #[test]
     fn test_simple_export() {
         let dir = TempDir::new().unwrap();
@@ -239,6 +243,7 @@ mod tests {
         assert_eq!(env.get("FOO"), Some(&"bar".to_string()));
     }
 
+    #[cfg(unix)]
     #[test]
     fn test_variable_expansion() {
         let dir = TempDir::new().unwrap();
@@ -255,6 +260,7 @@ mod tests {
         assert!(load_envrc(dir.path()).is_none());
     }
 
+    #[cfg(unix)]
     #[test]
     fn test_path_add() {
         let dir = TempDir::new().unwrap();
@@ -265,6 +271,7 @@ mod tests {
         assert!(path.contains(&format!("{}/bin", dir.path().display())));
     }
 
+    #[cfg(unix)]
     #[test]
     fn test_conditional() {
         let dir = TempDir::new().unwrap();

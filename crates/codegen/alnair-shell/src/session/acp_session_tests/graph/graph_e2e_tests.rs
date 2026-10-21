@@ -18,6 +18,42 @@ use tempfile::TempDir;
 
 const ENV_FLAG: &str = "ALNAIR_GOAL_CLASSIFIER";
 
+/// Extract an absolute path the prompt embeds, starting at the first occurrence
+/// of `anchor` (e.g. `graph.json`) and extending to the end of that token.
+///
+/// Walks back over characters a Windows path legitimately contains. The
+/// previous inline versions searched for a literal `"/graph.json"` and treated
+/// `:` / `\` as delimiters, so on Windows they either found nothing
+/// (`C:\…\graph.json`) or sliced a truncated path — every graph e2e test failed
+/// in setup for that reason alone.
+fn extract_embedded_path(prompt: &str, anchor: &str) -> Option<String> {
+    let start_idx = prompt.find(anchor)?;
+    // The token ends at the first non-path character after the anchor.
+    let end = prompt[start_idx..]
+        .char_indices()
+        .take_while(|(_, c)| {
+            c.is_ascii_alphanumeric() || matches!(c, '/' | '\\' | '.' | '-' | '_' | ':' | '~')
+        })
+        .last()
+        .map(|(i, c)| start_idx + i + c.len_utf8())
+        .unwrap_or(start_idx + anchor.len());
+    let start = prompt[..start_idx]
+        .char_indices()
+        .rev()
+        .take_while(|(_, c)| {
+            c.is_ascii_alphanumeric() || matches!(c, '/' | '\\' | '.' | '-' | '_' | ':' | '~')
+        })
+        .last()
+        .map(|(i, _)| i)
+        .unwrap_or(start_idx);
+    Some(prompt[start..end].to_string())
+}
+
+/// Shorthand for the planner/worker prompts that embed `graph.json`.
+fn extract_graph_json_path(prompt: &str) -> Option<String> {
+    extract_embedded_path(prompt, "graph.json")
+}
+
 /// A valid 3-node chain a → b → c (the harness appends `gn-final`).
 fn chain_graph_json() -> Vec<u8> {
     serde_json::json!({
@@ -58,14 +94,7 @@ fn spawn_graph_planner_coordinator(
                 let body = bodies
                     .pop_front()
                     .unwrap_or_else(|| panic!("unexpected planner spawn #{}", n + 1));
-                let graph_path = req.prompt.find("/graph.json").map(|end_idx| {
-                    let end = end_idx + "/graph.json".len();
-                    let start = req.prompt[..end_idx]
-                        .rfind(|c: char| !c.is_ascii_graphic() || c == '`')
-                        .map(|i| i + 1)
-                        .unwrap_or(0);
-                    req.prompt[start..end].to_string()
-                });
+                let graph_path = extract_graph_json_path(&req.prompt);
                 let p = graph_path.expect("graph planner prompt must embed the graph.json path");
                 std::fs::create_dir_all(std::path::Path::new(&p).parent().unwrap()).unwrap();
                 std::fs::write(&p, &body).unwrap();
@@ -838,18 +867,7 @@ fn happy_reply(
     dag: &[u8],
 ) -> String {
     if req.prompt.contains("Graph Plan Writer") {
-        let path = req
-            .prompt
-            .find("/graph.json")
-            .map(|end| {
-                let end = end + "/graph.json".len();
-                let start = req.prompt[..end - "/graph.json".len()]
-                    .rfind(|c: char| !c.is_ascii_graphic() || c == '`')
-                    .map(|i| i + 1)
-                    .unwrap_or(0);
-                req.prompt[start..end].to_string()
-            })
-            .expect("planner prompt embeds path");
+        let path = extract_graph_json_path(&req.prompt).expect("planner prompt embeds path");
         std::fs::create_dir_all(std::path::Path::new(&path).parent().unwrap()).unwrap();
         std::fs::write(&path, dag).unwrap();
         "Done".to_owned()
@@ -1338,18 +1356,7 @@ async fn batch_merges_real_worktrees_and_cleans_them_up() {
                             .prompt
                             .contains("Graph Plan Writer")
                         {
-                            let path = req
-                                .prompt
-                                .find("/graph.json")
-                                .map(|end| {
-                                    let end = end + "/graph.json".len();
-                                    let start = req.prompt[..end - "/graph.json".len()]
-                                        .rfind(|c: char| !c.is_ascii_graphic() || c == '`')
-                                        .map(|i| i + 1)
-                                        .unwrap_or(0);
-                                    req.prompt[start..end].to_string()
-                                })
-                                .unwrap();
+                            let path = extract_graph_json_path(&req.prompt).unwrap();
                             std::fs::create_dir_all(std::path::Path::new(&path).parent().unwrap())
                                 .unwrap();
                             std::fs::write(&path, &dag).unwrap();
@@ -1632,20 +1639,7 @@ fn replan_reply(
     dag: &[u8],
 ) -> String {
     if req.prompt.contains("Graph Replanner") {
-        let path = req
-            .prompt
-            .find("/replan.v")
-            .map(|start_idx| {
-                let end = req.prompt[start_idx..]
-                    .find(".json")
-                    .map(|e| start_idx + e + ".json".len())
-                    .unwrap();
-                let start = req.prompt[..start_idx]
-                    .rfind(|c: char| !c.is_ascii_graphic() || c == '`')
-                    .map(|i| i + 1)
-                    .unwrap_or(0);
-                req.prompt[start..end].to_string()
-            })
+        let path = extract_embedded_path(&req.prompt, "replan.v")
             .expect("replanner prompt embeds the artifact path");
         let a_id = crate::session::graph_plan::node_id_for_slug("a");
         let body = serde_json::json!({
@@ -1981,20 +1975,7 @@ async fn optimizer_removes_false_dep_and_unlocks_real_parallelism() {
                 _tmp.path().to_path_buf(),
                 move |req| {
                     if req.prompt.contains("Graph Topology Optimizer") {
-                        let path = req
-                            .prompt
-                            .find("/optimize.v")
-                            .map(|start_idx| {
-                                let end = req.prompt[start_idx..]
-                                    .find(".json")
-                                    .map(|e| start_idx + e + ".json".len())
-                                    .unwrap();
-                                let start = req.prompt[..start_idx]
-                                    .rfind(|c: char| !c.is_ascii_graphic() || c == '`')
-                                    .map(|i| i + 1)
-                                    .unwrap_or(0);
-                                req.prompt[start..end].to_string()
-                            })
+                        let path = extract_embedded_path(&req.prompt, "optimize.v")
                             .expect("optimizer prompt embeds artifact path");
                         let ops = serde_json::json!({
                             "ops": [{"op": "remove_dep", "node": b_id, "dep": a_id}]

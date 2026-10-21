@@ -179,15 +179,29 @@ fn parse_details_path(prompt: &str) -> Option<String> {
     crate::session::goal_classifier::parse_skeptic_details_path_from_prompt(prompt)
 }
 
-/// Pull the absolute `.../strategy.md` path out of the strategist prompt
-/// (walk left from `/strategy.md` to the path start).
+/// Pull the absolute `.../strategy.md` path out of the strategist prompt.
+///
+/// Accepts `\` and `:` so a Windows path is captured whole — the previous
+/// literal `"/strategy.md"` search found nothing there.
 fn parse_strategy_path(prompt: &str) -> Option<String> {
-    let end_idx = prompt.find("/strategy.md")?;
-    let end = end_idx + "/strategy.md".len();
-    let start = prompt[..end_idx]
-        .rfind(|c: char| !c.is_ascii_graphic() || c == '`')
-        .map(|i| i + 1)
-        .unwrap_or(0);
+    let start_idx = prompt.find("strategy.md")?;
+    let end = prompt[start_idx..]
+        .char_indices()
+        .take_while(|(_, c)| {
+            c.is_ascii_alphanumeric() || matches!(c, '/' | '\\' | '.' | '-' | '_' | ':' | '~')
+        })
+        .last()
+        .map(|(i, c)| start_idx + i + c.len_utf8())
+        .unwrap_or(start_idx + "strategy.md".len());
+    let start = prompt[..start_idx]
+        .char_indices()
+        .rev()
+        .take_while(|(_, c)| {
+            c.is_ascii_alphanumeric() || matches!(c, '/' | '\\' | '.' | '-' | '_' | ':' | '~')
+        })
+        .last()
+        .map(|(i, _)| i)
+        .unwrap_or(start_idx);
     Some(prompt[start..end].to_string())
 }
 

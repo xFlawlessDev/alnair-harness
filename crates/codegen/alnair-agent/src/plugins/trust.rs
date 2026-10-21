@@ -168,11 +168,20 @@ impl TrustStore {
     /// is under the user's home directory.  Otherwise it requires explicit
     /// trust via `~/.alnair/trusted-plugins`.
     pub fn is_config_path_auto_trusted(plugin_root: &Path) -> bool {
-        let Some(home) = dirs::home_dir() else {
+        Self::is_config_path_auto_trusted_with_home(plugin_root, dirs::home_dir().as_deref())
+    }
+
+    /// [`Self::is_config_path_auto_trusted`] with the home directory injected.
+    ///
+    /// `dirs::home_dir()` reads the `FOLDERID_Profile` Known Folder on Windows
+    /// and ignores `HOME`/`USERPROFILE`, so tests cannot redirect it through the
+    /// environment; the seam keeps the under-home rule assertable everywhere.
+    pub fn is_config_path_auto_trusted_with_home(plugin_root: &Path, home: Option<&Path>) -> bool {
+        let Some(home) = home else {
             return false;
         };
         match dunce::canonicalize(plugin_root) {
-            Ok(canonical) => canonical.starts_with(&home),
+            Ok(canonical) => canonical.starts_with(home),
             Err(_) => false,
         }
     }

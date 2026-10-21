@@ -220,6 +220,25 @@ impl AuthFileLock {
     pub(crate) fn still_live(&self, _auth_json_path: &Path) -> bool {
         true
     }
+
+    /// Read the lock file's contents through the **holder's own** handle.
+    ///
+    /// Windows `LockFileEx` denies ordinary opens of the locked byte range —
+    /// even with full sharing — so a test that wants to inspect the holder
+    /// info must read through the handle that owns the lock. Unix reads the
+    /// path normally (flock is advisory), which is why this only mattered on
+    /// Windows.
+    #[cfg(test)]
+    pub(crate) fn read_holder_info(&self) -> std::io::Result<String> {
+        use std::io::{Read as _, Seek as _, SeekFrom};
+        // Clone shares the OS file handle but has its own cursor, so seeking it
+        // to 0 does not disturb the writer's position.
+        let mut f = self._file.try_clone()?;
+        f.seek(SeekFrom::Start(0))?;
+        let mut out = String::new();
+        f.read_to_string(&mut out)?;
+        Ok(out)
+    }
 }
 
 pub fn read_auth_json(auth_file: &Path) -> std::io::Result<AuthStore> {
