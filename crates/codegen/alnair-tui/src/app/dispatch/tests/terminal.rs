@@ -145,6 +145,52 @@ fn closing_emits_a_kill_for_a_live_pane() {
 }
 
 #[test]
+fn closing_the_session_kills_its_pty() {
+    use super::super::session::modal::dispatch_sessions_confirm_close;
+
+    let mut app = test_app_with_agent();
+    // Two agents, so the close is not refused as "the only session".
+    let second = AgentId(1);
+    let session = make_test_agent_session(&app, second, "second-session");
+    app.agents
+        .insert(second, AgentView::new(session, ScrollbackState::new()));
+    app.next_agent_id = 2;
+
+    let first = AgentId(0);
+    let view = app.agents.get_mut(&first).unwrap();
+    handle_pty_created(view, first, "pty-first".to_string());
+
+    let effects = dispatch_sessions_confirm_close(&mut app, first);
+    assert!(!app.agents.contains_key(&first), "the view is gone");
+    assert!(
+        effects
+            .iter()
+            .any(|e| matches!(e, Effect::PtyClose { pty_id } if pty_id == "pty-first")),
+        "closing a session must kill its PTY, got {effects:?}"
+    );
+}
+
+#[test]
+fn exiting_to_the_welcome_screen_keeps_the_pane_alive() {
+    use super::super::session::lifecycle::dispatch_exit_session;
+
+    let mut app = test_app_with_agent();
+    let id = AgentId(0);
+    let view = app.agents.get_mut(&id).unwrap();
+    handle_pty_created(view, id, "pty-1".to_string());
+
+    let effects = dispatch_exit_session(&mut app);
+    assert!(
+        app.agents.contains_key(&id),
+        "ExitSession returns to Welcome but keeps the agent"
+    );
+    assert!(
+        !effects.iter().any(|e| matches!(e, Effect::PtyClose { .. })),
+        "a view the user can return to must keep its shell"
+    );
+}
+
+#[test]
 fn the_toggle_routes_through_dispatch() {
     let mut view = view();
     let effects = dispatch_toggle_terminal(&mut view);

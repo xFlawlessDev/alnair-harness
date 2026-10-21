@@ -364,15 +364,12 @@ pub(in crate::app::dispatch) fn dispatch_new_session_inner_with_id(
 }
 /// Exit the current session and return to the welcome screen.
 pub(in crate::app::dispatch) fn dispatch_exit_session(app: &mut AppView) -> Vec<Effect> {
-    let mut effects =
+    let effects =
         unregister_session_effect(get_active_agent(app).and_then(|a| a.session.session_id.clone()));
-    // A PTY outlives its session server-side, so leaving it behind would leak a
-    // shell for the rest of the agent's lifetime.
-    if let Some(agent) = get_active_agent(app)
-        && let Some(close) = super::super::terminal::close_terminal_effect(agent)
-    {
-        effects.push(close);
-    }
+    // No PTY teardown here: this only moves the view back to Welcome and keeps
+    // the agent (and its terminal pane) in `app.agents`, so the user can return
+    // to it. The PTY is killed where the view is actually dropped -
+    // `remove_agent_and_cleanup`.
     show_welcome(app);
     app.welcome_prompt_focused = true;
     app.session_picker_entries = None;
@@ -715,7 +712,10 @@ pub(in crate::app::dispatch) fn dispatch_new_session_with_id(
 pub(in crate::app::dispatch) fn refuse_chat_mode_build_agent(app: &mut AppView, agent_id: AgentId) {
     app.show_toast(crate::app::session_startup::CHAT_MODE_LOCAL_BUILD_REFUSAL);
     let fallback = app.agents.keys().copied().find(|id| *id != agent_id);
-    remove_agent_and_cleanup(app, agent_id);
+    // A placeholder has no session id, and `dispatch_toggle_terminal` refuses to
+    // create a PTY without one, so this view cannot own a pane. Drop the close
+    // effect rather than inventing a way to send it from a `()`-returning path.
+    let _ = remove_agent_and_cleanup(app, agent_id);
     if let Some(target) = fallback {
         switch_to_agent(app, target, SwitchCause::Picker);
     } else {
@@ -943,7 +943,9 @@ pub(in crate::app::dispatch) fn handle_worktree_session_failed(
         .is_some_and(|a| a.session.session_id.is_none() && a.session.forked_from.is_none());
     if is_orphan_zombie {
         let fallback = app.agents.keys().copied().find(|id| *id != agent_id);
-        remove_agent_and_cleanup(app, agent_id);
+        // A zombie has no session id, and the toggle refuses to create a PTY
+        // without one, so it cannot own a pane.
+        let _ = remove_agent_and_cleanup(app, agent_id);
         if let Some(target) = fallback {
             switch_to_agent(app, target, SwitchCause::Picker);
         } else {

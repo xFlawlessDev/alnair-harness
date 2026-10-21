@@ -6,16 +6,29 @@ use crate::app::dispatch::ctx::{SwitchCause, show_welcome, switch_to_agent};
 use crate::app::dispatch::task_result::unregister_session_effect;
 /// Remove an agent and clean up all references to it:
 /// `forked_from` pointers on surviving agents.
-pub(in crate::app::dispatch) fn remove_agent_and_cleanup(app: &mut AppView, agent_id: AgentId) {
+///
+/// Returns the PTY teardown for the view being dropped, if it owned a terminal
+/// pane. This is the ONE chokepoint for dropping a view, so the close effect
+/// belongs here rather than at each caller: a PTY outlives its session
+/// server-side, and a caller that forgot would leak a shell until the agent
+/// process exits.
+pub(in crate::app::dispatch) fn remove_agent_and_cleanup(
+    app: &mut AppView,
+    agent_id: AgentId,
+) -> Option<Effect> {
     let removed = app.agents.shift_remove(&agent_id);
     for agent in app.agents.values_mut() {
         if agent.session.forked_from == Some(agent_id) {
             agent.session.forked_from = None;
         }
     }
-    if removed.is_some() {
+    if let Some(removed) = removed {
+        let close = crate::app::dispatch::terminal::close_terminal_effect(&removed);
         drop(removed);
         crate::memory_release::release_retained_memory_with("agent-close");
+        close
+    } else {
+        None
     }
 }
 /// Close (drop from this pager's in-memory list) the given agent.
@@ -57,12 +70,14 @@ pub(in crate::app::dispatch) fn dispatch_sessions_confirm_close(
             show_welcome(app);
         }
     }
-    let effects = unregister_session_effect(
+    let mut effects = unregister_session_effect(
         app.agents
             .get(&closed_id)
             .and_then(|a| a.session.session_id.clone()),
     );
-    remove_agent_and_cleanup(app, closed_id);
+    if let Some(close) = remove_agent_and_cleanup(app, closed_id) {
+        effects.push(close);
+    }
     effects
 }
 /// Rename the current session via alnair/session/rename.
