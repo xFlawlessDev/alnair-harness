@@ -15,6 +15,7 @@ mod settings;
 mod status;
 mod tabs;
 mod task_result;
+mod terminal;
 mod transcript;
 mod turn;
 use super::ctx::{find_agent_by_session_id, get_active_agent, get_active_agent_mut};

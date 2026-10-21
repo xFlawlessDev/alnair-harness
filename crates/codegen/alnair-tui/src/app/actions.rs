@@ -370,6 +370,8 @@ pub enum Action {
     CancelScheduledTask(String),
     /// Demote the currently running execute tool to a background task.
     DemoteToBackground,
+    /// Toggle the read-only terminal pane for the active agent view.
+    ToggleTerminal,
     /// Request current bundle cache status via `alnair/bundle/status`.
     RequestBundleStatus,
     /// View a catalog entry's raw content in the block viewer.
@@ -1283,8 +1285,20 @@ pub enum ProbedAttachment {
     /// The attachment probe task failed or timed out.
     ProbeFailed,
 }
-/// Async side effect produced by [`super::dispatch::dispatch`].
+/// Result of `alnair/terminal/pty/load`.
 ///
+/// The server records the PTY's own size, which can differ from what the pane
+/// requested; the pane resizes its emulator to match before the replay frames
+/// land, or the replayed bytes would be laid out at the wrong width.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PtyLoadedInfo {
+    pub rows: u16,
+    pub cols: u16,
+    pub exited: bool,
+    pub exit_code: Option<i32>,
+}
+
+/// Async side effect produced by [`super::dispatch::dispatch`].
 /// The event loop spawns these into a `JoinSet`. When they complete,
 /// the result is wrapped in [`TaskResult`] and fed back through
 /// `Action::TaskComplete`.
@@ -1478,6 +1492,31 @@ pub enum Effect {
         session_id: acp::SessionId,
         tool_call_id: String,
     },
+    /// Create a server-side PTY for a terminal pane.
+    ///
+    /// `session_id` scopes the PTY's working directory to the agent's session;
+    /// the server falls back to the session's cwd when `cwd` is unset.
+    PtyCreate {
+        agent_id: AgentId,
+        session_id: acp::SessionId,
+        rows: u16,
+        cols: u16,
+    },
+    /// Subscribe this client to an existing PTY and replay its ring buffer.
+    ///
+    /// `load` also re-points the PTY's `target_client_id` here, which is why
+    /// each client owns its own PTY (see `app::terminal_pane`).
+    PtyLoad { agent_id: AgentId, pty_id: String },
+    /// Forward keystrokes to the PTY (3b; unused in 3a).
+    PtyInput { pty_id: String, data: Vec<u8> },
+    /// Resize the PTY (3b; unused in 3a).
+    PtyResize {
+        pty_id: String,
+        rows: u16,
+        cols: u16,
+    },
+    /// Kill a PTY and drop its server-side state.
+    PtyClose { pty_id: String },
     /// Switch active model.
     SwitchModel {
         agent_id: AgentId,
@@ -2178,6 +2217,26 @@ pub enum TaskResult {
     PromptHistoryLoaded {
         agent_id: AgentId,
         prompts: Vec<String>,
+    },
+    /// A PTY was created for a terminal pane. The dispatcher immediately arms
+    /// `Effect::PtyLoad` so the pane shows the replay instead of a blank grid.
+    PtyCreated {
+        agent_id: AgentId,
+        result: Result<String, String>,
+    },
+    /// A PTY replay was requested. `rows`/`cols` come from the server's record
+    /// of the PTY, which can differ from what the pane asked for.
+    PtyLoaded {
+        agent_id: AgentId,
+        pty_id: String,
+        result: Result<PtyLoadedInfo, String>,
+    },
+    /// A PTY request failed. Carries the pane's agent so the toast lands on the
+    /// view that asked, not whichever tab happens to be active.
+    PtyFailed {
+        agent_id: AgentId,
+        pty_id: String,
+        error: String,
     },
     /// Running agent name cached from `session/info` (for agents modal, etc.).
     SessionAgentNameResolved {

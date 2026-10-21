@@ -30,6 +30,7 @@ mod settings;
 mod status;
 mod tabs;
 mod task_result;
+mod terminal;
 mod transcript;
 mod turn;
 

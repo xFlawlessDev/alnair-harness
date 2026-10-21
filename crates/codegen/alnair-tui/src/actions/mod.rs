@@ -78,6 +78,7 @@ pub enum ActionId {
     ToggleTodos,
     ToggleTasks,
     ToggleQueue,
+    ToggleTerminal,
     OpenSessions,
     OpenExtensions,
     SendToBackground,

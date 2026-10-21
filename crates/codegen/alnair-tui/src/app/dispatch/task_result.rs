@@ -30,6 +30,7 @@ use super::session::load::{
 };
 use super::settings::ui::apply_setting_rollback;
 use super::status::{handle_context_info_complete, handle_usage_fetched, scrub_error_for_toast};
+use super::terminal::{forget_terminal, handle_pty_created, prepare_loaded_pane};
 use super::transcript::{
     handle_hooks_list_loaded, handle_mcp_toggle_done, handle_plugins_list_loaded,
     handle_skills_toggle_done,
@@ -39,6 +40,7 @@ use crate::app::actions::{
     ClipboardPasteCompletion, ClipboardPasteContext, ClipboardPasteFailure, ClipboardPasteTarget,
     Effect, ProbedAttachment, SubagentKillOutcome, TaskResult,
 };
+use crate::app::agent::AgentId;
 use crate::app::app_view::{ActiveView, AppView, AuthState};
 use crate::scrollback::block::RenderBlock;
 use agent_client_protocol as acp;
@@ -62,6 +64,35 @@ pub(super) fn unregister_all_active_sessions(app: &AppView) -> Vec<Effect> {
         .collect()
 }
 pub(super) const X11_PRIMARY_PASTE_HINT: &str = "Try Shift+Insert to paste selected text";
+
+/// Surface a failed PTY request on the view that asked for it.
+///
+/// A failure leaves nothing usable behind: a pane whose PTY was never created
+/// would render an empty grid forever, so the pane is dropped and the user is
+/// told why. `pty_id` is `None` for a create failure (there is no id yet).
+fn handle_pty_failed(
+    app: &mut AppView,
+    agent_id: AgentId,
+    pty_id: Option<&str>,
+    error: String,
+) -> Vec<Effect> {
+    tracing::warn!(error = % error, "terminal pane request failed");
+    let Some(view) = app.agents.get_mut(&agent_id) else {
+        return Vec::new();
+    };
+    // A late failure for a pane the user already replaced must not tear down
+    // the new one.
+    let matches_current = match (pty_id, view.terminal.as_ref()) {
+        (None, _) => true,
+        (Some(id), Some(pane)) => pane.pty_id == id,
+        (Some(_), None) => false,
+    };
+    if matches_current {
+        forget_terminal(view);
+    }
+    view.show_toast(&format!("terminal: {error}"));
+    Vec::new()
+}
 fn show_clipboard_toast(target: &ClipboardPasteTarget, message: &str, app: &mut AppView) {
     match target {
         ClipboardPasteTarget::AgentPrompt { agent_id, .. } => {
@@ -446,6 +477,42 @@ pub(super) fn dispatch_task_result(result: TaskResult, app: &mut AppView) -> Vec
             result,
             prev_model_id,
         } => handle_switch_model_complete(app, agent_id, model_id, effort, result, prev_model_id),
+        TaskResult::PtyCreated { agent_id, result } => match result {
+            Ok(pty_id) => match app.agents.get_mut(&agent_id) {
+                Some(view) => handle_pty_created(view, agent_id, pty_id),
+                None => Vec::new(),
+            },
+            Err(error) => handle_pty_failed(app, agent_id, None, error),
+        },
+        TaskResult::PtyLoaded {
+            agent_id,
+            pty_id,
+            result,
+        } => match result {
+            Ok(info) => match app.agents.get_mut(&agent_id) {
+                Some(view) => {
+                    if let Some(pane) = view.terminal.as_mut()
+                        && pane.pty_id == pty_id
+                    {
+                        prepare_loaded_pane(
+                            pane,
+                            info.rows,
+                            info.cols,
+                            info.exited,
+                            info.exit_code,
+                        );
+                    }
+                    vec![]
+                }
+                None => Vec::new(),
+            },
+            Err(error) => handle_pty_failed(app, agent_id, Some(&pty_id), error),
+        },
+        TaskResult::PtyFailed {
+            agent_id,
+            pty_id,
+            error,
+        } => handle_pty_failed(app, agent_id, Some(&pty_id), error),
         TaskResult::BgTaskKilled {
             session_id,
             task_id,

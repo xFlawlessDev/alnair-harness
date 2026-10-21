@@ -1435,6 +1435,17 @@ impl AppView {
         })
     }
 
+    /// A bare `AppView` for unit tests that only need a container.
+    ///
+    /// Prefer the richer fixtures in `dispatch::tests` when the test needs a
+    /// wired agent; this one exists so a handler test outside that module does
+    /// not have to construct 60 fields by hand.
+    #[cfg(test)]
+    pub(crate) fn new_for_tests() -> Self {
+        let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
+        Self::new(tx, ModelState::default(), Vec::new())
+    }
+
     /// The locally-hosted agent that owns `session_id`, if any.
     pub fn agent_for_session(&self, session_id: &str) -> Option<&AgentView> {
         self.agents.values().find(|a| {

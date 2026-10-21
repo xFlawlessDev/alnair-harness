@@ -1014,6 +1014,7 @@ impl AgentView {
             ActionId::ToggleYolo => {
                 InputOutcome::Action(Action::SetYoloMode(!self.session.is_yolo()))
             }
+            ActionId::ToggleTerminal => InputOutcome::Action(Action::ToggleTerminal),
             ActionId::CommandPalette => {
                 self.active_modal = Some(crate::views::modal::ActiveModal::CommandPalette {
                     entries: crate::views::modal::default_palette_entries(),

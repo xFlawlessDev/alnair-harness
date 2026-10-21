@@ -43,6 +43,7 @@ mod signal_handler;
 pub mod status_blocks;
 pub mod subagent;
 pub mod tabs;
+pub mod terminal_pane;
 mod turn_completion;
 mod xt_filter;
 pub(crate) use crate::terminal::kitty_flags_pushed;

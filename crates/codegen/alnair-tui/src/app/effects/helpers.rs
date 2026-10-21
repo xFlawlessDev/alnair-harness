@@ -547,6 +547,29 @@ pub(super) fn session_picker_entry_to_roster(
         },
     }
 }
+/// Unwrap the `{ result, error? }` envelope every `alnair/*` ext method returns.
+///
+/// A shell-side failure is a *successful* ACP round trip carrying `error`, so a
+/// caller that only inspects the transport would read a rejected request as an
+/// empty result. Both an `error` field and a missing `result` are failures
+/// here, and the message is whatever the shell chose to surface.
+pub(super) fn parse_ext_result<T: serde::de::DeserializeOwned>(
+    resp: &acp::ExtResponse,
+) -> Result<T, String> {
+    let value: serde_json::Value = serde_json::from_str(resp.0.get())
+        .map_err(|e| format!("malformed ext response: {e}"))?;
+    if let Some(err) = value.get("error").filter(|v| !v.is_null()) {
+        let message = err
+            .as_str()
+            .map(str::to_owned)
+            .unwrap_or_else(|| err.to_string());
+        return Err(sanitize_user_error(&message));
+    }
+    let result = value
+        .get("result")
+        .ok_or_else(|| "malformed ext response: no result field".to_string())?;
+    serde_json::from_value(result.clone()).map_err(|e| format!("unexpected ext result: {e}"))
+}
 pub(super) async fn send_logout(tx: &AcpAgentTx) {
     let req = acp::ExtRequest::new(
         "alnair/auth/logout",

@@ -614,6 +614,16 @@ pub struct AgentView {
     pub tasks: TasksPane,
     pub catalog: SubagentCatalogPane,
     pub queue: QueuePane,
+    /// The read-only terminal pane, when one has been opened for this view.
+    ///
+    /// `None` means the user never pressed the chord; opening is lazy so a
+    /// session that never uses a terminal pays nothing. Hiding the pane keeps
+    /// this value (and the emulator's scrollback) so re-opening is instant; only
+    /// the view going away drops it. See `app::terminal_pane`.
+    pub terminal: Option<crate::app::terminal_pane::TerminalPane>,
+    /// Whether the pane is currently drawn. Independent of `terminal`: the
+    /// chord toggles this, and the PTY keeps running while it is `false`.
+    pub terminal_open: bool,
     /// Per-agent mirror of the server-authoritative shared prompt queue
     /// (`AppView::shared_prompt_queues[sid]`), kept in sync by
     /// `handle_queue_changed` and the immediate-send path. The queue
@@ -1843,6 +1853,7 @@ fn resolve_action(action_id: Option<ActionId>) -> Option<InputOutcome> {
         ActionId::ToggleTodos
         | ActionId::ToggleTasks
         | ActionId::ToggleQueue
+        | ActionId::ToggleTerminal
         | ActionId::OpenSessions
         | ActionId::OpenExtensions
         | ActionId::SendToBackground

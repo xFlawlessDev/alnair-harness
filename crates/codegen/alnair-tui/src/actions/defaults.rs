@@ -540,6 +540,24 @@ pub fn default_actions(mouse_reporting_toggle_enabled: bool) -> Vec<ActionDef> {
             ),
         },
         ActionDef {
+            id: ActionId::ToggleTerminal,
+            label: "terminal",
+            description: "Toggle terminal pane",
+            // Backtick is the terminal-pane chord in most editors and has no
+            // other binding in the pager. Ctrl+Shift+` is accepted too because
+            // several keyboards report the shifted form for the same key.
+            default_key: key!('`', CONTROL),
+            alt_keys: vec![key!('`', CONTROL | SHIFT)],
+            category: Category::Panels,
+            context: When::AgentScreen,
+            hint_priority: None,
+            hint_key_display: None,
+            requires_confirmation: false,
+            long_help: Some(
+                "Shows or hides a read-only terminal pane below the transcript.\nThe shell runs on the agent's host in the session's working directory; this release mirrors its output but does not forward keystrokes.\nHiding the pane leaves the shell running: reopening replays its scrollback.",
+            ),
+        },
+        ActionDef {
             id: ActionId::OpenSessions,
             label: "sessions",
             description: "Open sessions",

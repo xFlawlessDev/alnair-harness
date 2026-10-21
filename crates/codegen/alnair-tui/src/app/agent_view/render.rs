@@ -1187,6 +1187,39 @@ impl AgentView {
             self.timeline_hover = None;
             self.timeline_hover_preview = None;
         }
+
+        // Terminal pane: carved out of the scrollback at the draw site. The
+        // layout itself is untouched, so every geometry test keeps its meaning.
+        // The pane is skipped where it would fight the view: a fullscreen
+        // subagent owns the screen, minimal mode has no scrollback rect to
+        // share, and a short terminal needs the rows for the transcript.
+        let pane_rect = if self.terminal_open
+            && self.terminal.is_some()
+            && self.active_subagent.is_none()
+            && !self.is_subagent_view
+            && !crate::app::minimal_mode_active()
+            && area.height > agent::SHORT_TERMINAL_ROWS
+        {
+            match crate::views::terminal_pane::split_scrollback(layout.scrollback) {
+                Some((transcript, pane)) => {
+                    layout.scrollback = transcript;
+                    layout.scrollback_content.height =
+                        layout.scrollback_content.height.min(transcript.height);
+                    Some(pane)
+                }
+                None => None,
+            }
+        } else {
+            None
+        };
+        if pane_rect.is_some() {
+            // The transcript shrank: re-run the layout pass that depends on its
+            // height so scroll offsets and the rail stay consistent.
+            self.scrollback.prepare_layout(
+                layout.scrollback_content.width,
+                layout.scrollback_content.height,
+            );
+        }
         agent::fill_background(buf, area, layout_cfg, compact, &theme);
         use crate::views::agent_status::AgentStatusBar;
         use crate::views::context_bar;
@@ -1622,7 +1655,11 @@ impl AgentView {
                 }
             }
         }
-        if self.block_viewer.is_none() && !search_active {
+        // The pane owns the rows directly below the transcript, so the follow
+        // indicator (which lives in the row after the transcript) would paint
+        // over its top border. The pane's own scrollback replay is the signal
+        // there instead.
+        if self.block_viewer.is_none() && !search_active && pane_rect.is_none() {
             use crate::appearance::FollowIndicator;
             let gap_y = layout.scrollback.y + layout.scrollback.height;
             let gap_x = layout.scrollback.x;
@@ -1674,6 +1711,39 @@ impl AgentView {
             } else {
                 self.hit_follow_indicator.clear();
             }
+        }
+        if let Some(pane_rect) = pane_rect
+            && let Some(pane) = self.terminal.as_mut()
+        {
+            // Match the emulator to the rect before painting: the PTY was
+            // created at a fixed default width, and a grid wider than the rect
+            // would silently clip the right-hand side of every line.
+            let inner_cols = pane_rect.width.saturating_sub(2);
+            let inner_rows = pane_rect.height.saturating_sub(2);
+            if inner_cols > 0 && inner_rows > 0 && pane.resize(inner_cols, inner_rows) {
+                // The shell's idea of its width is now stale. 3b sends
+                // `alnair/terminal/pty/resize`; 3a cannot, so a program that
+                // wraps at $COLUMNS may render at the old width until it
+                // repaints. Recorded here so the limitation is visible in the
+                // code rather than discovered in a bug report.
+                tracing::debug!(
+                    pty_id = % pane.pty_id,
+                    cols = inner_cols,
+                    rows = inner_rows,
+                    "terminal pane resized locally; PTY resize is not implemented"
+                );
+            }
+            crate::views::terminal_pane::render_terminal_pane(
+                pane_rect,
+                buf,
+                &theme,
+                crate::views::terminal_pane::TerminalPaneParams {
+                    pane,
+                    // 3a forwards no keys, so the pane can never hold focus. The
+                    // parameter stays because 3b's input routing needs it.
+                    focused: false,
+                },
+            );
         }
         if let Some(msg) = self.active_toast_message() {
             let sb = layout.scrollback;

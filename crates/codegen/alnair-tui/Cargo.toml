@@ -19,6 +19,7 @@ alnair-prompt-queue = { workspace = true }
 
 # Presentation-primitives layer (extracted)
 alnair-pager-render = { path = "../alnair-pager-render" }
+alnair-terminal-screen = { workspace = true }
 
 # Rendering
 ratatui = { workspace = true, features = ["crossterm", "unstable-widget-ref"] }

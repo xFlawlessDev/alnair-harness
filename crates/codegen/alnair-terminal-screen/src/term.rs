@@ -160,6 +160,18 @@ impl Terminal {
         self.parser.advance(&mut self.term, bytes);
     }
 
+    /// The underlying grid, for [`crate::screen`]'s cell-level snapshot.
+    pub(crate) fn grid(
+        &self,
+    ) -> &alacritty_terminal::grid::Grid<alacritty_terminal::term::cell::Cell> {
+        self.term.grid()
+    }
+
+    /// The active terminal mode set, for [`crate::screen`]'s flag readback.
+    pub(crate) fn mode(&self) -> TermMode {
+        *self.term.mode()
+    }
+
     /// Get the cursor position (1-indexed).
     pub fn cursor_position(&self) -> CursorPosition {
         let point = self.term.grid().cursor.point;

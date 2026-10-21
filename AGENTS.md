@@ -192,6 +192,37 @@ activity would re-sort the roster (and the strip) on every focus. `●` is
 computed as `last_change_unix_ms > viewed_at` and rendered only on inactive
 tabs; a session with no watermark reads as unread once and self-corrects.
 
+### Terminal pane (F3, sub-phase 3a)
+
+Read-only: the pane mirrors a server-side PTY and forwards no keystrokes.
+`alnair/terminal/pty/input` and `.../resize` exist as `Effect` variants that
+log and return, so 3b does not need a second enum pass. The pane is lazy — no
+shell spawns until ``Ctrl+` `` — and hiding it only clears `terminal_open`:
+the PTY keeps running, and reopening arms `PtyLoad` so the ring buffer replays.
+`PtyClose` fires only when the view goes away (`ExitSession`, tab close),
+because a PTY outlives its session server-side.
+
+**One pane per client.** `pty_session::load` overwrites the PTY's
+`target_client_id`, so a second pager loading the same PTY would steal the
+output stream from the first. Each pager therefore creates its own PTY, and 3a
+sends no `_meta.clientId` (single-client routing already returns output here).
+Real per-client ids matter only in 3c.
+
+The screen emulator lives in `alnair-terminal-screen`, extracted verbatim from
+`ptyctl` (which re-exports it). `screen::visible_rows` is the renderer-facing
+readback: `alacritty_terminal`'s colour types stop at that boundary, so the
+pager maps `ScreenColor` to `ratatui::style::Color` and never imports the
+emulator's internals.
+
+The pane rect is carved out of `AgentViewLayout::scrollback` **at the draw
+site** (`views::terminal_pane::split_scrollback`), never as a constraint in
+`AgentViewLayout::compute`: that function takes 17 arguments and ~30 geometry
+tests pin its output, so a local split keeps every assertion valid and makes
+the pane trivially disableable. It stays hidden on a short terminal
+(`SHORT_TERMINAL_ROWS`), in minimal mode, and while a subagent is fullscreen.
+A `isReplay` frame **resets the emulator** before feeding; without that a
+reopen would append the whole ring buffer to what the pane already showed.
+
 ## Terminal keyboard
 
 `Shift+Enter` inserts a newline in the prompt wherever the terminal can

@@ -364,8 +364,15 @@ pub(in crate::app::dispatch) fn dispatch_new_session_inner_with_id(
 }
 /// Exit the current session and return to the welcome screen.
 pub(in crate::app::dispatch) fn dispatch_exit_session(app: &mut AppView) -> Vec<Effect> {
-    let effects =
+    let mut effects =
         unregister_session_effect(get_active_agent(app).and_then(|a| a.session.session_id.clone()));
+    // A PTY outlives its session server-side, so leaving it behind would leak a
+    // shell for the rest of the agent's lifetime.
+    if let Some(agent) = get_active_agent(app)
+        && let Some(close) = super::super::terminal::close_terminal_effect(agent)
+    {
+        effects.push(close);
+    }
     show_welcome(app);
     app.welcome_prompt_focused = true;
     app.session_picker_entries = None;

@@ -8,5 +8,6 @@
 //!
 //! `ptyctl` re-exports both modules, so this is a pure extraction.
 
+pub mod screen;
 pub mod styled;
 pub mod term;

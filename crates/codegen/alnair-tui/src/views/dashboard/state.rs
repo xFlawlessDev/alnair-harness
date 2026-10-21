@@ -4215,6 +4215,8 @@ fn dashboard_action_for_id(
         | ActionId::ToggleTodos
         | ActionId::ToggleTasks
         | ActionId::ToggleQueue
+        // The terminal pane belongs to an agent view; the dashboard has none.
+        | ActionId::ToggleTerminal
         | ActionId::OpenSessions
         | ActionId::OpenExtensions
         | ActionId::SendToBackground

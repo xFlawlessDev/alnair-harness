@@ -1590,6 +1590,105 @@ pub(crate) fn execute(
                     TaskResult::CancelComplete
                 });
         }
+        Effect::PtyCreate {
+            agent_id,
+            session_id,
+            rows,
+            cols,
+        } => {
+            let tx = acp_tx.clone();
+            tasks.spawn(async move {
+                let params = serde_json::json!({
+                    "sessionId": session_id.0.to_string(),
+                    "rows": rows,
+                    "cols": cols,
+                });
+                let req = acp::ExtRequest::new(
+                    "alnair/terminal/pty/create",
+                    serde_json::value::to_raw_value(&params)
+                        .expect("serialize pty create params")
+                        .into(),
+                );
+                let result = match acp_send(req, &tx).await {
+                    Ok(resp) => parse_ext_result::<serde_json::Value>(&resp)
+                        .and_then(|v| {
+                            v.get("terminalId")
+                                .and_then(|id| id.as_str())
+                                .map(str::to_owned)
+                                .ok_or_else(|| "pty/create returned no terminalId".to_string())
+                        }),
+                    Err(e) => Err(sanitize_user_error(&e.to_string())),
+                };
+                TaskResult::PtyCreated { agent_id, result }
+            });
+        }
+        Effect::PtyLoad { agent_id, pty_id } => {
+            let tx = acp_tx.clone();
+            tasks.spawn(async move {
+                let params = serde_json::json!({ "terminalId": pty_id });
+                let req = acp::ExtRequest::new(
+                    "alnair/terminal/pty/load",
+                    serde_json::value::to_raw_value(&params)
+                        .expect("serialize pty load params")
+                        .into(),
+                );
+                let result = match acp_send(req, &tx).await {
+                    Ok(resp) => parse_ext_result::<serde_json::Value>(&resp).map(|v| {
+                        use actions::PtyLoadedInfo;
+                        PtyLoadedInfo {
+                            rows: v.get("rows").and_then(|n| n.as_u64()).unwrap_or(24) as u16,
+                            cols: v.get("cols").and_then(|n| n.as_u64()).unwrap_or(80) as u16,
+                            exited: v
+                                .get("exited")
+                                .and_then(|b| b.as_bool())
+                                .unwrap_or(false),
+                            exit_code: v
+                                .get("exitCode")
+                                .and_then(|n| n.as_i64())
+                                .map(|n| n as i32),
+                        }
+                    }),
+                    Err(e) => Err(sanitize_user_error(&e.to_string())),
+                };
+                TaskResult::PtyLoaded {
+                    agent_id,
+                    pty_id,
+                    result,
+                }
+            });
+        }
+        // 3b owns input forwarding and resize. The variants exist so the enum
+        // does not need a second pass, and they must not silently pretend to
+        // work: log once per call and drop.
+        Effect::PtyInput { pty_id, data } => {
+            tracing::debug!(
+                pty_id = % pty_id,
+                bytes = data.len(),
+                "pty input forwarding is not implemented in this release"
+            );
+        }
+        Effect::PtyResize { pty_id, .. } => {
+            tracing::debug!(
+                pty_id = % pty_id,
+                "pty resize is not implemented in this release"
+            );
+        }
+        Effect::PtyClose { pty_id } => {
+            let tx = acp_tx.clone();
+            tasks.spawn(async move {
+                let params = serde_json::json!({ "terminalId": pty_id });
+                let req = acp::ExtRequest::new(
+                    "alnair/terminal/kill",
+                    serde_json::value::to_raw_value(&params)
+                        .expect("serialize pty kill params")
+                        .into(),
+                );
+                if let Err(e) = acp_send(req, &tx).await {
+                    tracing::debug!(error = % e, "pty close failed");
+                }
+                TaskResult::CancelComplete
+            });
+        }
         Effect::SwitchModel {
             agent_id,
             session_id,

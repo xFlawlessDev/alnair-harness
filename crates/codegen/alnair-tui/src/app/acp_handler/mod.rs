@@ -43,6 +43,7 @@ mod interactions;
 mod mcp;
 mod permissions;
 mod prompt_origin;
+mod pty;
 mod queue;
 mod routing;
 mod session_notification;
@@ -64,6 +65,7 @@ pub(crate) use prompt_origin::{
 };
 use prompt_origin::{push_wake_end_marker, viewer_turn_anchor, wake_turn_elapsed};
 
+use pty::handle_pty_notification;
 pub(crate) use subagent_activity::finalize_killed_subagent;
 use subagent_activity::{subagent_activity_label, sync_subagent_activity};
 
@@ -602,6 +604,7 @@ fn handle_ext_notification(notif: &acp::ExtNotification, app: &mut AppView) -> b
         "alnair/models/update" => handle_models_update(notif, app),
         "alnair/settings/update" => handle_settings_update(notif, app),
         "alnair/sessions/changed" => handle_sessions_changed(notif, app),
+        "alnair/terminal/pty/notification" => handle_pty_notification(notif, app),
         "alnair/queue/changed" => handle_queue_changed(notif, app),
         // TODO(prompt_complete-deprecation): Legacy removal (gated): durable turn_completed is already consumed via finalize_turn_from_terminal; keep & re-point the lost-RPC reconcile to the durable rail before deleting.
         "alnair/session/prompt_complete" => handle_prompt_complete(notif, app),

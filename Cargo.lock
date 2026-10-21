@@ -1334,6 +1334,7 @@ dependencies = [
  "alnair-ratatui-textarea",
  "alnair-sandbox",
  "alnair-shell",
+ "alnair-terminal-screen",
  "alnair-test-support",
  "alnair-token-estimation",
  "alnair-tools",
