@@ -152,6 +152,13 @@ impl AgentView {
 
         match route_terminal_key(key_event, registry, &modes) {
             TerminalKeyOutcome::Send(bytes) => {
+                // Typing means "I am done reading history": snap to the live
+                // view, or the keystroke lands somewhere the user cannot see.
+                // Only for keys that produce input — a scroll key must not
+                // undo the scroll it just asked for.
+                if let Some(pane) = self.terminal.as_mut() {
+                    pane.screen.scroll_to_bottom();
+                }
                 super::InputOutcome::Action(Action::PtySendInput(bytes.into_vec()))
             }
             TerminalKeyOutcome::Action(action) => super::InputOutcome::Action(*action),
@@ -172,6 +179,10 @@ impl AgentView {
         let bytes = encode_paste(text, &modes);
         if bytes.is_empty() {
             return super::InputOutcome::Unchanged;
+        }
+        // Same rule as typing: a paste is input, so show where it lands.
+        if let Some(pane) = self.terminal.as_mut() {
+            pane.screen.scroll_to_bottom();
         }
         super::InputOutcome::Action(Action::PtySendInput(bytes))
     }

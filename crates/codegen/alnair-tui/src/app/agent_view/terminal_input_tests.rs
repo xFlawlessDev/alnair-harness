@@ -42,6 +42,97 @@ fn ctrl_q_leaves_the_pane() {
 }
 
 #[test]
+fn typing_snaps_back_to_the_live_view() {
+    // Scrolled back + a keystroke: the input lands at the prompt, which is on
+    // the live screen. Leaving the view scrolled back would hide the echo.
+    use crate::app::agent::AgentId;
+    use crate::app::agent_view::AgentView;
+    use crate::app::terminal_pane::TerminalPane;
+    use crate::test_util::make_agent_view;
+
+    let mut view: AgentView = make_agent_view(Some("sess-1"), "/tmp/project");
+    let mut pane = TerminalPane::new("pty-1".to_string(), 10, 2);
+    let mut notif = crate::app::terminal_pane::PtyNotification {
+        terminal_id: "pty-1".to_string(),
+        kind: "output".to_string(),
+        ..Default::default()
+    };
+    use base64::Engine as _;
+    notif.data = Some(base64::engine::general_purpose::STANDARD.encode(b"a\r\nb\r\nc\r\nd"));
+    pane.apply(&notif);
+    pane.screen.scroll_by(2);
+    assert!(pane.screen.display_offset() > 0, "fixture must be scrolled");
+    view.terminal = Some(pane);
+    view.terminal_open = true;
+    view.active_pane = crate::app::agent_view::AgentPane::Terminal;
+    let _ = AgentId(0);
+
+    let out = view.handle_terminal_key(
+        &key(KeyCode::Char('x'), KeyModifiers::NONE),
+        &ActionRegistry::defaults(),
+    );
+    assert!(
+        matches!(out, crate::app::agent_view::InputOutcome::Action(_)),
+        "the key still reaches the PTY"
+    );
+    assert_eq!(
+        view.terminal.as_ref().unwrap().screen.display_offset(),
+        0,
+        "typing must return the view to the live screen"
+    );
+}
+
+#[test]
+fn a_scroll_key_does_not_undo_its_own_scroll() {
+    // PageUp is an Action, not Send: it must not be treated as input that
+    // snaps back, or scrolling would be impossible.
+    let registry = ActionRegistry::defaults();
+    let out = super::route_terminal_key(
+        &key(KeyCode::PageUp, KeyModifiers::NONE),
+        &registry,
+        &modes(),
+    );
+    assert!(matches!(out, TerminalKeyOutcome::Action(_)));
+}
+
+#[test]
+fn ctrl_shift_c_and_v_are_pager_chords() {
+    let registry = ActionRegistry::defaults();
+    for (code, mods) in [
+        (
+            KeyCode::Char('C'),
+            KeyModifiers::CONTROL | KeyModifiers::SHIFT,
+        ),
+        (
+            KeyCode::Char('V'),
+            KeyModifiers::CONTROL | KeyModifiers::SHIFT,
+        ),
+    ] {
+        let out = super::route_terminal_key(&key(code, mods), &registry, &modes());
+        assert!(
+            matches!(out, TerminalKeyOutcome::Action(_)),
+            "{code:?} must be a pager action, not PTY input"
+        );
+    }
+}
+
+#[test]
+fn plain_ctrl_c_still_reaches_the_shell() {
+    // The shift is what separates copy from SIGINT; losing it would break
+    // every interactive program.
+    let registry = ActionRegistry::defaults();
+    let out = super::route_terminal_key(
+        &key(KeyCode::Char('c'), KeyModifiers::CONTROL),
+        &registry,
+        &modes(),
+    );
+    match out {
+        TerminalKeyOutcome::Send(bytes) => assert_eq!(&bytes[..], b"\x03"),
+        other => panic!("Ctrl+C must reach the PTY, got {other:?}"),
+    }
+}
+
+#[test]
 fn ctrl_backtick_still_toggles_from_inside_the_pane() {
     let registry = ActionRegistry::defaults();
     let out = super::route_terminal_key(

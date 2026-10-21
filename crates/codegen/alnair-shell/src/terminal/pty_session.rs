@@ -467,7 +467,7 @@ async fn run_pty_output_loop(
                         }
                         // Every byte the shell emits passes here. Logging the
                         // chunk (not the flush) separates "the shell is silent"
-                        // from "the flush never runs" ΓÇö the two causes of a
+                        // from "the flush never runs" — the two causes of a
                         // blank pane that look identical from outside.
                         alnair_log::unified_log::debug(
                             "pty.output.chunk",
@@ -813,7 +813,7 @@ pub async fn load(
         session.target_client_id = target_client_id.clone();
         // Only adopt a leader id when the reconnecting request carries one.
         // Blindly assigning would clear it on every reload, and a PTY whose
-        // output loses its owner falls back to `last_active_client` ΓÇö the wrong
+        // output loses its owner falls back to `last_active_client` — the wrong
         // pager as soon as a second one connects.
         if leader_client_id.is_some() {
             session.leader_client_id = leader_client_id;
@@ -1186,6 +1186,34 @@ mod tests {
                 assert!(
                     output.contains("__PTY_OK__"),
                     "unrestricted PTY must run the command; got: {output}"
+                );
+            })
+            .await;
+    }
+
+    /// The restricted spawn owns its own ceremony, so it must still hand the
+    /// child the environment `portable-pty` would have: inherited variables
+    /// plus `SHELL`. A cleared env here would silently drop PATH/HOME/locale.
+    #[tokio::test]
+    #[serial_test::serial(PTY_CHILD_NET)]
+    async fn restricted_pty_inherits_the_parent_environment() {
+        tokio::task::LocalSet::new()
+            .run_until(async {
+                let _guard = ChildNetOverride::apply(true, false);
+                let output = run_command_in_pty("echo PATH_IS=$PATH; echo HOME_IS=$HOME").await;
+                drop(_guard);
+
+                assert!(
+                    !output.contains("PATH_IS=\r") && !output.contains("PATH_IS=\n"),
+                    "restricted PTY must inherit PATH; got: {output}"
+                );
+                assert!(
+                    !output.contains("HOME_IS=\r") && !output.contains("HOME_IS=\n"),
+                    "restricted PTY must inherit HOME; got: {output}"
+                );
+                assert!(
+                    output.contains("PATH_IS=/"),
+                    "PATH must be a real search path; got: {output}"
                 );
             })
             .await;

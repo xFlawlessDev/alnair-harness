@@ -1751,6 +1751,9 @@ impl AgentView {
             if !replies.is_empty() {
                 self.pending_pty_input = Some(replies);
             }
+            // Advance the bell flash one frame. Ticking here (not on a timer)
+            // keeps the flash in step with what the user actually sees.
+            pane.tick_bell();
             crate::views::terminal_pane::render_terminal_pane(
                 pane_rect,
                 buf,

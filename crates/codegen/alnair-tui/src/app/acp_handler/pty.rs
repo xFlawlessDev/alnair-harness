@@ -79,6 +79,35 @@ fn owns_pty(view: &AgentView, pty_id: &str) -> bool {
         .is_some_and(|pane| pane.pty_id == pty_id)
 }
 
+/// `alnair/leader/version_mismatch` — the pager is talking to a leader built
+/// from a different binary.
+///
+/// This is a real hazard, not a cosmetic warning: the leader holds the session
+/// and the PTY registry, so a pager on a newer build silently gets the older
+/// build's behaviour. Surfaced as a toast because the user's only remedy is to
+/// restart the leader, and they cannot do that if the message is buried.
+pub(super) fn handle_version_mismatch(notif: &acp::ExtNotification, app: &mut AppView) -> bool {
+    let Ok(payload) = serde_json::from_str::<serde_json::Value>(notif.params.get()) else {
+        return false;
+    };
+    let client = payload.get("clientVersion").and_then(|v| v.as_str());
+    let leader = payload.get("leaderVersion").and_then(|v| v.as_str());
+    crate::unified_log::warn(
+        "leader.version_mismatch",
+        None,
+        Some(serde_json::json!({
+            "client_version": client,
+            "leader_version": leader,
+        })),
+    );
+    let message = match (client, leader) {
+        (Some(c), Some(l)) => format!("leader runs {l}, this pager is {c} — restart alnair"),
+        _ => "pager and leader versions differ — restart alnair".to_string(),
+    };
+    app.show_toast(&message);
+    true
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

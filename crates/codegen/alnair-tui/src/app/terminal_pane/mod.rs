@@ -66,6 +66,14 @@ pub struct TerminalPane {
     emulator_replies: tokio::sync::mpsc::UnboundedReceiver<Vec<u8>>,
     /// In-progress or completed mouse selection, in grid coordinates.
     pub selection: Option<PaneSelection>,
+    /// Frames remaining in the bell flash. Decremented per drawn frame.
+    ///
+    /// A frame counter rather than an instant: the pane only redraws when
+    /// something changes, so a time-based flash could expire unseen.
+    pub bell_flash_frames: u8,
+    /// True once any output arrived. Distinguishes "the shell has not spoken
+    /// yet" from "the shell printed nothing", which look identical on screen.
+    pub saw_output: bool,
 }
 
 /// A mouse selection over the pane's grid.
@@ -130,7 +138,41 @@ impl TerminalPane {
             exited: None,
             busy: false,
             selection: None,
+            bell_flash_frames: 0,
+            saw_output: false,
         }
+    }
+
+    /// Take a pending bell and arm the flash. Returns whether one was pending.
+    ///
+    /// The flash is 12 frames (~0.4 s at 30 fps): long enough to notice in
+    /// peripheral vision, short enough not to be noise during a build loop.
+    pub fn take_bell(&mut self) -> bool {
+        if !self.screen.take_bell() {
+            return false;
+        }
+        self.bell_flash_frames = 12;
+        true
+    }
+
+    /// Advance the flash by one frame; returns whether the pane needs a redraw.
+    pub fn tick_bell(&mut self) -> bool {
+        if self.bell_flash_frames == 0 {
+            return false;
+        }
+        self.bell_flash_frames -= 1;
+        true
+    }
+
+    /// Whether the bell flash is currently on (the "on" half of a blink).
+    pub fn bell_lit(&self) -> bool {
+        self.bell_flash_frames > 0 && self.bell_flash_frames % 4 > 1
+    }
+
+    /// Scrollback indicator text, e.g. `−42`, or `None` when on the live view.
+    pub fn scrollback_label(&self) -> Option<String> {
+        let offset = self.screen.display_offset();
+        (offset > 0).then(|| format!("\u{2212}{offset}"))
     }
 
     /// Text under the current selection, one line per row, `\n`-joined.
@@ -258,8 +300,15 @@ impl TerminalPane {
                     let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
                     self.screen = Terminal::new(self.size.0, self.size.1, SessionListener::new(tx));
                     self.emulator_replies = rx;
+                    // A replay is the shell's whole history: whatever was on
+                    // screen before is about to be replaced, so a half-faded
+                    // bell from the previous view must not survive.
+                    self.bell_flash_frames = 0;
                 }
                 self.screen.feed(&bytes);
+                self.saw_output = true;
+                // A BEL can arrive in the same chunk as the text it announces.
+                self.take_bell();
                 Applied::Changed
             }
             "exit" => {

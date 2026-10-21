@@ -74,7 +74,11 @@ pub fn render_terminal_pane(
         return Rect::default();
     }
 
-    let border_style = if params.focused {
+    // A bell must be visible without stealing the grid: the border flashes,
+    // which is the whole terminal convention (`visual bell`).
+    let border_style = if params.pane.bell_lit() {
+        Style::default().fg(theme.warning)
+    } else if params.focused {
         Style::default().fg(theme.accent_assistant)
     } else {
         Style::default().fg(theme.gray_dim)
@@ -104,6 +108,29 @@ pub fn render_terminal_pane(
         inner.width,
     );
 
+    // Scrollback indicator, right-aligned on the title row. Without it a
+    // scrolled-back pane looks identical to a shell that stopped responding —
+    // the user sees stale text and concludes the pane is hung.
+    if let Some(label) = params.pane.scrollback_label() {
+        let text = format!(" {label} ");
+        let width = display_width(&text);
+        if width + 4 < area.width {
+            let x = area.x + area.width - width - 2;
+            buf.set_span_safe(
+                x,
+                area.y,
+                &Span::styled(
+                    text,
+                    Style::default()
+                        .fg(theme.warning)
+                        .bg(theme.bg_terminal)
+                        .add_modifier(Modifier::BOLD),
+                ),
+                width,
+            );
+        }
+    }
+
     // Footer: the exit notice replaces the bottom grid row when the child is
     // gone, so a dead shell does not silently look like a live one.
     let exit_label = params.pane.exit_label();
@@ -120,6 +147,25 @@ pub fn render_terminal_pane(
     };
 
     render_grid(grid, buf, theme, params.pane);
+
+    // Empty state: a blank pane is indistinguishable from a broken one, and a
+    // shell can take a moment to print its first prompt. One dim line says
+    // "still starting" without pretending to be output.
+    if !params.pane.saw_output && params.pane.exited.is_none() && grid.height > 0 {
+        let label = truncate_str("[shell starting\u{2026}]", grid.width as usize);
+        buf.set_span_safe(
+            grid.x,
+            grid.y,
+            &Span::styled(
+                label,
+                Style::default()
+                    .fg(theme.gray_dim)
+                    .bg(theme.bg_terminal)
+                    .add_modifier(Modifier::DIM),
+            ),
+            grid.width,
+        );
+    }
 
     if let Some(label) = exit_label
         && inner.height > CHROME_ROWS

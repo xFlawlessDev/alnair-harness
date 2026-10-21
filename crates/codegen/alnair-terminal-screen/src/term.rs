@@ -20,21 +20,41 @@ use crate::styled::{self, StyledLine};
 /// color queries, etc., it emits `Event::PtyWrite`. These MUST be forwarded
 /// back to the PTY, otherwise programs like vim/tmux will hang waiting for
 /// a response.
+///
+/// It also records `Event::Bell` in a shared flag. A bell is not a byte to
+/// forward — it is a signal to the *user* — so it must survive the trip out of
+/// the emulator without blocking it (the emulator calls `send_event`
+/// synchronously, so the flag is a plain atomic).
 #[derive(Clone)]
 pub struct SessionListener {
     pty_write_tx: tokio::sync::mpsc::UnboundedSender<Vec<u8>>,
+    bell: std::sync::Arc<std::sync::atomic::AtomicBool>,
 }
 
 impl SessionListener {
     pub fn new(pty_write_tx: tokio::sync::mpsc::UnboundedSender<Vec<u8>>) -> Self {
-        Self { pty_write_tx }
+        Self {
+            pty_write_tx,
+            bell: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        }
+    }
+
+    /// Take the pending bell, clearing it. `true` once per BEL received.
+    pub fn take_bell(&self) -> bool {
+        self.bell.swap(false, std::sync::atomic::Ordering::Relaxed)
     }
 }
 
 impl EventListener for SessionListener {
     fn send_event(&self, event: Event) {
-        if let Event::PtyWrite(text) = event {
-            let _ = self.pty_write_tx.send(text.into_bytes());
+        match event {
+            Event::PtyWrite(text) => {
+                let _ = self.pty_write_tx.send(text.into_bytes());
+            }
+            Event::Bell => {
+                self.bell.store(true, std::sync::atomic::Ordering::Relaxed);
+            }
+            _ => {}
         }
     }
 }
@@ -142,6 +162,9 @@ impl Dimensions for TermDimensions {
 pub struct Terminal {
     term: Term<SessionListener>,
     parser: ansi::Processor,
+    /// A clone of the listener handed to `Term`, kept so the caller can read
+    /// signals the emulator records (the bell) without `Term` exposing it.
+    listener: SessionListener,
 }
 
 impl Terminal {
@@ -149,15 +172,29 @@ impl Terminal {
     pub fn new(cols: u16, rows: u16, listener: SessionListener) -> Self {
         let size = TermDimensions::new(cols as usize, rows as usize);
         let config = Config::default();
-        let term = Term::new(config, &size, listener);
+        let term = Term::new(config, &size, listener.clone());
         let parser = ansi::Processor::new();
 
-        Self { term, parser }
+        Self {
+            term,
+            parser,
+            listener,
+        }
     }
 
     /// Feed raw bytes from PTY output into the terminal emulator.
     pub fn feed(&mut self, bytes: &[u8]) {
         self.parser.advance(&mut self.term, bytes);
+    }
+
+    /// Whether a BEL arrived since the last call (clears the flag).
+    ///
+    /// Programs use BEL to ask for the user's attention (a finished build, an
+    /// error, a `read` in an interactive script). The emulator records it as an
+    /// event, and the pane turns it into a visible flash — forwarding the byte
+    /// to the terminal would ring the user's real bell instead.
+    pub fn take_bell(&self) -> bool {
+        self.listener.take_bell()
     }
 
     /// The underlying grid, for [`crate::screen`]'s cell-level snapshot.

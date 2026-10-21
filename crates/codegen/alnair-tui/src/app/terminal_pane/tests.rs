@@ -159,6 +159,71 @@ fn an_exited_pane_keeps_its_output_readable() {
 }
 
 #[test]
+fn a_bell_arms_the_flash_once() {
+    let mut pane = pane();
+    // BEL is 0x07; the emulator turns it into an event, not a grid change.
+    pane.apply(&output("\x07"));
+    assert!(pane.bell_flash_frames > 0, "a BEL must arm the flash");
+    // The flash decays one frame at a time and then stops reporting work.
+    for _ in 0..12 {
+        assert!(pane.tick_bell());
+    }
+    assert_eq!(pane.bell_flash_frames, 0);
+    assert!(!pane.tick_bell(), "an expired flash needs no redraw");
+}
+
+#[test]
+fn the_bell_lit_phase_blinks() {
+    let mut pane = pane();
+    pane.apply(&output("\x07"));
+    let phases: Vec<bool> = (0..8)
+        .map(|_| {
+            let lit = pane.bell_lit();
+            pane.tick_bell();
+            lit
+        })
+        .collect();
+    assert!(
+        phases.iter().any(|l| *l),
+        "the flash must be visible at all"
+    );
+    assert!(
+        phases.iter().any(|l| !*l),
+        "a steady border is not a flash: it must blink"
+    );
+}
+
+#[test]
+fn the_scrollback_label_tracks_the_offset() {
+    let mut pane = TerminalPane::new("pty-1".to_string(), 10, 2);
+    pane.apply(&output("a\r\nb\r\nc\r\nd"));
+    assert_eq!(pane.scrollback_label(), None, "live view has no label");
+    pane.screen.scroll_by(2);
+    assert_eq!(pane.scrollback_label().as_deref(), Some("\u{2212}2"));
+    pane.screen.scroll_to_bottom();
+    assert_eq!(pane.scrollback_label(), None);
+}
+
+#[test]
+fn the_empty_state_clears_on_first_output() {
+    let mut pane = pane();
+    assert!(!pane.saw_output, "a fresh pane has printed nothing");
+    pane.apply(&output("x"));
+    assert!(pane.saw_output, "any output retires the empty state");
+}
+
+#[test]
+fn a_replay_clears_a_stale_bell() {
+    // A half-faded flash from the previous view must not survive the reset:
+    // the replay replaces everything on screen.
+    let mut pane = pane();
+    pane.apply(&output("\x07"));
+    assert!(pane.bell_flash_frames > 0);
+    pane.apply(&replay("fresh"));
+    assert_eq!(pane.bell_flash_frames, 0);
+}
+
+#[test]
 fn output_frames_feed_the_emulator() {
     let mut pane = pane();
     assert_eq!(pane.apply(&output("hello")), Applied::Changed);
