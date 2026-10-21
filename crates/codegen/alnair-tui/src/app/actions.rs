@@ -380,6 +380,12 @@ pub enum Action {
     DemoteToBackground,
     /// Toggle the read-only terminal pane for the active agent view.
     ToggleTerminal,
+    /// Forward already-encoded bytes to the active view's PTY.
+    ///
+    /// The encoder lives in `agent_view::terminal_pane::keys` because it needs
+    /// the emulator's live modes; the action carries finished bytes so dispatch
+    /// stays a pure state function.
+    PtySendInput(Vec<u8>),
     /// Request current bundle cache status via `alnair/bundle/status`.
     RequestBundleStatus,
     /// View a catalog entry's raw content in the block viewer.
@@ -1515,9 +1521,15 @@ pub enum Effect {
     /// `load` also re-points the PTY's `target_client_id` here, which is why
     /// each client owns its own PTY (see `app::terminal_pane`).
     PtyLoad { agent_id: AgentId, pty_id: String },
-    /// Forward keystrokes to the PTY (3b; unused in 3a).
+    /// Forward keystrokes to the PTY.
     PtyInput { pty_id: String, data: Vec<u8> },
-    /// Resize the PTY (3b; unused in 3a).
+    /// Resize the PTY.
+    ///
+    /// Not produced by dispatch: `draw` owns the frame cadence and sends the
+    /// debounced size itself (`AppView::draw_inner`), because a resize routed
+    /// through the effect queue would need one round trip per frame. The
+    /// variant stays because the wire method is part of the PTY contract and a
+    /// future explicit-resize caller belongs here.
     PtyResize {
         pty_id: String,
         rows: u16,

@@ -235,21 +235,42 @@ activity would re-sort the roster (and the strip) on every focus. `●` is
 computed as `last_change_unix_ms > viewed_at` and rendered only on inactive
 tabs; a session with no watermark reads as unread once and self-corrects.
 
-### Terminal pane (F3, sub-phase 3a)
+### Terminal pane (F3, sub-phase 3a + 3b)
 
-Read-only: the pane mirrors a server-side PTY and forwards no keystrokes.
-`alnair/terminal/pty/input` and `.../resize` exist as `Effect` variants that
-log and return, so 3b does not need a second enum pass. The pane is lazy — no
-shell spawns until ``Ctrl+` `` — and hiding it only clears `terminal_open`:
-the PTY keeps running, and reopening arms `PtyLoad` so the ring buffer replays.
-`PtyClose` fires only when the view goes away (`ExitSession`, tab close),
-because a PTY outlives its session server-side.
+The pane is an interactive PTY, not a mirror: it owns its own shell (separate
+from the agent's bash tool), forwards keystrokes, pastes and resizes, and
+replays the server's ring buffer on reopen. The pane is lazy — no shell spawns
+until ``Ctrl+` `` — and hiding it only clears `terminal_open`: the PTY keeps
+running. `PtyClose` fires only when the view goes away, in
+`remove_agent_and_cleanup` (the single view-drop chokepoint, which RETURNS the
+close effect). `ExitSession` must never kill the PTY: it only switches to
+Welcome and keeps the agent.
+
+**Key routing** (`agent_view/terminal_input.rs`). Two escape hatches, then
+everything belongs to the program: `Ctrl+Q` leaves the pane, the toggle chord
+works from inside it, and `Ctrl+C`/`Esc` reach the shell — stealing `Ctrl+C`
+for cancel-turn would make the pane useless, and `vim` needs `Esc`. The encoder
+(`app/terminal_pane/keys.rs`) takes the emulator's LIVE `TerminalModes` because
+arrows are `ESC O A` under `DECCKM` (application cursor) and `ESC [ A`
+otherwise; pastes are bracketed only when the program asked. `KeyModifiers` is
+a bitflag, so `key!` cannot express it — use `KeyShortcut::new`.
+
+**Resize** is NOT dispatched as an `Effect`: `draw` owns the frame cadence, so
+the draw site records `pending_pty_resize` and `AppView::draw_inner` sends the
+debounced size after the frame (every intermediate frame of a drag overwrites
+it, which is the debounce). Input, by contrast, IS an `Effect` — as a
+fire-and-forget notification, never a request, or every keystroke pays a round
+trip.
 
 **One pane per client.** `pty_session::load` overwrites the PTY's
 `target_client_id`, so a second pager loading the same PTY would steal the
-output stream from the first. Each pager therefore creates its own PTY, and 3a
-sends no `_meta.clientId` (single-client routing already returns output here).
-Real per-client ids matter only in 3c.
+output stream from the first. Each pager therefore creates its own PTY, and 3b
+still sends no `_meta.clientId` (single-client routing already returns output
+here). Real per-client ids matter only in 3c, which must also close the leader
+routing gap: `alnair/terminal/pty/notification` carries `terminalId`, NOT
+`sessionId`, so `last_active_client` routing can misdeliver with two pagers.
+Do NOT add it to `is_machine_wide_broadcast_notification` — that would send
+every pane's bytes to every client.
 
 The screen emulator lives in `alnair-terminal-screen`, extracted verbatim from
 `ptyctl` (which re-exports it). `screen::visible_rows` is the renderer-facing
@@ -260,11 +281,13 @@ emulator's internals.
 The pane rect is carved out of `AgentViewLayout::scrollback` **at the draw
 site** (`views::terminal_pane::split_scrollback`), never as a constraint in
 `AgentViewLayout::compute`: that function takes 17 arguments and ~30 geometry
-tests pin its output, so a local split keeps every assertion valid and makes
-the pane trivially disableable. It stays hidden on a short terminal
-(`SHORT_TERMINAL_ROWS`), in minimal mode, and while a subagent is fullscreen.
-A `isReplay` frame **resets the emulator** before feeding; without that a
-reopen would append the whole ring buffer to what the pane already showed.
+tests pin its output. `PaneAreas::terminal` is stamped onto the layout's
+`pane_areas()` afterwards, because a dozen overlay paths reassign it and only
+the draw site knows where the pane went. The pane stays hidden on a short
+terminal (`SHORT_TERMINAL_ROWS`), in minimal mode, and while a subagent is
+fullscreen. A `isReplay` frame **resets the emulator** before feeding; without
+that a reopen would append the whole ring buffer to what the pane already
+showed.
 
 ## Terminal keyboard
 

@@ -66,6 +66,7 @@ impl AgentView {
             queue: QueuePane::new(),
             terminal: None,
             terminal_open: false,
+            pending_pty_resize: None,
             shared_queue: Vec::new(),
             attached_as_viewer: false,
             self_originated_prompt_ids: VecDeque::new(),
@@ -769,6 +770,7 @@ impl AgentView {
             ActivePane::Prompt => ActivePaneSnapshot::Prompt,
             ActivePane::Tasks => ActivePaneSnapshot::Tasks,
             ActivePane::Catalog => ActivePaneSnapshot::Catalog,
+            ActivePane::Terminal => ActivePaneSnapshot::Terminal,
         };
         let outcome_snap = match outcome {
             InputOutcome::Changed | InputOutcome::ArmPending { .. } => OutcomeSnapshot::Changed,

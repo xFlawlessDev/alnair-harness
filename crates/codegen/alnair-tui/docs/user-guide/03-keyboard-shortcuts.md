@@ -131,7 +131,7 @@ Actions that affect the agent session, available from the agent screen.
 | `Ctrl+G` | Agent screen | Send the current task to the background |
 | `Ctrl+T` | Agent screen | Toggle the todos pane |
 | `Ctrl+B` | Agent screen | Toggle the tasks pane |
-| ``Ctrl+` `` (alt: ``Ctrl+Shift+` ``) | Agent screen | Toggle the read-only terminal pane. The shell runs on the agent's host in the session's working directory; keystrokes are **not** forwarded in this release. Hiding the pane leaves the shell running - reopening replays its scrollback. |
+| ``Ctrl+` `` (alt: ``Ctrl+Shift+` ``) | Agent screen | Toggle the terminal pane. The shell runs on the agent's host in the session's working directory; keystrokes reach it while the pane is focused. `Ctrl+Q` leaves the pane without closing it. |
 | `Ctrl+L` | Agent screen | Open the extensions modal (**non–VS Code family only**; on VS Code / Cursor / Windsurf / Zed, `Ctrl+L` is mid-turn **interject** and extensions open via `/plugins` / `/hooks`) |
 | `↑` | Prompt focused (empty prompt, normal input mode) | Open the history panel with your last prompt filled in; `↑`/`↓` step through entries (each lands in the input), `↓` at the newest closes the panel, and typing edits the recalled prompt in place. Recalled `!` shell commands re-enter shell mode. `↓` never opens history. |
 | `!` | Prompt focused | Enter shell mode (type `!` on an empty prompt) |

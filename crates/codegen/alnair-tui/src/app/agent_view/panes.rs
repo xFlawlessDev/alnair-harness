@@ -617,6 +617,11 @@ impl AgentView {
             ActivePane::Queue => {
                 self.queue.handle_scroll(lines, col, row);
             }
+            // The pane has no scrollback of its own: it shows the emulator's
+            // visible grid, and a wheel over it belongs to the program inside
+            // (a full-screen app scrolls itself). Do nothing rather than move
+            // the transcript the user is not pointing at.
+            ActivePane::Terminal => {}
             ActivePane::Tasks => {
                 self.tasks.handle_scroll(lines, col, row);
             }

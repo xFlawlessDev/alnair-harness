@@ -32,6 +32,10 @@ pub enum ActivePaneSnapshot {
     Queue,
     Tasks,
     Catalog,
+    /// The terminal pane. Its own variant rather than `Other` because input
+    /// logging exists to answer "where did this keystroke go", and "into the
+    /// PTY" is the answer that matters most when a shell swallows a chord.
+    Terminal,
     Other,
 }
 /// Copy-friendly snapshot of the input outcome. No heap allocation.

@@ -35,6 +35,8 @@ pub enum ActivePane {
     Prompt,
     Tasks,
     Catalog,
+    /// The read-only terminal pane. Holds focus so keystrokes reach the PTY.
+    Terminal,
 }
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
 pub enum InputMode {
@@ -51,6 +53,9 @@ pub struct PaneAreas {
     pub prompt: Rect,
     pub tasks: Rect,
     pub catalog: Rect,
+    /// The terminal pane's grid rect. Zero when the pane is hidden, which is
+    /// what keeps `hit_test` from claiming a rect nobody drew.
+    pub terminal: Rect,
 }
 impl PaneAreas {
     /// Determine which pane a screen position falls in, if any.
@@ -67,6 +72,12 @@ impl PaneAreas {
         }
         if self.queue.area() > 0 && self.queue.contains(pos) {
             return Some(ActivePane::Queue);
+        }
+        // Checked before the scrollback: the pane is carved out of it, so the
+        // two rects are disjoint today, but claiming the pane first keeps that
+        // true if the carve ever overlaps.
+        if self.terminal.area() > 0 && self.terminal.contains(pos) {
+            return Some(ActivePane::Terminal);
         }
         if self.scrollback.contains(pos) {
             return Some(ActivePane::Scrollback);
@@ -385,6 +396,11 @@ impl AgentViewLayout {
             prompt: self.prompt,
             tasks: self.tasks,
             catalog: self.catalog,
+            // The terminal pane is carved out of `scrollback` at the draw site
+            // and is not part of this layout, so its rect is stamped onto the
+            // returned value afterwards by `AgentView::draw`. Defaulting to
+            // empty here keeps `hit_test` from claiming a rect nobody drew.
+            terminal: Rect::default(),
         }
     }
 }
@@ -893,6 +909,9 @@ pub fn build_hints(
     scrollback_search: Option<&ScrollbackSearchState>,
 ) -> Vec<HintItem> {
     let mut hints = match active_pane {
+        // The pane is a raw byte sink, so the only hint that matters is the way
+        // out. Advertising per-key help here would be a lie: the shell decides.
+        ActivePane::Terminal => vec![HintItem::new(crate::key!('q', CONTROL), "leave pane")],
         ActivePane::Todo => {
             let mut hints = Vec::new();
             hints.push(HintItem::new(

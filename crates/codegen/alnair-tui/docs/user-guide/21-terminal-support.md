@@ -207,17 +207,19 @@ Byobu on screen has best-effort support only. Prefer Byobu on tmux.
 
 ## The In-App Terminal Pane
 
-``Ctrl+` `` (or ``Ctrl+Shift+` ``) opens a terminal pane below the transcript. It is **read-only in this release**: it mirrors what a shell prints, but keystrokes are not forwarded to it, so you cannot type into it. Use it to watch a build, a log tail, or a long-running command that the agent started; type commands through the agent's own shell tool instead.
+``Ctrl+` `` (or ``Ctrl+Shift+` ``) opens a terminal pane below the transcript. The shell runs on the agent's host in the session's working directory, and you can type into it: keystrokes, pastes and window resizes all reach the PTY, so interactive programs (`vim`, `htop`, `less`, `git rebase -i`) work.
 
 The pane behaves as follows:
 
-- The shell runs on the agent's host, in the session's working directory. It is created on the first toggle and survives hiding, so its scrollback and current directory are preserved.
-- Hiding the pane (the same chord) does **not** kill the shell. Reopening replays the server's ring buffer (the most recent 256 KB of output) into the local emulator, so the pane shows the full picture rather than only what arrived while it was visible.
+- **`Ctrl+Q` leaves the pane** without closing it. Every other key belongs to the program inside — including `Ctrl+C` (which interrupts the shell's foreground command, not the agent's turn) and `Esc` (which `vim` needs). ``Ctrl+` `` still closes the pane from inside it.
+- The shell is created on the first toggle and survives hiding, so its scrollback and current directory are preserved.
+- Hiding the pane (the same chord) does **not** kill the shell. Reopening replays the server's ring buffer (the most recent 256 KB of output) into the local emulator.
 - The pane header shows a liveness glyph: a hollow circle when the shell is idle at its prompt, a filled circle while a foreground command runs, and a filled square after the process exits. An exited shell also gets a `[process exited with code N]` footer.
 - The pane takes at most 12 rows or 40% of the transcript area, whichever is smaller, and the transcript always keeps at least 8 rows. On a short terminal, or while a subagent is fullscreen, the pane stays hidden.
 - The pane never opens on its own. A session that never presses the chord never spawns a shell.
+- The pane is not a mirror of the agent's own shell tool: it is an independent shell, with its own history.
 
-The emulator understands the escape sequences a normal terminal program emits, including colours, bold/italic/underline, and wide characters. It does not implement every extension: hyperlinks (OSC 8) are drawn as plain text, and inline images are not rendered.
+The emulator understands the escape sequences a normal terminal program emits, including colours, bold/italic/underline, wide characters, application-cursor-key mode, and bracketed paste. It does not implement every extension: hyperlinks (OSC 8) are drawn as plain text, inline images are not rendered, and mouse reporting is not forwarded yet.
 
 ---
 

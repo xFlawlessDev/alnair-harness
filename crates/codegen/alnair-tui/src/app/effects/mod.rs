@@ -1657,21 +1657,53 @@ pub(crate) fn execute(
                 }
             });
         }
-        // 3b owns input forwarding and resize. The variants exist so the enum
-        // does not need a second pass, and they must not silently pretend to
-        // work: log once per call and drop.
+        // Input is a fire-and-forget NOTIFICATION, not a request: awaiting a
+        // response would put a full round trip on every keystroke.
         Effect::PtyInput { pty_id, data } => {
-            tracing::debug!(
-                pty_id = % pty_id,
-                bytes = data.len(),
-                "pty input forwarding is not implemented in this release"
-            );
+            use base64::Engine as _;
+            let tx = acp_tx.clone();
+            tasks.spawn(async move {
+                let params = serde_json::json!({
+                    "terminalId": pty_id,
+                    "data": base64::engine::general_purpose::STANDARD.encode(&data),
+                });
+                let notif = acp::ExtNotification::new(
+                    "alnair/terminal/pty/input",
+                    serde_json::value::to_raw_value(&params)
+                        .expect("serialize pty input params")
+                        .into(),
+                );
+                if let Err(e) = acp_send(notif, &tx).await {
+                    tracing::debug!(error = % e, "pty input notification dropped");
+                }
+                TaskResult::CancelComplete
+            });
         }
-        Effect::PtyResize { pty_id, .. } => {
-            tracing::debug!(
-                pty_id = % pty_id,
-                "pty resize is not implemented in this release"
-            );
+        // Resize IS a request: the server must apply the new winsize before the
+        // next paint, and a failure is worth surfacing at debug level.
+        Effect::PtyResize {
+            pty_id,
+            rows,
+            cols,
+        } => {
+            let tx = acp_tx.clone();
+            tasks.spawn(async move {
+                let params = serde_json::json!({
+                    "terminalId": pty_id,
+                    "rows": rows,
+                    "cols": cols,
+                });
+                let req = acp::ExtRequest::new(
+                    "alnair/terminal/pty/resize",
+                    serde_json::value::to_raw_value(&params)
+                        .expect("serialize pty resize params")
+                        .into(),
+                );
+                if let Err(e) = acp_send(req, &tx).await {
+                    tracing::debug!(error = % e, "pty resize failed");
+                }
+                TaskResult::CancelComplete
+            });
         }
         Effect::PtyClose { pty_id } => {
             let tx = acp_tx.clone();

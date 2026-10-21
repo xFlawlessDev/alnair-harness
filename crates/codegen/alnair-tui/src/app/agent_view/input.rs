@@ -815,8 +815,14 @@ impl AgentView {
                 AgentPane::Queue => self.handle_queue_key(key, registry),
                 AgentPane::Tasks => self.handle_bg_tasks_key(key, registry),
                 AgentPane::Catalog => self.handle_catalog_key(key, registry),
+                AgentPane::Terminal => self.handle_terminal_key(key, registry),
             },
             Event::Paste(text) => {
+                // A focused pane owns the paste: wrapping it as a prompt edit
+                // would type into the composer the user is not looking at.
+                if self.active_pane == AgentPane::Terminal {
+                    return self.handle_terminal_paste(text);
+                }
                 if self.active_pane != AgentPane::Prompt
                     && self.session.state.is_idle()
                     && self.active_modal.is_none()

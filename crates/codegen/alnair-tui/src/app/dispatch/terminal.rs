@@ -8,7 +8,7 @@
 
 use crate::app::actions::Effect;
 use crate::app::agent::AgentId;
-use crate::app::agent_view::AgentView;
+use crate::app::agent_view::{AgentPane, AgentView};
 use crate::app::terminal_pane::{DEFAULT_PANE_ROWS, TerminalPane};
 
 /// Toggle the pane for `agent_id`.
@@ -27,12 +27,12 @@ pub(super) fn dispatch_toggle_terminal(view: &mut AgentView) -> Vec<Effect> {
     let agent_id = view.session.id;
 
     // Re-opening replays: the ring buffer is the only complete picture of what
-    // the shell printed while the pane was hidden.
+    // the shell printed while the pane was hidden. Focus moves in too, so the
+    // chord is a single gesture rather than "open, then click".
     if let Some(pane) = view.terminal.as_ref() {
-        return vec![Effect::PtyLoad {
-            agent_id,
-            pty_id: pane.pty_id.clone(),
-        }];
+        let pty_id = pane.pty_id.clone();
+        view.set_active_pane(AgentPane::Terminal, false);
+        return vec![Effect::PtyLoad { agent_id, pty_id }];
     }
 
     let Some(session_id) = view.session.session_id.clone() else {
@@ -61,6 +61,9 @@ pub(super) fn handle_pty_created(
 ) -> Vec<Effect> {
     view.terminal = Some(TerminalPane::new(pty_id.clone(), 80, DEFAULT_PANE_ROWS));
     view.terminal_open = true;
+    // Focus the pane on first open: the shell prompt is what the user asked
+    // for, and it is empty until something is typed into it.
+    view.set_active_pane(AgentPane::Terminal, false);
     vec![Effect::PtyLoad { agent_id, pty_id }]
 }
 
@@ -98,3 +101,21 @@ pub(super) fn forget_terminal(view: &mut AgentView) {
     view.terminal = None;
     view.terminal_open = false;
 }
+
+/// Forward encoded keystrokes to the view's PTY.
+///
+/// Returns no effect when the pane vanished between the key being routed and
+/// this dispatch — a stale key must not resurrect a closed shell.
+pub(super) fn dispatch_pty_input(view: &AgentView, data: Vec<u8>) -> Vec<Effect> {
+    match view.terminal.as_ref() {
+        Some(pane) if !data.is_empty() => vec![Effect::PtyInput {
+            pty_id: pane.pty_id.clone(),
+            data,
+        }],
+        _ => Vec::new(),
+    }
+}
+
+// Resize is NOT dispatched from here: `draw` owns the frame cadence and sends
+// the debounced size directly (see `AppView::draw_inner`), because routing it
+// through an `Effect` would need a round trip per frame.

@@ -100,7 +100,7 @@ use super::status::{
     dispatch_show_usage,
 };
 use super::task_result::{dispatch_task_result, unregister_all_active_sessions};
-use super::terminal::dispatch_toggle_terminal;
+use super::terminal::{dispatch_pty_input, dispatch_toggle_terminal};
 use super::transcript::{
     dispatch_copy_assistant_message, dispatch_copy_block_content, dispatch_copy_block_meta,
     dispatch_dump_input_log, dispatch_export_conversation, dispatch_open_block_viewer,
@@ -797,6 +797,13 @@ pub(crate) fn dispatch(action: Action, app: &mut AppView) -> Vec<Effect> {
         Action::ToggleTerminal => match app.active_view {
             ActiveView::Agent(id) => match app.agents.get_mut(&id) {
                 Some(view) => dispatch_toggle_terminal(view),
+                None => Vec::new(),
+            },
+            _ => Vec::new(),
+        },
+        Action::PtySendInput(data) => match app.active_view {
+            ActiveView::Agent(id) => match app.agents.get(&id) {
+                Some(view) => dispatch_pty_input(view, data),
                 None => Vec::new(),
             },
             _ => Vec::new(),

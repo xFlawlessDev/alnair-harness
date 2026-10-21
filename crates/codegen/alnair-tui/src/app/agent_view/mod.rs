@@ -166,6 +166,7 @@ mod rewind;
 mod selection;
 mod session;
 mod shell_completion;
+mod terminal_input;
 mod viewer;
 use super::actions;
 use super::dispatch;
@@ -624,6 +625,13 @@ pub struct AgentView {
     /// Whether the pane is currently drawn. Independent of `terminal`: the
     /// chord toggles this, and the PTY keeps running while it is `false`.
     pub terminal_open: bool,
+    /// A PTY size the draw site wants pushed to the server.
+    ///
+    /// `draw` cannot return effects, so the draw site records the pending size
+    /// and the event loop drains it through [`Self::take_pending_pty_resize`].
+    /// `None` means nothing to send; the value is the debounced target, not
+    /// every frame's intermediate size.
+    pub pending_pty_resize: Option<(u16, u16)>,
     /// Per-agent mirror of the server-authoritative shared prompt queue
     /// (`AppView::shared_prompt_queues[sid]`), kept in sync by
     /// `handle_queue_changed` and the immediate-send path. The queue

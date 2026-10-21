@@ -17,6 +17,8 @@
 //! routing already returns output here. Real per-client ids matter only in 3c,
 //! where two clients genuinely need to differ.
 
+pub mod keys;
+
 use alnair_terminal_screen::term::{SessionListener, Terminal};
 
 /// Default pane height in rows, before the 40%-of-scrollback cap.

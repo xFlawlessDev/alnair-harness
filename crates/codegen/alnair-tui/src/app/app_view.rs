@@ -3946,6 +3946,35 @@ impl AppView {
                                     agent.take_pending_post_flush(),
                                     post_flush,
                                 );
+                                // The pane's emulator resized this frame; the
+                                // PTY has to learn about it or a program that
+                                // queries $COLUMNS keeps painting the old
+                                // layout. Sent as a fire-and-forget ext request
+                                // because `draw` cannot return effects.
+                                if let Some((rows, cols)) = agent.take_pending_pty_resize()
+                                    && let Some(pane) = agent.terminal.as_ref()
+                                {
+                                    let params = serde_json::json!({
+                                        "terminalId": pane.pty_id,
+                                        "rows": rows,
+                                        "cols": cols,
+                                    });
+                                    let req = acp::ExtRequest::new(
+                                        "alnair/terminal/pty/resize",
+                                        serde_json::value::to_raw_value(&params)
+                                            .expect("serialize pty resize params")
+                                            .into(),
+                                    );
+                                    let tx = agent.session.acp_tx.clone();
+                                    tokio::spawn(async move {
+                                        if let Err(e) = alnair_acp_lib::acp_send(req, &tx).await {
+                                            tracing::debug!(
+                                                error = % e,
+                                                "pty resize failed"
+                                            );
+                                        }
+                                    });
+                                }
                                 let has_cloud = false;
                                 if has_cloud || self.import_claude_modal.is_some() {
                                     link_spans.clear();

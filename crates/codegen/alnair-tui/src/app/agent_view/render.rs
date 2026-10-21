@@ -631,6 +631,15 @@ impl AgentView {
     ) -> Option<crate::terminal::overlay::PostFlush> {
         self.pending_post_flush.take()
     }
+
+    /// Drain a PTY resize the draw site recorded, if any.
+    ///
+    /// `draw` cannot return effects, so the size change is recorded during the
+    /// frame and pushed here by whoever owns the effect list. The value is the
+    /// last size of the frame, so a drag-resize collapses to one push.
+    pub(crate) fn take_pending_pty_resize(&mut self) -> Option<(u16, u16)> {
+        self.pending_pty_resize.take()
+    }
     /// `area` is the screen region assigned to this agent view.
     /// When a tracing overlay is visible, this is smaller than `f.area()`.
     ///
@@ -1721,17 +1730,12 @@ impl AgentView {
             let inner_cols = pane_rect.width.saturating_sub(2);
             let inner_rows = pane_rect.height.saturating_sub(2);
             if inner_cols > 0 && inner_rows > 0 && pane.resize(inner_cols, inner_rows) {
-                // The shell's idea of its width is now stale. 3b sends
-                // `alnair/terminal/pty/resize`; 3a cannot, so a program that
-                // wraps at $COLUMNS may render at the old width until it
-                // repaints. Recorded here so the limitation is visible in the
-                // code rather than discovered in a bug report.
-                tracing::debug!(
-                    pty_id = % pane.pty_id,
-                    cols = inner_cols,
-                    rows = inner_rows,
-                    "terminal pane resized locally; PTY resize is not implemented"
-                );
+                // The emulator now wraps at the new width, but the shell still
+                // believes it is at the old one, so a program that queries
+                // $COLUMNS paints the wrong layout. Record the target for the
+                // event loop to push; every intermediate frame of a drag-resize
+                // overwrites it, which is the debounce.
+                self.pending_pty_resize = Some((inner_rows, inner_cols));
             }
             crate::views::terminal_pane::render_terminal_pane(
                 pane_rect,
@@ -1739,9 +1743,7 @@ impl AgentView {
                 &theme,
                 crate::views::terminal_pane::TerminalPaneParams {
                     pane,
-                    // 3a forwards no keys, so the pane can never hold focus. The
-                    // parameter stays because 3b's input routing needs it.
-                    focused: false,
+                    focused: self.active_pane == AgentPane::Terminal,
                 },
             );
         }
@@ -4045,6 +4047,14 @@ impl AgentView {
             self.frame_occluder_rects.push(overlay_rect);
         }
         self.pane_areas = layout.pane_areas();
+        // The pane is carved out of the scrollback at the draw site, so its
+        // rect is not part of `AgentViewLayout`. Stamp it here: `pane_areas()`
+        // is assigned in a dozen overlay paths, and only this one knows where
+        // the pane actually went. `None` (hidden) leaves the zero rect that
+        // keeps `hit_test` from claiming it.
+        if let Some(rect) = pane_rect {
+            self.pane_areas.terminal = rect;
+        }
         {
             let route = crate::hyperlink_route::hyperlink_route();
             if route.emit_osc8 {

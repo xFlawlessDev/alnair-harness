@@ -322,6 +322,12 @@ impl AgentView {
                     return InputOutcome::Unchanged;
                 }
                 match self.pane_areas.hit_test(mouse.column, mouse.row) {
+                    Some(AgentPane::Terminal) => {
+                        // Clicking into the pane focuses it; 3b forwards keys
+                        // only, so there is no per-cell mouse routing yet.
+                        self.set_active_pane(AgentPane::Terminal, false);
+                        InputOutcome::Changed
+                    }
                     Some(AgentPane::Todo) => {
                         self.set_active_pane(AgentPane::Todo, false);
                         self.todo.handle_mouse(
@@ -815,7 +821,8 @@ impl AgentView {
                         | AgentPane::Queue
                         | AgentPane::Prompt
                         | AgentPane::Tasks
-                        | AgentPane::Catalog => None,
+                        | AgentPane::Catalog
+                        | AgentPane::Terminal => None,
                     })
                 };
                 let new_prompt_hover = hit == Some(AgentPane::Prompt)
