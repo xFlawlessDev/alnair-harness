@@ -123,9 +123,11 @@ fn spawn_restricted_pty_child(
     if let Some(dir) = launch.cwd {
         cmd.current_dir(dir);
     }
-    // portable-pty's `as_command` clears the environment and re-adds `SHELL`
-    // plus the builder's envs; mirror that so the child sees the same env.
-    cmd.env_clear();
+    // `portable-pty`'s `as_command` seeds its environment from the parent
+    // process (`get_base_env`) and then overlays `SHELL` plus the builder's
+    // envs. Inheriting here and overlaying the same two things is equivalent,
+    // and keeps the restricted path's environment identical to the
+    // unrestricted one — a cleared env would silently drop PATH/HOME/locale.
     cmd.env("SHELL", launch.shell_path);
     cmd.envs(launch.env);
     cmd.stdin(stdin).stdout(stdout).stderr(stderr);
@@ -939,6 +941,7 @@ mod tests {
             None,
             gateway,
             TargetClientId::None,
+            None,
         )
         .await
         .expect("create test pty")
@@ -1119,6 +1122,7 @@ mod tests {
             None,
             gateway,
             TargetClientId::None,
+            None,
         )
         .await
         .expect("create pty");
@@ -1256,6 +1260,7 @@ mod tests {
                     None,
                     gateway,
                     TargetClientId::None,
+                    None,
                 )
                 .await;
 
