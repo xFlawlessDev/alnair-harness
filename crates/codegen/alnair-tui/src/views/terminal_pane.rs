@@ -188,10 +188,37 @@ fn render_grid(grid: Rect, buf: &mut Buffer, theme: &Theme, pane: &TerminalPane)
             x = x.saturating_add(span_width);
         }
 
-        // Cursor: an inverted cell drawn only while the pane is alive. Drawing
-        // it after the runs means it wins over a glyph already at that cell.
-        if cursor_visible && row_idx == cursor.0 && (cursor.1 as u16) < grid.width {
-            draw_cursor(buf, grid, y, cursor.1 as u16, theme);
+        // Selection highlight, painted OVER the run text so it is visible on
+        // coloured output. Only the selected columns are repainted; the rest of
+        // the row keeps its colours.
+        if let Some(sel) = pane.selection {
+            let (start, end) = sel.span();
+            let row_u16 = row_idx as u16;
+            if row_u16 >= start.0 && row_u16 <= end.0 {
+                let from = if row_u16 == start.0 { start.1 } else { 0 };
+                let to = if row_u16 == end.0 {
+                    (end.1 + 1).min(grid.width)
+                } else {
+                    grid.width
+                };
+                for col in from..to {
+                    if let Some(cell) = buf.cell_mut((grid.x + col, y)) {
+                        cell.bg = theme.bg_highlight;
+                        cell.fg = theme.text_primary;
+                    }
+                }
+            }
+        }
+
+        // Cursor: an inverted cell drawn only while the pane is alive and the
+        // view is live. `cursor_cell` returns `None` while scrolled back, so a
+        // history row never gets a cursor painted over it.
+        if let Some((crow, ccol)) = cursor
+            && cursor_visible
+            && row_idx == crow
+            && (ccol as u16) < grid.width
+        {
+            draw_cursor(buf, grid, y, ccol as u16, theme);
         }
     }
 }

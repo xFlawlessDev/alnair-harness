@@ -640,6 +640,11 @@ impl AgentView {
     pub(crate) fn take_pending_pty_resize(&mut self) -> Option<(u16, u16)> {
         self.pending_pty_resize.take()
     }
+
+    /// Drain the emulator replies the draw site recorded, if any.
+    pub(crate) fn take_pending_pty_input(&mut self) -> Option<Vec<u8>> {
+        self.pending_pty_input.take()
+    }
     /// `area` is the screen region assigned to this agent view.
     /// When a tracing overlay is visible, this is smaller than `f.area()`.
     ///
@@ -1736,6 +1741,15 @@ impl AgentView {
                 // event loop to push; every intermediate frame of a drag-resize
                 // overwrites it, which is the debounce.
                 self.pending_pty_resize = Some((inner_rows, inner_cols));
+            }
+            // The emulator answers terminal queries (cursor position, colours,
+            // device attributes) and those bytes MUST go back to the PTY: a
+            // shell holds its prompt until the cursor-position report arrives.
+            // Recorded here because `draw` cannot return effects; the event loop
+            // pushes it after the frame.
+            let replies = pane.take_emulator_replies();
+            if !replies.is_empty() {
+                self.pending_pty_input = Some(replies);
             }
             crate::views::terminal_pane::render_terminal_pane(
                 pane_rect,

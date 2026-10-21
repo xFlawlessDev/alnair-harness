@@ -504,6 +504,29 @@ fn backfill_child_routes(
         }
     }
 }
+/// Stamp `_meta["alnair/leaderClientId"]` onto a forwarded request.
+///
+/// Returns `true` when the key was written (i.e. it was absent).
+fn inject_leader_client_id(json: &mut serde_json::Value, client_id: ClientId) -> bool {
+    let Some(params) = json.get_mut("params").and_then(|p| p.as_object_mut()) else {
+        return false;
+    };
+    let meta = params
+        .entry("_meta")
+        .or_insert_with(|| serde_json::json!({}));
+    let Some(meta) = meta.as_object_mut() else {
+        return false;
+    };
+    if meta.contains_key("alnair/leaderClientId") {
+        return false;
+    }
+    meta.insert(
+        "alnair/leaderClientId".to_string(),
+        serde_json::json!(client_id.0),
+    );
+    true
+}
+
 /// Inject client capabilities into a session/new request, **in place**.
 ///
 /// If the payload is a session/new request:
@@ -524,6 +547,20 @@ fn inject_capabilities_into_session_new(
         .default_model
         .as_ref()
         .is_some_and(|m| !m.is_empty());
+    let method = json.get("method").and_then(|m| m.as_str()).unwrap_or("");
+    let is_session_new = method == AGENT_METHOD_NAMES.session_new;
+    let is_session_load = method == AGENT_METHOD_NAMES.session_load;
+    // A PTY created by this client must carry its leader key back on every
+    // notification. Without it the leader falls back to `last_active_client`,
+    // so with two pagers attached one of them receives the other's output.
+    let is_pty_create = method == "alnair/terminal/pty/create";
+    let is_pty_load = method == "alnair/terminal/pty/load";
+    // PTY requests carry no capability fields, so the capability gate below
+    // must not skip them: tagging is the whole job, and a client with no
+    // advertised capabilities still owns its shell.
+    if is_pty_create || is_pty_load {
+        return inject_leader_client_id(json, client_id);
+    }
     if !capabilities.yolo_mode
         && !capabilities.auto_mode
         && !has_model
@@ -532,9 +569,6 @@ fn inject_capabilities_into_session_new(
     {
         return false;
     }
-    let method = json.get("method").and_then(|m| m.as_str()).unwrap_or("");
-    let is_session_new = method == AGENT_METHOD_NAMES.session_new;
-    let is_session_load = method == AGENT_METHOD_NAMES.session_load;
     if !is_session_new && !is_session_load {
         return false;
     }
@@ -1460,13 +1494,18 @@ pub async fn run_leader_server(
             child_sessions,); }
             trace!("Dropping notification for relay-owned session (already delivered via WS)");
             } else if let Some(client_id) = last_active_client && let Some(client) =
-            clients.get(& client_id) { debug!(client_id = client_id.0,
-            "Using fallback routing to last active client"); if let Err(e) = client.tx
+            clients.get(& client_id) { warn!(client_id = client_id.0, method =
+            method_of(json.as_ref().unwrap_or(&serde_json::Value::Null)).unwrap_or("?"),
+            "PTY/notification routing fell back to last_active_client: the payload carried no
+            alnair/leaderClientId, so it is delivered to whichever client was active last
+            rather than its owner"); if let Err(e) = client.tx
             .try_send(ClientOutbound::Acp(payload)) { warn!(client_id = client_id.0,
             error = % e,
             "Failed to send notification via fallback routing (channel closed)"); } }
             else {
-            debug!("No client available for notification routing, message dropped"); } }
+            warn!(method = method_of(json.as_ref().unwrap_or(&serde_json::Value::Null))
+            .unwrap_or("?"), "No client available for notification routing, message dropped");
+            } }
         }
     }
     finalize_cpu_profile_on_shutdown(control_state).await;

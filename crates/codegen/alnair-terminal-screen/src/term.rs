@@ -172,6 +172,15 @@ impl Terminal {
         *self.term.mode()
     }
 
+    /// Scroll the display offset by `delta` rows (positive = back in history).
+    ///
+    /// Exposed for [`crate::screen`]: the offset lives on the emulator, which
+    /// keeps rendering and the cursor consistent with it.
+    pub(crate) fn scroll_display(&mut self, delta: i32) {
+        self.term
+            .scroll_display(alacritty_terminal::grid::Scroll::Delta(delta));
+    }
+
     /// Get the cursor position (1-indexed).
     pub fn cursor_position(&self) -> CursorPosition {
         let point = self.term.grid().cursor.point;

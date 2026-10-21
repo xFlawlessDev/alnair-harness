@@ -11,6 +11,16 @@ pub use alnair_workspace::file_system::{ClientId, TargetClientId};
 pub struct RequestMeta {
     #[serde(default)]
     pub client_id: TargetClientId,
+    /// The leader's own connection id, stamped by the leader onto requests it
+    /// forwards (`_meta["alnair/leaderClientId"]`).
+    ///
+    /// Distinct from `client_id`: `TargetClientId` is the *relay* addressing
+    /// used by the workspace RPC layer, while this is the leader's local
+    /// subscriber key. A request carrying this id came from a leader client,
+    /// and anything it creates (a PTY) must route back to that same key or the
+    /// output lands on whichever client the leader last saw.
+    #[serde(default, rename = "alnair/leaderClientId")]
+    pub leader_client_id: Option<u64>,
 }
 
 /// Notification-side routing metadata. Embeddable in any outgoing
@@ -56,6 +66,42 @@ pub fn send_routed_notification(
     }
 }
 
+/// Send a notification tagged for a specific leader client.
+///
+/// `targetClientId` is relay addressing; the leader routes on
+/// `_meta["alnair/leaderClientId"]` (see `extract_target_client_id` in
+/// `leader::server`). A PTY created by a leader client must tag its output with
+/// that key, or the leader falls back to `last_active_client` and the bytes
+/// land on whichever pager happened to be active.
+pub fn send_leader_routed_notification(
+    gateway: &GatewaySender,
+    method: &str,
+    mut params: serde_json::Value,
+    target_client_id: &TargetClientId,
+    leader_client_id: Option<u64>,
+) {
+    inject_routing_meta(&mut params, target_client_id);
+    if let Some(id) = leader_client_id {
+        // `_meta` must be CREATED here, not looked up: `inject_routing_meta`
+        // returns before creating it when `target_client_id` is `None`, which is
+        // exactly the case for the pager (it sends no relay `clientId`). A bare
+        // `get_mut("_meta")` then finds nothing and the tag is silently dropped
+        // — the leader falls back to `last_active_client` and the output goes
+        // to the wrong pager, or nowhere.
+        let meta = params.as_object_mut().and_then(|obj| {
+            obj.entry("_meta")
+                .or_insert_with(|| serde_json::json!({}))
+                .as_object_mut()
+        });
+        if let Some(meta) = meta {
+            meta.insert("alnair/leaderClientId".to_string(), serde_json::json!(id));
+        }
+    }
+    if let Ok(raw) = serde_json::value::to_raw_value(&params) {
+        gateway.forward_fire_and_forget(acp::ExtNotification::new(method, raw.into()));
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -71,6 +117,33 @@ mod tests {
         });
         let json = serde_json::to_string(&client_id).unwrap();
         assert_eq!(json, r#"{"instanceId":"inst-123","connId":"conn-456"}"#);
+    }
+
+    #[test]
+    fn leader_tag_is_stamped_when_relay_target_is_absent() {
+        // The pager sends NO relay `clientId`, so `inject_routing_meta` returns
+        // before creating `_meta`. The leader tag must still be written, or the
+        // leader falls back to `last_active_client` and the PTY's output is
+        // dropped. This is the exact shape 3b produces.
+        let mut params = serde_json::json!({ "terminalId": "pty-1", "type": "output" });
+        inject_routing_meta(&mut params, &TargetClientId::None);
+        assert!(
+            params.get("_meta").is_none(),
+            "precondition: no relay target means no _meta yet"
+        );
+
+        // Mirror the production helper's tagging step.
+        let meta = params
+            .as_object_mut()
+            .and_then(|obj| {
+                obj.entry("_meta")
+                    .or_insert_with(|| serde_json::json!({}))
+                    .as_object_mut()
+            })
+            .expect("_meta must be created");
+        meta.insert("alnair/leaderClientId".to_string(), serde_json::json!(7));
+
+        assert_eq!(params["_meta"]["alnair/leaderClientId"], 7);
     }
 
     #[test]

@@ -67,6 +67,7 @@ impl AgentView {
             terminal: None,
             terminal_open: false,
             pending_pty_resize: None,
+            pending_pty_input: None,
             shared_queue: Vec::new(),
             attached_as_viewer: false,
             self_originated_prompt_ids: VecDeque::new(),

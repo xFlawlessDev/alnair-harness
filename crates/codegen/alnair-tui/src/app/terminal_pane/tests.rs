@@ -1,4 +1,4 @@
-use super::{Applied, PtyNotification, TerminalPane, pane_height};
+use super::{Applied, PaneSelection, PtyNotification, TerminalPane, pane_height};
 
 fn pane() -> TerminalPane {
     TerminalPane::new("pty-1".to_string(), 20, 4)
@@ -24,6 +24,138 @@ fn replay(text: &str) -> PtyNotification {
 
 fn row_text(pane: &TerminalPane, row: usize) -> String {
     pane.screen.visible_rows()[row].text()
+}
+
+#[test]
+fn emulator_replies_are_captured_not_dropped() {
+    // A shell probes its terminal at startup (`ESC[6n`) and blocks until the
+    // emulator answers. If the reply sink is dropped, the answer goes nowhere
+    // and the shell never prints its prompt — the pane stays blank forever.
+    let mut pane = pane();
+    pane.apply(&output("\x1b[6n"));
+    let replies = pane.take_emulator_replies();
+    assert!(
+        !replies.is_empty(),
+        "the cursor-position report must be captured for forwarding"
+    );
+    assert!(
+        replies.starts_with(b"\x1b["),
+        "DSR is answered with a CSI sequence, got {replies:?}"
+    );
+    // Draining twice yields nothing: the reply was handed over exactly once.
+    assert!(pane.take_emulator_replies().is_empty());
+}
+
+#[test]
+fn a_replay_keeps_the_reply_sink_alive() {
+    // The replay path rebuilds the emulator; the fresh sink must be kept or
+    // every reply after a reopen is silently lost.
+    let mut pane = pane();
+    pane.apply(&replay("x"));
+    pane.apply(&output("\x1b[6n"));
+    assert!(
+        !pane.take_emulator_replies().is_empty(),
+        "replies must still be captured after a replay reset"
+    );
+}
+
+#[test]
+fn scrolling_back_shows_history_and_hides_the_cursor() {
+    let mut pane = TerminalPane::new("pty-1".to_string(), 10, 2);
+    let mut notif = output("one\r\ntwo\r\nthree");
+    pane.apply(&notif);
+    let _ = &mut notif;
+
+    // Two rows tall: the earlier lines have scrolled into history.
+    assert!(pane.screen.history_size() > 0, "fixture must overflow");
+    assert_eq!(pane.screen.display_offset(), 0);
+    assert!(
+        pane.screen.cursor_cell().is_some(),
+        "live view has a cursor"
+    );
+
+    let offset = pane.screen.scroll_by(1);
+    assert_eq!(offset, 1, "one row back");
+    assert!(
+        pane.screen.cursor_cell().is_none(),
+        "the cursor belongs to the live view, not to a history row"
+    );
+
+    // Back to live.
+    assert_eq!(pane.screen.scroll_to_bottom(), 0);
+    assert!(pane.screen.cursor_cell().is_some());
+}
+
+#[test]
+fn scrolling_is_clamped_to_available_history() {
+    let mut pane = TerminalPane::new("pty-1".to_string(), 10, 2);
+    pane.apply(&output("a\r\nb\r\nc\r\nd"));
+    let history = pane.screen.history_size();
+    // Asking for far more than exists clamps instead of erroring.
+    assert_eq!(pane.screen.scroll_by(10_000), history);
+    // And scrolling forward past the bottom clamps to 0.
+    assert_eq!(pane.screen.scroll_by(-10_000), 0);
+}
+
+#[test]
+fn selection_copies_only_the_dragged_columns() {
+    let mut pane = TerminalPane::new("pty-1".to_string(), 20, 3);
+    pane.apply(&output("hello world"));
+    // Columns 0..=4 on row 0 => "hello".
+    pane.selection = Some(PaneSelection {
+        anchor: (0, 0),
+        head: (0, 4),
+        dragging: false,
+    });
+    assert_eq!(pane.selected_text(), "hello");
+}
+
+#[test]
+fn a_backwards_selection_selects_the_same_span() {
+    let mut pane = TerminalPane::new("pty-1".to_string(), 20, 3);
+    pane.apply(&output("hello world"));
+    pane.selection = Some(PaneSelection {
+        anchor: (0, 4),
+        head: (0, 0),
+        dragging: false,
+    });
+    assert_eq!(pane.selected_text(), "hello");
+}
+
+#[test]
+fn a_multi_row_selection_joins_with_newlines() {
+    let mut pane = TerminalPane::new("pty-1".to_string(), 20, 3);
+    pane.apply(&output("alpha\r\nbeta"));
+    pane.selection = Some(PaneSelection {
+        anchor: (0, 0),
+        head: (1, 3),
+        dragging: false,
+    });
+    assert_eq!(pane.selected_text(), "alpha\nbeta");
+}
+
+#[test]
+fn an_empty_selection_copies_nothing() {
+    let mut pane = TerminalPane::new("pty-1".to_string(), 20, 3);
+    pane.apply(&output("hello"));
+    pane.selection = Some(PaneSelection::new((0, 2)));
+    assert_eq!(pane.selected_text(), "");
+}
+
+#[test]
+fn an_exited_pane_keeps_its_output_readable() {
+    // "exit" must not blank the pane: the user needs the last output to know
+    // what happened, and the footer explains the state.
+    let mut pane = TerminalPane::new("pty-1".to_string(), 20, 3);
+    pane.apply(&output("bye"));
+    pane.apply(&PtyNotification {
+        terminal_id: "pty-1".to_string(),
+        kind: "exit".to_string(),
+        exit_code: Some(0),
+        ..Default::default()
+    });
+    assert_eq!(row_text(&pane, 0), "bye");
+    assert_eq!(pane.exited, Some(Some(0)));
 }
 
 #[test]

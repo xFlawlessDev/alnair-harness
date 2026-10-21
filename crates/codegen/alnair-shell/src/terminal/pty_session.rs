@@ -9,7 +9,7 @@ use alnair_acp_lib::AcpAgentGatewaySender as GatewaySender;
 use portable_pty::{CommandBuilder, MasterPty, PtySize, native_pty_system};
 use tokio::sync::{Mutex, mpsc};
 
-use crate::extensions::routing::{TargetClientId, send_routed_notification};
+use crate::extensions::routing::{TargetClientId, send_leader_routed_notification};
 use crate::terminal::{TerminalExtError, TerminalInfo, TerminalStatus};
 
 const NOTIFICATION_METHOD: &str = "alnair/terminal/pty/notification";
@@ -30,6 +30,12 @@ pub struct PtySession {
     rows: u16,
     cols: u16,
     target_client_id: TargetClientId,
+    /// The leader's subscriber key for the client that created this PTY.
+    ///
+    /// `target_client_id` is relay addressing; the leader routes on this. With
+    /// several pagers sharing one leader, an untagged notification falls back
+    /// to `last_active_client`, so a PTY's output could land on the wrong pager.
+    leader_client_id: Option<u64>,
     busy: bool,
     gateway: GatewaySender,
 }
@@ -230,6 +236,7 @@ pub async fn create_pty(
     name: Option<&str>,
     gateway: GatewaySender,
     target_client_id: TargetClientId,
+    leader_client_id: Option<u64>,
 ) -> Result<String, TerminalExtError> {
     let pty_id = uuid::Uuid::now_v7().to_string();
 
@@ -329,6 +336,7 @@ pub async fn create_pty(
         rows,
         cols,
         target_client_id,
+        leader_client_id,
         busy: false,
         gateway: gateway.clone(),
     };
@@ -351,13 +359,32 @@ fn spawn_pty_input_loop(mut writer: Box<dyn Write + Send>, mut input_rx: mpsc::R
             while let Ok(more) = input_rx.try_recv() {
                 chunk.extend_from_slice(&more);
             }
-            if writer.write_all(&chunk).is_err() {
+            // The write is the last hop before the shell sees a keystroke.
+            // Logging the failure (rather than breaking silently) tells a
+            // "shell ignores input" report apart from a dead master fd.
+            if let Err(e) = writer.write_all(&chunk) {
+                alnair_log::unified_log::warn(
+                    "pty.input.write_failed",
+                    None,
+                    Some(serde_json::json!({ "error": e.to_string() })),
+                );
                 break;
             }
-            if writer.flush().is_err() {
+            if let Err(e) = writer.flush() {
+                alnair_log::unified_log::warn(
+                    "pty.input.flush_failed",
+                    None,
+                    Some(serde_json::json!({ "error": e.to_string() })),
+                );
                 break;
             }
+            alnair_log::unified_log::debug(
+                "pty.input.written",
+                None,
+                Some(serde_json::json!({ "bytes": chunk.len() })),
+            );
         }
+        alnair_log::unified_log::warn("pty.input_loop.closed", None, None);
     });
 }
 
@@ -375,19 +402,45 @@ async fn run_pty_output_loop(
     use tokio::time::{Duration, interval};
 
     let (data_tx, mut data_rx) = mpsc::channel::<Vec<u8>>(64);
+    let reader_pty_id = pty_id.clone();
 
     tokio::task::spawn_blocking(move || {
         let mut reader = reader;
         let mut buf = [0u8; 4096];
         loop {
             match reader.read(&mut buf) {
-                Ok(0) => break,
+                Ok(0) => {
+                    // The PTY master hit EOF: the child side is fully closed.
+                    // Without this line a dead shell is indistinguishable from
+                    // one that simply printed nothing.
+                    alnair_log::unified_log::warn(
+                        "pty.reader.eof",
+                        None,
+                        Some(serde_json::json!({ "terminal_id": reader_pty_id })),
+                    );
+                    break;
+                }
                 Ok(n) => {
                     if data_tx.blocking_send(buf[..n].to_vec()).is_err() {
+                        alnair_log::unified_log::warn(
+                            "pty.reader.send_failed",
+                            None,
+                            Some(serde_json::json!({ "terminal_id": reader_pty_id })),
+                        );
                         break;
                     }
                 }
-                Err(_) => break,
+                Err(e) => {
+                    alnair_log::unified_log::warn(
+                        "pty.reader.error",
+                        None,
+                        Some(serde_json::json!({
+                            "terminal_id": reader_pty_id,
+                            "error": e.to_string(),
+                        })),
+                    );
+                    break;
+                }
             }
         }
     });
@@ -412,12 +465,31 @@ async fn run_pty_output_loop(
                             }
                             session.output_offset += data.len() as u64;
                         }
+                        // Every byte the shell emits passes here. Logging the
+                        // chunk (not the flush) separates "the shell is silent"
+                        // from "the flush never runs" ΓÇö the two causes of a
+                        // blank pane that look identical from outside.
+                        alnair_log::unified_log::debug(
+                            "pty.output.chunk",
+                            None,
+                            Some(serde_json::json!({
+                                "terminal_id": pty_id,
+                                "bytes": data.len(),
+                            })),
+                        );
                         pending.extend_from_slice(&data);
                     }
                     None => {
                         if !pending.is_empty() {
                             flush_output(&pty, &pty_id, &mut pending, &gateway).await;
                         }
+                        // `data_rx` closed: the reader task ended (see the
+                        // `pty.reader.*` line that precedes this one for why).
+                        alnair_log::unified_log::warn(
+                            "pty.output_loop.channel_closed",
+                            None,
+                            Some(serde_json::json!({ "terminal_id": pty_id })),
+                        );
                         break;
                     }
                 }
@@ -436,31 +508,40 @@ async fn run_pty_output_loop(
     }
 
     // Child exited
-    let (exit_code, signal, target_client_id, was_busy) = tokio::task::spawn_blocking({
-        let pty = pty.clone();
-        move || {
-            let mut session = pty.blocking_lock();
-            let target_client_id = session.target_client_id.clone();
-            let was_busy = session.busy;
-            match session.child.wait() {
-                Ok(es) => (
-                    Some(es.exit_code() as i32),
-                    None::<String>,
-                    target_client_id,
-                    was_busy,
-                ),
-                Err(_) => (None, None, target_client_id, was_busy),
+    let (exit_code, signal, target_client_id, leader_client_id, was_busy) =
+        tokio::task::spawn_blocking({
+            let pty = pty.clone();
+            move || {
+                let mut session = pty.blocking_lock();
+                let target_client_id = session.target_client_id.clone();
+                let leader_client_id = session.leader_client_id;
+                let was_busy = session.busy;
+                match session.child.wait() {
+                    Ok(es) => (
+                        Some(es.exit_code() as i32),
+                        None::<String>,
+                        target_client_id,
+                        leader_client_id,
+                        was_busy,
+                    ),
+                    Err(_) => (None, None, target_client_id, leader_client_id, was_busy),
+                }
             }
-        }
-    })
-    .await
-    .unwrap_or_default();
+        })
+        .await
+        .unwrap_or_default();
 
     if was_busy {
-        send_busy_notification(&pty_id, false, &target_client_id, &gateway);
+        send_busy_notification(
+            &pty_id,
+            false,
+            &target_client_id,
+            &gateway,
+            leader_client_id,
+        );
     }
 
-    send_routed_notification(
+    send_leader_routed_notification(
         &gateway,
         NOTIFICATION_METHOD,
         serde_json::json!({
@@ -470,6 +551,7 @@ async fn run_pty_output_loop(
             "signal": signal,
         }),
         &target_client_id,
+        leader_client_id,
     );
 }
 
@@ -521,6 +603,7 @@ async fn sample_busy_transition(pty: &Arc<Mutex<PtySession>>, pty_id: &str) {
         now_busy,
         &session.target_client_id,
         &session.gateway,
+        session.leader_client_id,
     );
 }
 
@@ -529,8 +612,9 @@ fn send_busy_notification(
     busy: bool,
     target_client_id: &TargetClientId,
     gateway: &GatewaySender,
+    leader_client_id: Option<u64>,
 ) {
-    send_routed_notification(
+    send_leader_routed_notification(
         gateway,
         NOTIFICATION_METHOD,
         serde_json::json!({
@@ -538,6 +622,7 @@ fn send_busy_notification(
             "type": if busy { "process_started" } else { "process_ended" },
         }),
         target_client_id,
+        leader_client_id,
     );
 }
 
@@ -549,14 +634,18 @@ async fn flush_output(
 ) {
     use base64::Engine as _;
 
-    let (output_offset, target_client_id) = {
+    let (output_offset, target_client_id, leader_client_id) = {
         let session = pty.lock().await;
-        (session.output_offset, session.target_client_id.clone())
+        (
+            session.output_offset,
+            session.target_client_id.clone(),
+            session.leader_client_id,
+        )
     };
     let b64 = base64::engine::general_purpose::STANDARD.encode(&*pending);
     pending.clear();
 
-    send_routed_notification(
+    send_leader_routed_notification(
         gateway,
         NOTIFICATION_METHOD,
         serde_json::json!({
@@ -566,6 +655,7 @@ async fn flush_output(
             "outputOffset": output_offset,
         }),
         &target_client_id,
+        leader_client_id,
     );
 }
 
@@ -709,17 +799,25 @@ pub struct PtyLoadResult {
 /// so the client can reset its VTE emulator and feed all bytes from scratch.
 /// Exited PTYs are still loadable so the client can see final output.
 ///
-/// Updates the stored `target_client_id` so that subsequent output
-/// notifications from the output loop are routed to the reconnecting client.
+/// Updates the stored `target_client_id` and `leader_client_id` so that
+/// subsequent output notifications are routed to the reconnecting client.
 pub async fn load(
     pty_id: &str,
     gateway: &GatewaySender,
     target_client_id: TargetClientId,
+    leader_client_id: Option<u64>,
 ) -> Result<PtyLoadResult, TerminalExtError> {
     let entry = require_pty(pty_id).await?;
     let (replay, output_offset, exit_info, rows, cols, busy) = {
         let mut session = entry.lock().await;
         session.target_client_id = target_client_id.clone();
+        // Only adopt a leader id when the reconnecting request carries one.
+        // Blindly assigning would clear it on every reload, and a PTY whose
+        // output loses its owner falls back to `last_active_client` ΓÇö the wrong
+        // pager as soon as a second one connects.
+        if leader_client_id.is_some() {
+            session.leader_client_id = leader_client_id;
+        }
         let exit_info = session
             .child
             .try_wait()
@@ -740,7 +838,7 @@ pub async fn load(
 
     if !replay.is_empty() {
         use base64::Engine as _;
-        send_routed_notification(
+        send_leader_routed_notification(
             gateway,
             NOTIFICATION_METHOD,
             serde_json::json!({
@@ -751,12 +849,13 @@ pub async fn load(
                 "isReplay": true,
             }),
             &target_client_id,
+            leader_client_id,
         );
     }
 
     let exited = exit_info.is_some();
     if exited {
-        send_routed_notification(
+        send_leader_routed_notification(
             gateway,
             NOTIFICATION_METHOD,
             serde_json::json!({
@@ -766,9 +865,10 @@ pub async fn load(
                 "isReplay": true,
             }),
             &target_client_id,
+            leader_client_id,
         );
     } else {
-        send_busy_notification(pty_id, busy, &target_client_id, gateway);
+        send_busy_notification(pty_id, busy, &target_client_id, gateway, leader_client_id);
     }
 
     Ok(PtyLoadResult {

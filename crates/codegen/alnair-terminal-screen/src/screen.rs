@@ -67,13 +67,20 @@ impl Terminal {
     /// Wide-character spacers are skipped, so a double-width glyph occupies one
     /// run entry and the following cell is not emitted as a blank — the same
     /// rule `styled::extract_styled_line` uses.
+    ///
+    /// The snapshot honours the emulator's display offset, so scrolling back
+    /// (`scroll_display`) shows history rows here with no extra caller logic.
     pub fn visible_rows(&self) -> Vec<ScreenRow> {
         let grid = self.grid();
         let rows = grid.screen_lines();
         let cols = grid.columns();
+        let offset = grid.display_offset();
         let mut out = Vec::with_capacity(rows);
-        for line_idx in 0..rows {
-            let row = &grid[Line(line_idx as i32)];
+        for row_idx in 0..rows {
+            // Row 0 of the viewport is `-offset` in grid coordinates: negative
+            // lines are history, non-negative are the live screen.
+            let line = row_idx as i32 - offset as i32;
+            let row = &grid[Line(line)];
             let mut runs: Vec<ScreenRun> = Vec::new();
             let mut current: Option<ScreenStyle> = None;
             let mut text = String::new();
@@ -130,9 +137,15 @@ impl Terminal {
     }
 
     /// Cursor position as 0-indexed `(row, col)` within the visible grid.
-    pub fn cursor_cell(&self) -> (usize, usize) {
+    ///
+    /// `None` while the view is scrolled back: the cursor belongs to the live
+    /// screen, and drawing it over a history row would point at the wrong line.
+    pub fn cursor_cell(&self) -> Option<(usize, usize)> {
+        if self.grid().display_offset() > 0 {
+            return None;
+        }
         let point = self.grid().cursor.point;
-        (point.line.0.max(0) as usize, point.column.0)
+        Some((point.line.0.max(0) as usize, point.column.0))
     }
 
     /// Whether the running program left the cursor visible (DECTCEM).
@@ -141,8 +154,46 @@ impl Terminal {
     }
 
     /// Whether the alternate screen buffer is active (`vim`, `less`, …).
+    ///
+    /// The alternate screen has no scrollback, so a caller must not offer
+    /// scrolling while this is true — the program owns the viewport.
     pub fn alternate_screen(&self) -> bool {
         self.mode().contains(TermMode::ALT_SCREEN)
+    }
+
+    /// Rows available above the viewport (the scrollback buffer).
+    pub fn history_size(&self) -> usize {
+        self.grid().history_size()
+    }
+
+    /// How far the view is scrolled back, in rows. `0` = live view.
+    ///
+    /// This is the emulator's own display offset, so a caller that writes it
+    /// (`scroll_display`) keeps the cursor and rendering consistent — the same
+    /// mechanism `alacritty` itself uses.
+    pub fn display_offset(&self) -> usize {
+        self.grid().display_offset()
+    }
+
+    /// Scroll the viewport by `delta` rows (positive = back into history).
+    ///
+    /// Returns the resulting offset. Clamped to `0..=history_size()`, so an
+    /// over-scroll is a no-op rather than an error.
+    pub fn scroll_by(&mut self, delta: isize) -> usize {
+        let current = self.grid().display_offset();
+        let target = current
+            .saturating_add_signed(delta)
+            .min(self.grid().history_size());
+        let step = target as i32 - current as i32;
+        if step != 0 {
+            self.scroll_display(step);
+        }
+        self.grid().display_offset()
+    }
+
+    /// Jump to the live view (offset 0).
+    pub fn scroll_to_bottom(&mut self) -> usize {
+        self.scroll_by(-(self.grid().display_offset() as isize))
     }
 }
 
@@ -262,7 +313,7 @@ mod tests {
     fn cursor_is_zero_indexed() {
         let (mut term, _rx) = terminal(10, 3);
         term.feed(b"abc");
-        assert_eq!(term.cursor_cell(), (0, 3));
+        assert_eq!(term.cursor_cell(), Some((0, 3)));
         assert!(term.cursor_visible());
     }
 

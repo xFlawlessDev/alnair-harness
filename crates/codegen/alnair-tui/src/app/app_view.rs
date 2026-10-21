@@ -3975,6 +3975,42 @@ impl AppView {
                                         }
                                     });
                                 }
+                                // Emulator replies (cursor-position report,
+                                // device attributes) go back to the PTY as a
+                                // fire-and-forget notification. A shell blocks
+                                // on the cursor report before printing its
+                                // prompt, so dropping these leaves the pane
+                                // permanently blank.
+                                if let Some(data) = agent.take_pending_pty_input()
+                                    && let Some(pane) = agent.terminal.as_ref()
+                                {
+                                    use base64::Engine as _;
+                                    let params = serde_json::json!({
+                                        "terminalId": pane.pty_id,
+                                        "data": base64::engine::general_purpose::STANDARD
+                                            .encode(&data),
+                                    });
+                                    let notif = acp::ExtNotification::new(
+                                        "alnair/terminal/pty/input",
+                                        serde_json::value::to_raw_value(&params)
+                                            .expect("serialize pty input params")
+                                            .into(),
+                                    );
+                                    let (response_tx, _response_rx) =
+                                        tokio::sync::oneshot::channel();
+                                    if let Err(e) = agent.session.acp_tx.send(
+                                        alnair_acp_lib::AcpArgs {
+                                            request: notif,
+                                            response_tx,
+                                        }
+                                        .into(),
+                                    ) {
+                                        tracing::debug!(
+                                            error = % e,
+                                            "pty emulator reply dropped"
+                                        );
+                                    }
+                                }
                                 let has_cloud = false;
                                 if has_cloud || self.import_claude_modal.is_some() {
                                     link_spans.clear();

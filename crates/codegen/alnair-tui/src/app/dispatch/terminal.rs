@@ -94,6 +94,96 @@ pub(super) fn close_terminal_effect(view: &AgentView) -> Option<Effect> {
     })
 }
 
+/// Replace an exited pane's PTY with a fresh one.
+///
+/// Drops the old pane first: its emulator mirrors a process that is gone, and
+/// keeping it would leave dead scrollback above the new shell's prompt. The
+/// close is best-effort — an already-reaped PTY answers with an error that is
+/// not worth surfacing.
+pub(super) fn dispatch_restart_terminal(view: &mut AgentView) -> Vec<Effect> {
+    let Some(old_id) = view.terminal.as_ref().map(|p| p.pty_id.clone()) else {
+        return Vec::new();
+    };
+    let Some(session_id) = view.session.session_id.clone() else {
+        view.show_toast("Open a session before using the terminal");
+        return Vec::new();
+    };
+    forget_terminal(view);
+    view.terminal_open = true;
+    vec![
+        Effect::PtyClose { pty_id: old_id },
+        Effect::PtyCreate {
+            agent_id: view.session.id,
+            session_id,
+            rows: DEFAULT_PANE_ROWS,
+            cols: 80,
+        },
+    ]
+}
+
+/// Copy the pane's selection to the clipboard.
+///
+/// Returns whether anything was copied. A copy with no selection is a no-op
+/// rather than a toast: the user pressed the chord with nothing selected, which
+/// is not an error worth interrupting them for.
+pub(super) fn dispatch_copy_terminal_selection(view: &mut AgentView) -> bool {
+    let Some(pane) = view.terminal.as_ref() else {
+        return false;
+    };
+    let text = pane.selected_text();
+    if text.is_empty() {
+        return false;
+    }
+    view.copy_to_clipboard(&text);
+    true
+}
+
+/// Paste the clipboard into the pane.
+///
+/// Bracketed-paste wrapping is decided by the program's live mode, so this
+/// reuses the same encoder as an `Event::Paste` would.
+pub(super) fn dispatch_paste_into_terminal(view: &mut AgentView) -> Vec<Effect> {
+    let Some(pane) = view.terminal.as_ref() else {
+        return Vec::new();
+    };
+    if pane.exited.is_some() {
+        return Vec::new();
+    }
+    let Ok(Some(text)) = crate::clipboard::system_clipboard_read_text() else {
+        return Vec::new();
+    };
+    if text.is_empty() {
+        return Vec::new();
+    }
+    let bytes = crate::app::terminal_pane::keys::encode_paste(&text, &pane.screen.terminal_modes());
+    if bytes.is_empty() {
+        return Vec::new();
+    }
+    vec![Effect::PtyInput {
+        pty_id: pane.pty_id.clone(),
+        data: bytes,
+    }]
+}
+
+/// Scroll the pane's viewport.
+///
+/// Clamped by the emulator to the available history, so an over-scroll is a
+/// no-op. Returns whether the visible rows changed, so the caller can skip a
+/// redraw when the view was already at the limit.
+pub(crate) fn scroll_terminal(view: &mut AgentView, delta: isize) -> bool {
+    let Some(pane) = view.terminal.as_mut() else {
+        return false;
+    };
+    // A program on the alternate screen owns its viewport; offering scrollback
+    // there would show stale rows the program cannot repaint.
+    if pane.screen.alternate_screen() {
+        return false;
+    }
+    let before = pane.screen.display_offset();
+    let after = pane.screen.scroll_by(delta);
+    before != after
+}
+
 /// Drop the pane locally without asking the server to kill anything.
 ///
 /// Used when a frame proves the PTY is already gone (a `PtyFailed` for a load).

@@ -1657,27 +1657,32 @@ pub(crate) fn execute(
                 }
             });
         }
-        // Input is a fire-and-forget NOTIFICATION, not a request: awaiting a
-        // response would put a full round trip on every keystroke.
+        // Input is a fire-and-forget NOTIFICATION. The gateway's notification
+        // path never produces a reply (see `AcpGatewaySender::ext_notification`
+        // -> `forward_fire_and_forget`), so awaiting one parks the task forever:
+        // every keystroke is swallowed AND the JoinSet entry leaks for the rest
+        // of the session. Send the args and drop the receiver instead.
         Effect::PtyInput { pty_id, data } => {
             use base64::Engine as _;
-            let tx = acp_tx.clone();
-            tasks.spawn(async move {
-                let params = serde_json::json!({
-                    "terminalId": pty_id,
-                    "data": base64::engine::general_purpose::STANDARD.encode(&data),
-                });
-                let notif = acp::ExtNotification::new(
-                    "alnair/terminal/pty/input",
-                    serde_json::value::to_raw_value(&params)
-                        .expect("serialize pty input params")
-                        .into(),
-                );
-                if let Err(e) = acp_send(notif, &tx).await {
-                    tracing::debug!(error = % e, "pty input notification dropped");
-                }
-                TaskResult::CancelComplete
+            let params = serde_json::json!({
+                "terminalId": pty_id,
+                "data": base64::engine::general_purpose::STANDARD.encode(&data),
             });
+            let notif = acp::ExtNotification::new(
+                "alnair/terminal/pty/input",
+                serde_json::value::to_raw_value(&params)
+                    .expect("serialize pty input params")
+                    .into(),
+            );
+            let (response_tx, _response_rx) = tokio::sync::oneshot::channel();
+            if let Err(e) = acp_tx.send(alnair_acp_lib::AcpArgs {
+                request: notif,
+                response_tx,
+            }
+            .into())
+            {
+                tracing::debug!(error = % e, "pty input notification dropped");
+            }
         }
         // Resize IS a request: the server must apply the new winsize before the
         // next paint, and a failure is worth surfacing at debug level.

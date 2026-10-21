@@ -299,7 +299,14 @@ pub async fn handle(agent: &MvpAgent, args: &acp::ExtRequest) -> ExtResult {
                 .iter()
                 .map(|e| (e.name.clone(), e.value.clone()))
                 .collect();
-            let target_client_id = req.meta.map(|m| m.client_id).unwrap_or_default();
+            // `_meta` carries two independent routing keys: `clientId` is relay
+            // addressing, `alnair/leaderClientId` is the leader's subscriber
+            // key. The PTY must remember the latter, or its output falls back
+            // to the leader's last-active client when several pagers connect.
+            let (target_client_id, leader_client_id) = match req.meta {
+                Some(meta) => (meta.client_id, meta.leader_client_id),
+                None => (Default::default(), None),
+            };
             let cwd = req.cwd.or_else(|| {
                 req.session_id
                     .as_ref()
@@ -316,6 +323,7 @@ pub async fn handle(agent: &MvpAgent, args: &acp::ExtRequest) -> ExtResult {
                 req.name.as_deref(),
                 agent.gateway.clone(),
                 target_client_id,
+                leader_client_id,
             )
             .await
             .map(|id| CreateTerminalResponse { terminal_id: id });
@@ -325,10 +333,17 @@ pub async fn handle(agent: &MvpAgent, args: &acp::ExtRequest) -> ExtResult {
 
         "alnair/terminal/pty/load" => {
             let req: PtyLoadRequest = parse(args)?;
-            let target_client_id = req.meta.map(|m| m.client_id).unwrap_or_default();
-            let result =
-                terminal::pty_session::load(&req.terminal_id, &agent.gateway, target_client_id)
-                    .await;
+            let (target_client_id, leader_client_id) = match req.meta {
+                Some(meta) => (meta.client_id, meta.leader_client_id),
+                None => (Default::default(), None),
+            };
+            let result = terminal::pty_session::load(
+                &req.terminal_id,
+                &agent.gateway,
+                target_client_id,
+                leader_client_id,
+            )
+            .await;
             respond_pty(result)
         }
 

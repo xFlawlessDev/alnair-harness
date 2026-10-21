@@ -632,6 +632,11 @@ pub struct AgentView {
     /// `None` means nothing to send; the value is the debounced target, not
     /// every frame's intermediate size.
     pub pending_pty_resize: Option<(u16, u16)>,
+    /// Emulator replies (cursor-position report, device attributes) the draw
+    /// site drained this frame. Same delivery shape as
+    /// [`Self::pending_pty_resize`]: `draw` cannot return effects, so the event
+    /// loop pushes these after the frame.
+    pub pending_pty_input: Option<Vec<u8>>,
     /// Per-agent mirror of the server-authoritative shared prompt queue
     /// (`AppView::shared_prompt_queues[sid]`), kept in sync by
     /// `handle_queue_changed` and the immediate-send path. The queue

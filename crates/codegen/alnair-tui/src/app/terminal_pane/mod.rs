@@ -60,23 +60,127 @@ pub struct TerminalPane {
     pub exited: Option<Option<i32>>,
     /// A foreground process is running (from `process_started`/`process_ended`).
     pub busy: bool,
+    /// Replies the emulator wants written back to the PTY (DSR, DA1, colour
+    /// queries). Drained by [`Self::take_emulator_replies`]; see [`Self::new`]
+    /// for why dropping this breaks the shell.
+    emulator_replies: tokio::sync::mpsc::UnboundedReceiver<Vec<u8>>,
+    /// In-progress or completed mouse selection, in grid coordinates.
+    pub selection: Option<PaneSelection>,
+}
+
+/// A mouse selection over the pane's grid.
+///
+/// Coordinates are `(row, col)` in the emulator's own space, NOT screen cells:
+/// the grid scrolls under the cursor, so screen coordinates would select
+/// different text than the user dragged over.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PaneSelection {
+    pub anchor: (u16, u16),
+    pub head: (u16, u16),
+    /// True while the button is held; the selection is still growing.
+    pub dragging: bool,
+}
+
+impl PaneSelection {
+    pub fn new(anchor: (u16, u16)) -> Self {
+        Self {
+            anchor,
+            head: anchor,
+            dragging: true,
+        }
+    }
+
+    /// Normalized `(start, end)` so a backwards drag selects the same span.
+    pub fn span(&self) -> ((u16, u16), (u16, u16)) {
+        if self.anchor <= self.head {
+            (self.anchor, self.head)
+        } else {
+            (self.head, self.anchor)
+        }
+    }
+
+    /// Whether `(row, col)` falls inside the selection.
+    pub fn contains(&self, row: u16, col: u16) -> bool {
+        let (start, end) = self.span();
+        let cell = (row, col);
+        cell >= start && cell <= end
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.anchor == self.head
+    }
 }
 
 impl TerminalPane {
     /// A pane bound to `pty_id`, with an emulator at `cols`×`rows`.
     ///
-    /// Emulator replies (DSR, colour queries) are dropped: 3a forwards no
-    /// input, so writing them back would be dead code pretending to work.
-    /// 3b swaps this sink for the PTY input channel.
+    /// The emulator's `SessionListener` sink is KEPT, not dropped. A shell
+    /// probes its terminal at startup (`ESC[6n` for the cursor position, colour
+    /// queries, DA1) and will not print its prompt until it gets an answer.
+    /// Dropping the receiver leaves those replies in a channel nobody reads, so
+    /// the shell blocks forever and the pane stays blank no matter what is
+    /// typed into it — the exact failure mode this sink exists to prevent.
     pub fn new(pty_id: String, cols: u16, rows: u16) -> Self {
-        let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
+        let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
         Self {
             pty_id,
             screen: Terminal::new(cols, rows, SessionListener::new(tx)),
+            emulator_replies: rx,
             size: (cols, rows),
             exited: None,
             busy: false,
+            selection: None,
         }
+    }
+
+    /// Text under the current selection, one line per row, `\n`-joined.
+    ///
+    /// Returns an empty string when nothing is selected. Trailing blanks are
+    /// already trimmed by `visible_rows`, so a copied block does not carry a
+    /// wall of spaces to the right of the longest line.
+    pub fn selected_text(&self) -> String {
+        let Some(selection) = self.selection else {
+            return String::new();
+        };
+        if selection.is_empty() {
+            return String::new();
+        }
+        let (start, end) = selection.span();
+        let rows = self.screen.visible_rows();
+        let mut out = String::new();
+        for row in start.0..=end.0 {
+            let Some(screen_row) = rows.get(row as usize) else {
+                continue;
+            };
+            let text = screen_row.text();
+            let from = if row == start.0 { start.1 as usize } else { 0 };
+            let to = if row == end.0 {
+                (end.1 as usize + 1).min(text.chars().count())
+            } else {
+                text.chars().count()
+            };
+            if from < to {
+                let line: String = text.chars().skip(from).take(to - from).collect();
+                out.push_str(line.trim_end());
+            }
+            if row != end.0 {
+                out.push('\n');
+            }
+        }
+        out
+    }
+
+    /// Take everything the emulator wants written back to the PTY.
+    ///
+    /// Called once per frame: the replies are small and rare (one at startup,
+    /// then only on an explicit query), so a per-frame drain is cheap and keeps
+    /// the pane free of a second async task.
+    pub fn take_emulator_replies(&mut self) -> Vec<u8> {
+        let mut out = Vec::new();
+        while let Ok(chunk) = self.emulator_replies.try_recv() {
+            out.extend_from_slice(&chunk);
+        }
+        out
     }
 
     /// Resize the emulator if the target size changed. Returns whether it did.
@@ -148,12 +252,12 @@ impl TerminalPane {
                     return Applied::Ignored;
                 };
                 if notif.is_replay {
-                    // Reset by rebuilding the emulator at the current size.
-                    self.screen = Terminal::new(
-                        self.size.0,
-                        self.size.1,
-                        SessionListener::new(tokio::sync::mpsc::unbounded_channel().0),
-                    );
+                    // Reset by rebuilding the emulator at the current size. The
+                    // reply sink is rebuilt with it: the old receiver belongs to
+                    // the discarded emulator.
+                    let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+                    self.screen = Terminal::new(self.size.0, self.size.1, SessionListener::new(tx));
+                    self.emulator_replies = rx;
                 }
                 self.screen.feed(&bytes);
                 Applied::Changed

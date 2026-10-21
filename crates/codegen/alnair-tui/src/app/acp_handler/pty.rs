@@ -28,10 +28,22 @@ pub(super) fn handle_pty_notification(notif: &acp::ExtNotification, app: &mut Ap
         .find(|view| owns_pty(view, &payload.terminal_id))
     else {
         // Either another client's PTY, or a pane whose tab was closed while
-        // the frame was in flight. Neither is actionable.
-        tracing::debug!(
-            terminal_id = % payload.terminal_id,
-            "pty notification for an unknown terminal"
+        // the frame was in flight. Logged through `unified_log` so the drop is
+        // visible in `unified.jsonl` — a silently-dropped frame is the single
+        // hardest PTY failure to diagnose from the outside.
+        let known: Vec<String> = app
+            .agents
+            .values()
+            .filter_map(|v| v.terminal.as_ref().map(|p| p.pty_id.clone()))
+            .collect();
+        crate::unified_log::warn(
+            "pty.notification.unknown_terminal",
+            None,
+            Some(serde_json::json!({
+                "terminal_id": payload.terminal_id,
+                "kind": payload.kind,
+                "known_terminals": known,
+            })),
         );
         return false;
     };
@@ -39,6 +51,19 @@ pub(super) fn handle_pty_notification(notif: &acp::ExtNotification, app: &mut Ap
     let Some(pane) = view.terminal.as_mut() else {
         return false;
     };
+    // Log through `unified_log`, not `tracing`: the pager's tracing output is
+    // NOT written to `~/.alnair/logs/unified.jsonl` (it goes to stderr), so a
+    // `tracing::debug!` here is invisible exactly when a user needs it. The
+    // unified log is the one surface both this process and the leader feed.
+    crate::unified_log::debug(
+        "pty.notification.apply",
+        None,
+        Some(serde_json::json!({
+            "terminal_id": payload.terminal_id,
+            "kind": payload.kind,
+            "bytes": payload.data.as_ref().map(String::len).unwrap_or(0),
+        })),
+    );
     match pane.apply(&payload) {
         Applied::Changed => true,
         // The busy glyph is only visible while the pane is drawn; a hidden

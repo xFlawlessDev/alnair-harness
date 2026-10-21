@@ -323,9 +323,16 @@ impl AgentView {
                 }
                 match self.pane_areas.hit_test(mouse.column, mouse.row) {
                     Some(AgentPane::Terminal) => {
-                        // Clicking into the pane focuses it; 3b forwards keys
-                        // only, so there is no per-cell mouse routing yet.
                         self.set_active_pane(AgentPane::Terminal, false);
+                        // Begin a text selection at the clicked cell. The pane
+                        // is a grid, so the anchor is a grid coordinate, not a
+                        // screen one: scrolling later must not move it.
+                        if let Some(cell) = self.pane_grid_cell(mouse.column, mouse.row)
+                            && let Some(pane) = self.terminal.as_mut()
+                        {
+                            pane.selection =
+                                Some(crate::app::terminal_pane::PaneSelection::new(cell));
+                        }
                         InputOutcome::Changed
                     }
                     Some(AgentPane::Todo) => {
@@ -608,6 +615,17 @@ impl AgentView {
             }
             MouseEventKind::Drag(MouseButton::Left) => {
                 self.pending_link_click = None;
+                // A drag that started inside the pane belongs to the pane's
+                // own selection; routing it to the scrollback would select
+                // transcript text the user never pointed at.
+                if self
+                    .terminal
+                    .as_ref()
+                    .is_some_and(|p| p.selection.is_some_and(|s| s.dragging))
+                    && self.extend_terminal_selection(mouse.column, mouse.row)
+                {
+                    return InputOutcome::Changed;
+                }
                 tracing::debug!(
                     event = "scrollback_mouse_drag", col = mouse.column, row = mouse.row,
                     pending = ? self.pending_text_drag, active = ? self.drag_selection,
@@ -617,6 +635,11 @@ impl AgentView {
             }
             MouseEventKind::Up(MouseButton::Left) => {
                 self.left_mouse_down = false;
+                // Releasing inside (or after) a pane drag finishes the pane's
+                // selection and auto-copies it.
+                if self.finish_terminal_selection() {
+                    return InputOutcome::Changed;
+                }
                 tracing::debug!(
                     event = "scrollback_mouse_up", col = mouse.column, row = mouse.row,
                     pending = ? self.pending_text_drag, active = ? self.drag_selection,

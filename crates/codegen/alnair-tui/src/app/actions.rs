@@ -386,6 +386,19 @@ pub enum Action {
     /// the emulator's live modes; the action carries finished bytes so dispatch
     /// stays a pure state function.
     PtySendInput(Vec<u8>),
+    /// Replace an exited pane's PTY with a fresh shell.
+    ///
+    /// Reuses the pane's own rect and cwd; the user's scrollback from the dead
+    /// shell is intentionally dropped, because it belongs to a process that no
+    /// longer exists.
+    RestartTerminalPane,
+    /// Scroll the pane's viewport by `delta` rows (positive = back in history).
+    ScrollTerminal(isize),
+    /// Copy the pane's current text selection.
+    CopyTerminalSelection,
+    /// Paste the clipboard into the focused pane (bracketed when the program
+    /// asked for it).
+    PasteIntoTerminal,
     /// Request current bundle cache status via `alnair/bundle/status`.
     RequestBundleStatus,
     /// View a catalog entry's raw content in the block viewer.
