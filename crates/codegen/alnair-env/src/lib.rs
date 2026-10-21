@@ -21,7 +21,7 @@ pub struct AlnairEndpoints {
 pub const PRODUCTION_ENDPOINTS: AlnairEndpoints = AlnairEndpoints {
     coding_api_base_url: "https://api.kimi.com/coding/v1",
     oauth_host: "https://auth.kimi.com",
-    update_base_url: "https://git.zacharyzhang.com/api/v1/repos/ZacharyZhang-NY/Alnair-CLI/releases",
+    update_base_url: "https://api.github.com/repos/xFlawlessDev/alnair-harness/releases",
     upgrade_page_url: "https://www.kimi.com/code/",
 };
 

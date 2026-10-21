@@ -46,7 +46,7 @@ does not run — it is kept only as a reference for the GitHub-hosted layout.
 5. Smoke-test an installed artifact:
 
    ```sh
-   curl -fsSL https://alnaircli.dev/install.sh | sh
+   curl -fsSL https://raw.githubusercontent.com/xFlawlessDev/alnair-harness/master/install.sh | sh
    ~/.alnair/bin/alnair --version
    ```
 
@@ -102,7 +102,7 @@ Over the API it is a **POST**, not a GET — a GET is parsed as runner id `0` an
 
 ```sh
 curl -fsS -X POST -H "Authorization: token $GITEA_API_TOKEN" \
-  https://git.zacharyzhang.com/api/v1/user/actions/runners/registration-token
+  https://github.com/api/v1/user/actions/runners/registration-token
 ```
 
 Write the labels into `config.yaml` first (see `runner.labels` in
@@ -111,19 +111,19 @@ Write the labels into `config.yaml` first (see `runner.labels` in
 ```sh
 # Linux (the Linux server) — container mode
 gitea-runner --config config.yaml register --no-interactive \
-  --instance https://git.zacharyzhang.com \
+  --instance https://github.com \
   --token <REGISTRATION_TOKEN> \
   --name alnair-linux-x86_64
 
 # macOS (Apple Silicon) — host mode, needs Xcode CLT + rustup + Node on PATH
 gitea-runner --config config.yaml register --no-interactive \
-  --instance https://git.zacharyzhang.com \
+  --instance https://github.com \
   --token <REGISTRATION_TOKEN> \
   --name alnair-macos-arm64
 
 # Windows — host mode, needs VS 2022 Build Tools + rustup + Node on PATH
 gitea-runner --config config.yaml register --no-interactive `
-  --instance https://git.zacharyzhang.com `
+  --instance https://github.com `
   --token <REGISTRATION_TOKEN> `
   --name alnair-windows-amd64
 ```

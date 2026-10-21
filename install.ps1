@@ -5,13 +5,13 @@
 # installs the binary as %USERPROFILE%\.alnair\bin\alnair.exe.
 #
 # Usage:
-#   irm https://alnaircli.dev/install.ps1 | iex
+#   irm https://raw.githubusercontent.com/xFlawlessDev/alnair-harness/master/install.ps1 | iex
 #   powershell -ExecutionPolicy Bypass -File install.ps1 -Version v0.1.0
 #
 # Environment:
 #   ALNAIR_SHARE_DIR        install root (default: %USERPROFILE%\.alnair)
-#   ALNAIR_UPDATE_BASE_URL  releases API base, GitHub/Gitea-shaped (default:
-#                         https://git.zacharyzhang.com/api/v1/repos/ZacharyZhang-NY/Alnair-CLI/releases)
+#   ALNAIR_UPDATE_BASE_URL  releases API base, GitHub-shaped (default:
+#                         https://api.github.com/repos/xFlawlessDev/alnair-harness/releases)
 
 [CmdletBinding()]
 param(
@@ -26,8 +26,8 @@ function Fail([string]$Message) {
     exit 1
 }
 
-$Repo = "ZacharyZhang-NY/Alnair-CLI"
-$ApiBase = if ($env:ALNAIR_UPDATE_BASE_URL) { $env:ALNAIR_UPDATE_BASE_URL } else { "https://git.zacharyzhang.com/api/v1/repos/$Repo/releases" }
+$Repo = "xFlawlessDev/alnair-harness"
+$ApiBase = if ($env:ALNAIR_UPDATE_BASE_URL) { $env:ALNAIR_UPDATE_BASE_URL } else { "https://api.github.com/repos/$Repo/releases" }
 $AlnairHome = if ($env:ALNAIR_SHARE_DIR) { $env:ALNAIR_SHARE_DIR } else { Join-Path $env:USERPROFILE ".alnair" }
 $Triple = "x86_64-pc-windows-msvc"
 

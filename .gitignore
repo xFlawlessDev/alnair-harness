@@ -2,11 +2,11 @@
 **/*.rs.bk
 .DS_Store
 
-# frontend/ (alnaircli.dev worker)
+# Node tooling (web/ harness)
 .wrangler/
 node_modules/
 
-# Runner-setup prompt; holds a Gitea registration token once filled in.
+# Runner-setup prompt; holds a runner registration token once filled in.
 /prompt.txt
 
 # Local test credentials

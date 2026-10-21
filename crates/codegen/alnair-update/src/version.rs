@@ -10,7 +10,7 @@ const TTL_SECONDS_BEFORE_AUTO_UPDATE: Duration = Duration::from_secs(60 * 30);
 
 /// Release channel: this repo's Releases (PRD F8). The API base is resolved
 /// through [`alnair_env::update_base_url`] — production default
-/// `https://git.zacharyzhang.com/api/v1/repos/ZacharyZhang-NY/Alnair-CLI/releases`,
+/// `https://api.github.com/repos/xFlawlessDev/alnair-harness/releases`,
 /// overridable via `ALNAIR_UPDATE_BASE_URL` for mirrors and tests.
 pub(crate) fn update_base_url() -> String {
     alnair_env::update_base_url()
@@ -536,7 +536,7 @@ mod tests {
     #[test]
     fn test_release_json_parses_github_wire_shape() {
         let json = r#"{
-            "url": "https://git.zacharyzhang.com/api/v1/repos/ZacharyZhang-NY/Alnair-CLI/releases/1",
+            "url": "https://api.github.com/repos/xFlawlessDev/alnair-harness/releases/1",
             "tag_name": "v0.1.0",
             "name": "Alnair 0.1.0",
             "draft": false,
@@ -544,13 +544,13 @@ mod tests {
             "assets": [
                 {
                     "name": "alnair-0.1.0-aarch64-apple-darwin.tar.gz",
-                    "browser_download_url": "https://git.zacharyzhang.com/ZacharyZhang-NY/Alnair-CLI/releases/download/v0.1.0/alnair-0.1.0-aarch64-apple-darwin.tar.gz",
+                    "browser_download_url": "https://github.com/xFlawlessDev/alnair-harness/releases/download/v0.1.0/alnair-0.1.0-aarch64-apple-darwin.tar.gz",
                     "size": 123,
                     "content_type": "application/gzip"
                 },
                 {
                     "name": "SHA256SUMS",
-                    "browser_download_url": "https://git.zacharyzhang.com/ZacharyZhang-NY/Alnair-CLI/releases/download/v0.1.0/SHA256SUMS"
+                    "browser_download_url": "https://github.com/xFlawlessDev/alnair-harness/releases/download/v0.1.0/SHA256SUMS"
                 }
             ]
         }"#;
@@ -563,7 +563,7 @@ mod tests {
         let asset = r.asset("alnair-0.1.0-aarch64-apple-darwin.tar.gz").unwrap();
         assert_eq!(
             asset.browser_download_url,
-            "https://git.zacharyzhang.com/ZacharyZhang-NY/Alnair-CLI/releases/download/v0.1.0/alnair-0.1.0-aarch64-apple-darwin.tar.gz"
+            "https://github.com/xFlawlessDev/alnair-harness/releases/download/v0.1.0/alnair-0.1.0-aarch64-apple-darwin.tar.gz"
         );
         assert_eq!(
             r.asset("SHA256SUMS").unwrap().name,

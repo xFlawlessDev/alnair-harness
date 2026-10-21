@@ -36,12 +36,12 @@ key? OpenAI, Anthropic, Google, DeepSeek, Groq, Moonshot and
 
 ```sh
 # macOS / Linux
-curl -fsSL https://alnaircli.dev/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/xFlawlessDev/alnair-harness/master/install.sh | bash
 ```
 
 ```powershell
 # Windows PowerShell
-irm https://alnaircli.dev/install.ps1 | iex
+irm https://raw.githubusercontent.com/xFlawlessDev/alnair-harness/master/install.ps1 | iex
 ```
 
 ```sh

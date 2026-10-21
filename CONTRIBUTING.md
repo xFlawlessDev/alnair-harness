@@ -21,16 +21,16 @@ cargo deny check advisories
 - Upstream syncs are evaluated commit-by-commit and cherry-picked manually;
   see the PRD §8.1 policy (`git range-diff` records the adopted set).
 
-## Opening a pull request on git.zacharyzhang.com
+## Opening a pull request
 
-Forking is disabled on this server. Open pull requests with AGit instead:
+Open pull requests against the GitHub repository:
 
-1. Register an account at https://git.zacharyzhang.com
-2. Clone, commit your changes, then push to a `refs/for/<target-branch>` ref:
+1. Fork the repository at https://github.com/xFlawlessDev/alnair-harness
+2. Clone your fork, commit your changes on a branch, and push it:
 
    ```bash
-   git clone https://git.zacharyzhang.com/ZacharyZhang-NY/Alnair-CLI.git
-   git push origin HEAD:refs/for/main -o topic=<short-name> -o title="<PR title>" -o description="<PR body>"
+   git clone https://github.com/xFlawlessDev/alnair-harness.git
+   git push origin HEAD:refs/heads/<branch>
    ```
 
-3. To update the pull request, push again with the same `topic`.
+3. Open the pull request from that branch against `master`.

@@ -1,7 +1,7 @@
 # Security Policy
 
 Alnair is a community build; report vulnerabilities on the
-[Alnair issue tracker](https://git.zacharyzhang.com/ZacharyZhang-NY/Alnair-CLI/issues).
+[Alnair issue tracker](https://github.com/xFlawlessDev/alnair-harness/issues).
 Issues there are public, so please leave out any detail that would make a
 report directly exploitable — open with the affected area and impact, and a
 maintainer will follow up for the rest.

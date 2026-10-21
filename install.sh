@@ -8,20 +8,20 @@
 # maintains: versioned binary in ~/.alnair/downloads/, atomic symlink in bin/).
 #
 # Usage:
-#   curl -fsSL https://alnaircli.dev/install.sh | sh
+#   curl -fsSL https://raw.githubusercontent.com/xFlawlessDev/alnair-harness/master/install.sh | sh
 #   sh install.sh --version v0.1.0        # pin a specific release
 #
 # Environment:
 #   ALNAIR_SHARE_DIR        install root (default: ~/.alnair)
-#   ALNAIR_UPDATE_BASE_URL  releases API base, GitHub/Gitea-shaped (default:
-#                         https://git.zacharyzhang.com/api/v1/repos/ZacharyZhang-NY/Alnair-CLI/releases)
+#   ALNAIR_UPDATE_BASE_URL  releases API base, GitHub-shaped (default:
+#                         https://api.github.com/repos/xFlawlessDev/alnair-harness/releases)
 #
 # Fails fast on any error; never leaves a partial binary as the active alnair.
 
 set -eu
 
-REPO="ZacharyZhang-NY/Alnair-CLI"
-API_BASE="${ALNAIR_UPDATE_BASE_URL:-https://git.zacharyzhang.com/api/v1/repos/${REPO}/releases}"
+REPO="xFlawlessDev/alnair-harness"
+API_BASE="${ALNAIR_UPDATE_BASE_URL:-https://api.github.com/repos/${REPO}/releases}"
 ALNAIR_HOME="${ALNAIR_SHARE_DIR:-$HOME/.alnair}"
 
 err() {

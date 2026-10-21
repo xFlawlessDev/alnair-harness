@@ -68,7 +68,8 @@ a design against the 0.1.15 teardown), MCP servers on protocol 2026-07-28
 ## Hard constraints
 
 - **Zero egress**: only `auth.kimi.com`, `api.kimi.com`, `api.moonshot.cn`,
-  `api.moonshot.ai`, Gitea Releases (`git.zacharyzhang.com`), user-configured MCP servers, credentialed
+  `api.moonshot.ai`, GitHub Releases (`api.github.com` for the self-updater,
+  `github.com` for asset downloads), user-configured MCP servers, credentialed
   provider endpoints, and `models.dev` (metadata refresh, ONLY when an enabled
   platform's `/models` lacks it — `wire_serves_metadata=false`, never
   Kimi/Moonshot, `ALNAIR_MODELS_DEV_URL=0` disables). No telemetry, no analytics,
@@ -126,8 +127,6 @@ a design against the 0.1.15 teardown), MCP servers on protocol 2026-07-28
   the palette, the `SessionStore` seam, and what is still mocked. It is a
   separate npm project (never part of the Cargo workspace or its gates); it
   makes no external requests — fonts are self-hosted, nothing loads from a CDN.
-- `frontend/` — the alnaircli.dev landing site and installer Worker (`dist/` is
-  build output recovered from the live deployment, not source).
 - `third_party/` — vendored Mermaid rendering stack (untouched policy).
 - `bin/protoc` — dotslash launcher used by proto codegen.
 
@@ -796,4 +795,4 @@ client-side, no backend surface.
   grok.com references live only there and in `alnair-sampler`/proxy types.
 - M2: server-side search/fetch (F5), command parity with kimi-cli 1.49.0
   (F6), one-time `~/.kimi/config.toml` import (F7), F9 smoke list, perf CI.
-- M3: Gitea Releases distribution, install scripts, self-update (F8).
+- M3: GitHub Releases distribution, install scripts, self-update (F8).

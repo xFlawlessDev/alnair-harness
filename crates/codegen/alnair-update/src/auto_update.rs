@@ -29,13 +29,13 @@ const MSG_AUTO_UPDATE_BACKGROUND: &str = "Auto-update running in background.";
 const MSG_RUN_UPDATE_MANUAL: &str = "Run `alnair update` to get the latest version.";
 
 /// Manual-install one-liner for this platform's bootstrap installer
-/// (install.sh / install.ps1, PRD F8). Served from alnaircli.dev rather than the
-/// repo host directly, so the published command survives a forge migration.
+/// (install.sh / install.ps1, PRD F8). Served from the repository host directly,
+/// so the published command survives a move to the GitHub Releases pipeline.
 fn manual_install_cmd() -> &'static str {
     if cfg!(windows) {
-        "irm https://alnaircli.dev/install.ps1 | iex"
+        "irm https://raw.githubusercontent.com/xFlawlessDev/alnair-harness/master/install.ps1 | iex"
     } else {
-        "curl -fsSL https://alnaircli.dev/install.sh | sh"
+        "curl -fsSL https://raw.githubusercontent.com/xFlawlessDev/alnair-harness/master/install.sh | sh"
     }
 }
 
@@ -695,7 +695,7 @@ pub(crate) fn detect_platform() -> Result<(&'static str, &'static str)> {
 
 /// Rust target triple for this build — the key that maps a platform to its
 /// release-asset name. Must stay in lockstep with the five targets built by
-/// `.gitea/workflows/release.yml` and the tables in install.sh/install.ps1.
+/// the GitHub Releases workflow and the tables in install.sh/install.ps1.
 pub(crate) fn target_triple() -> Result<&'static str> {
     let triple = if cfg!(all(target_os = "macos", target_arch = "aarch64")) {
         "aarch64-apple-darwin"
@@ -2624,13 +2624,15 @@ mod tests {
         if cfg!(windows) {
             assert!(hint.contains("irm"), "should suggest irm install: {hint}");
             assert!(
-                hint.contains("alnaircli.dev/install.ps1"),
+                hint.contains("raw.githubusercontent.com/xFlawlessDev/alnair-harness")
+                    && hint.contains("install.ps1"),
                 "should reference the published install.ps1: {hint}"
             );
         } else {
             assert!(hint.contains("curl"), "should suggest curl install: {hint}");
             assert!(
-                hint.contains("alnaircli.dev/install.sh"),
+                hint.contains("raw.githubusercontent.com/xFlawlessDev/alnair-harness")
+                    && hint.contains("install.sh"),
                 "should reference the published install.sh: {hint}"
             );
         }
@@ -2667,7 +2669,7 @@ mod tests {
     #[cfg(any(target_arch = "x86_64", target_arch = "aarch64"))]
     #[test]
     fn test_release_asset_name_matches_release_workflow_naming() {
-        // Must stay in lockstep with .gitea/workflows/release.yml, which
+        // Must stay in lockstep with the GitHub Releases workflow, which
         // publishes alnair-<version>-<target-triple>.{tar.gz|zip}.
         let triple = target_triple().unwrap();
         assert!(
