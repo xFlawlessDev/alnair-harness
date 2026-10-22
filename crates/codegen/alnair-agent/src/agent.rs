@@ -249,6 +249,22 @@ impl Agent {
     /// Re-render the system prompt for a different definition, reusing
     /// the existing ToolBridge. Used for mid-session mode switching.
     pub async fn render_prompt_for_definition(&self, definition: &AgentDefinition) -> String {
+        self.prompt_context_for_definition(definition)
+            .render(&self.tool_bridge)
+            .await
+            .unwrap_or_default()
+    }
+
+    /// The [`PromptContext`] [`Self::render_prompt_for_definition`] renders
+    /// from, without the render itself.
+    ///
+    /// Split out so a caller holding the agent in a `RefCell` can build the
+    /// context under a short borrow and then `await` the render against an
+    /// OWNED value: `render_prompt_for_definition` borrows `&self` for the
+    /// whole await, so calling it through a `Ref` holds the guard across a
+    /// suspension point and turns any concurrent `borrow_mut` into a
+    /// `BorrowMutError` panic.
+    pub fn prompt_context_for_definition(&self, definition: &AgentDefinition) -> PromptContext {
         let mut ctx = self.prompt_context.clone();
         ctx.prompt_mode = definition.prompt_mode.clone();
         ctx.prompt_body = definition.prompt_body.clone();
@@ -260,7 +276,7 @@ impl Agent {
             ctx.agents_md_files.clear();
         }
 
-        ctx.render(&self.tool_bridge).await.unwrap_or_default()
+        ctx
     }
 }
 

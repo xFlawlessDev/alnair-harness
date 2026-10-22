@@ -406,6 +406,22 @@ every intermediate state.
 `Agent::replace_agents_md` cannot disturb the KV-cache prefix. Do not move it
 into the rendered prompt.
 
+**Never `self.agent.borrow_mut()` on a reload path — use `try_borrow_mut`.**
+`SessionActor::agent` is a `RefCell<Agent>` and a running turn holds a `Ref`
+across its own awaits, so a reload landing mid-turn used `borrow_mut` and
+panicked `BorrowMutError`; `panic = "abort"` then killed the leader, which the
+user saw as "edit AGENTS.md → turn dies → pager reconnecting". The reload now
+parks the files in `pending_agents_md_files` and
+`flush_pending_project_instructions` applies them at the turn boundary. Stashing
+is required, not optional: the reloader dedupes on content hash, so a dropped
+write would never be retried. The same rule governs any new mid-turn writer.
+
+Hold `Ref<Agent>` only for the synchronous copy, then await on the OWNED value —
+`tool_bridge_handle()` for the bridge, `Agent::prompt_context_for_definition`
+for a rendered prompt. A chained temporary
+(`self.agent.borrow().tool_bridge().method().await`) keeps the guard alive
+across the suspension point even though no `let` names it.
+
 ## Web UI (`alnair web`)
 
 The browser is a **client of the leader**, not a second agent. Each WebSocket

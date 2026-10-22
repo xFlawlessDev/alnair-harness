@@ -1280,8 +1280,18 @@ impl SessionActor {
             std::sync::atomic::Ordering::Relaxed,
             std::sync::atomic::Ordering::Relaxed,
         );
-        let agent_ref = self.agent.borrow();
-        let completion_req = match agent_ref.completion_requirement() {
+        // Copy the requirement OUT and drop the `Ref<Agent>` before awaiting:
+        // the borrow must not outlive this scope. It used to be held across
+        // `process_conversation_turn`, i.e. across the whole turn, and any
+        // mid-turn `self.agent.borrow_mut()` then panicked with
+        // `BorrowMutError`. With `panic = "abort"` that aborts the leader, so
+        // an AGENTS.md hot-reload arriving mid-turn killed the process and the
+        // pager reconnected — the reload is supposed to be silent.
+        let completion_req = {
+            let agent = self.agent.borrow();
+            agent.completion_requirement().cloned()
+        };
+        let completion_req = match completion_req {
             Some(req) => req,
             None => {
                 return self.process_conversation_turn(req_id, json_schema).await;

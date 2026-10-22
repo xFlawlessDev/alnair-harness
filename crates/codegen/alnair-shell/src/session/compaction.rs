@@ -1220,8 +1220,9 @@ impl SessionActor {
                     let (execute_tool_name, monitor_tool_name) = if pending_tasks.is_empty() {
                         (None, None)
                     } else {
-                        let agent_ref = self.agent.borrow();
-                        let bridge = agent_ref.tool_bridge();
+                        // Owned handle — the `Ref<Agent>` must not be held
+                        // across `render_prompt`'s await.
+                        let bridge = self.tool_bridge_handle();
                         let empty = serde_json::json!({});
                         let execute = bridge
                             .render_prompt("${{ tools.by_kind.execute }}", &empty)
@@ -1340,7 +1341,8 @@ impl SessionActor {
                 None
             } else {
                 let agent_ref = self.agent.borrow();
-                let bridge = agent_ref.tool_bridge();
+                let bridge = agent_ref.tool_bridge().clone();
+                drop(agent_ref);
                 let empty = serde_json::json!({});
                 let poll_name = bridge
                     .render_prompt("${{ tools.by_kind.background_task_action }}", &empty)
@@ -1369,7 +1371,8 @@ impl SessionActor {
                 None
             } else {
                 let agent_ref = self.agent.borrow();
-                let bridge = agent_ref.tool_bridge();
+                let bridge = agent_ref.tool_bridge().clone();
+                drop(agent_ref);
                 let empty = serde_json::json!({});
                 let search_name = bridge
                     .render_prompt("${{ tools.by_kind.search_tool }}", &empty)
@@ -2247,6 +2250,7 @@ mod inline_auto_compact_flow_tests {
             pending_interjections: InterjectionBuffer::new(),
             pending_skill_reminders: Mutex::new(Vec::new()),
             pending_project_instructions: Mutex::new(None),
+            pending_agents_md_files: Mutex::new(None),
             idle_flush_timeout: None,
             dream_check_timeout: None,
             last_idle_flush_conversation_len: std::sync::atomic::AtomicUsize::new(0),

@@ -173,9 +173,10 @@ impl SessionActor {
             self.flush_pending_skill_reminders().await;
             self.flush_pending_project_instructions().await;
             // Idle-gated: a stale completion must not clobber the promoted turn's resources.
-            self.agent
-                .borrow()
-                .tool_bridge()
+            // Owned `Arc` clone — a `Ref<Agent>` held across the `.await` would
+            // panic with `BorrowMutError` if anything on the suspended path
+            // needed `borrow_mut` (a hot-reload of the project instructions).
+            self.tool_bridge_handle()
                 .update_resource(
                     alnair_tools::implementations::alnair::task::types::CurrentPromptIdResource(
                         String::new(),

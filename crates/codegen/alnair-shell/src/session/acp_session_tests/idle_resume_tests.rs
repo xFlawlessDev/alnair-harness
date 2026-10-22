@@ -211,6 +211,7 @@ async fn test_e2e_idle_resume_refreshes_model_metadata() {
                 pending_interjections: InterjectionBuffer::new(),
                 pending_skill_reminders: Mutex::new(Vec::new()),
                 pending_project_instructions: Mutex::new(None),
+                pending_agents_md_files: Mutex::new(None),
                 idle_flush_timeout: None,
                 dream_check_timeout: None,
                 last_idle_flush_conversation_len: std::sync::atomic::AtomicUsize::new(0),

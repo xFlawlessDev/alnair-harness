@@ -101,7 +101,14 @@ impl SessionActor {
             *self.active_agent_type.lock() = Some(def.name.clone());
         }
         if let Some(ref def) = agent_def {
-            let new_prompt = self.agent.borrow().render_prompt_for_definition(def).await;
+            // Build the context under a SHORT borrow, then render from the
+            // owned value: `render_prompt_for_definition` awaits while
+            // borrowing `&self`, so going through `self.agent.borrow()` would
+            // hold the guard across a suspension point and a concurrent
+            // `borrow_mut` (an AGENTS.md hot-reload) would panic.
+            let ctx = self.agent.borrow().prompt_context_for_definition(def);
+            let bridge = self.tool_bridge_handle();
+            let new_prompt = ctx.render(&bridge).await.unwrap_or_default();
             let mut conversation = self.chat_state_handle.get_conversation().await;
             for item in conversation.iter_mut() {
                 if let ConversationItem::System(sys) = item {

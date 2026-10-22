@@ -300,8 +300,10 @@ impl SessionActor {
     /// itself stays static (cacheable).
     pub(super) async fn refresh_mcp_snapshot_and_schedule_reminder(&self) {
         let mcp_initialized = self.mcp_state.lock().await.is_initialized();
+        // Owned handle: the `Ref<Agent>` must not survive into the `.await`.
+        let bridge = self.tool_bridge_handle();
         refresh_mcp_snapshot_and_schedule_reminder_with(
-            self.agent.borrow().tool_bridge().clone(),
+            bridge,
             Arc::clone(&self.mcp_state),
             self.tool_metadata_snapshot.clone(),
             Arc::clone(&self.mcp_reminder_dirty),

@@ -533,6 +533,17 @@ pub(crate) struct SessionActor {
     /// into the conversation, costing context for text that is already
     /// superseded.
     pub(crate) pending_project_instructions: Mutex<Option<ConversationItem>>,
+    /// Project-instruction files whose `prompt_context` write could not run at
+    /// reload time because a turn held the agent borrow.
+    ///
+    /// [`SessionActor::reload_project_instructions`] must never `borrow_mut` a
+    /// busy agent (that is a `BorrowMutError` panic, and `panic = "abort"` takes
+    /// the leader down), so the write is deferred here and drained by
+    /// [`SessionActor::flush_pending_project_instructions`] at the next turn
+    /// boundary. Stashing is required, not optional: the reloader dedupes on
+    /// content hash, so a dropped write would never be retried.
+    pub(crate) pending_agents_md_files:
+        Mutex<Option<Vec<alnair_agent::prompt::agents_md::AgentConfigFile>>>,
     /// Idle flush timeout: `None` = disabled, `Some(duration)` = flush after inactivity.
     pub(crate) idle_flush_timeout: Option<std::time::Duration>,
     /// Periodic dream check interval: `None` = disabled.
