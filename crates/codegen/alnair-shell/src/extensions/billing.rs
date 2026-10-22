@@ -66,7 +66,7 @@ async fn handle_get_usage(agent: &MvpAgent) -> ExtResult {
     let auth = super::auth_gate::require_xai_auth(
         &agent.auth_manager,
         "Authentication required to fetch usage data",
-        "Usage data requires a Kimi Code subscription session. Run `alnair login` to authenticate.",
+        "Usage data requires a Kimi Code subscription session. Run `alnair connect` to authenticate.",
     )?;
 
     let base = agent.cfg.borrow().endpoints.proxy_url();

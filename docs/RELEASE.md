@@ -202,5 +202,5 @@ Both runners also expose a liveness probe on `http://127.0.0.1:9101/healthz`.
 - Rollbacks: deleting the bad release (or re-pointing "latest") is enough —
   the internal installer treats the Releases API as authoritative and
   downgrades clients on its own.
-- No PyPI/npm packages, ever; in particular never squat the `kimi-cli`
-  package name (PRD F8).
+- No PyPI/npm packages, ever. In particular never squat a package name that
+  belongs to another CLI (PRD F8).

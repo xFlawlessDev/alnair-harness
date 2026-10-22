@@ -483,9 +483,8 @@ alnair -p "Run the test suite" --yolo
 For headless use, authenticate with one of:
 
 - **`XAI_API_KEY`** — simplest for CI. See [Environment Variables](#environment-variables-for-headless) above.
-- **`alnair login --device-auth`** (or `--device-code`) — no browser needed on the target machine.
+- **`alnair connect`** — open the provider picker on a machine with a GUI; the stored credential is reused headlessly. Pick a device-code provider (Kimi Code, GitHub Copilot, xAI Grok) when the target machine has no browser.
   See [Authentication > Device Code Flow](02-authentication.md#device-code-flow).
-- **`alnair login`** — browser-based OAuth2 on machines with a GUI.
 
 If you've previously logged in, cached credentials are used automatically.
 

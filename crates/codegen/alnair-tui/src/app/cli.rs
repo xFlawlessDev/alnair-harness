@@ -26,10 +26,8 @@ pub enum Command {
     },
     /// Manage running leader processes
     Leader(LeaderMgmtArgs),
-    /// Sign out and clear cached credentials
-    Logout,
-    /// Sign in with your Kimi Code subscription (device-code flow)
-    Login,
+    /// Connect a provider (or disconnect one) in the full-screen picker
+    Connect,
     /// Manage MCP server configurations
     Mcp(crate::mcp_cmd::McpArgs),
     /// Manage plugins
@@ -322,7 +320,7 @@ fn version_with_channel() -> &'static str {
     V.get_or_init(|| {
         let label = alnair_update::channel_label();
         format!(
-            "{} — unofficial Kimi Code CLI community build - {}",
+            "{} — coding agent for the terminal - {}",
             alnair_version::display_version_with_commit(env!("VERSION_WITH_COMMIT"), label),
             VERSION_ATTRIBUTION.trim_end(),
         )
@@ -332,7 +330,7 @@ fn version_with_channel() -> &'static str {
 #[command(
     name = "alnair",
     version = version_with_channel(),
-    about = "Alnair — unofficial Kimi Code CLI community build",
+    about = "Alnair — coding agent for the terminal",
     disable_version_flag = true,
     next_display_order = None,
     help_template = "\
@@ -658,6 +656,13 @@ pub struct PagerArgs {
     /// Show the login screen even when credentials are already available.
     #[arg(long = "force-login", hide = true)]
     pub force_login: bool,
+    /// Open the provider picker at startup (`alnair connect`), even when
+    /// credentials are already available. Unlike `--force-login` this does not
+    /// pre-select a method or auto-start a flow: it lands on the picker so the
+    /// user can connect, re-authenticate, or disconnect any provider.
+    #[arg(long = "open-provider-picker", hide = true)]
+    pub open_provider_picker: bool,
+
     /// Use OAuth when the welcome screen starts authentication.
     #[arg(long = "oauth")]
     pub oauth: bool,
@@ -1166,8 +1171,8 @@ mod tests {
     }
     #[test]
     fn subcommand_takes_precedence_over_positional_prompt() {
-        let args = PagerArgs::try_parse_from(["alnair", "logout"]).expect("subcommand parses");
-        assert!(matches!(args.command, Some(Command::Logout)));
+        let args = PagerArgs::try_parse_from(["alnair", "connect"]).expect("subcommand parses");
+        assert!(matches!(args.command, Some(Command::Connect)));
         assert!(args.prompt.is_none());
     }
     #[test]

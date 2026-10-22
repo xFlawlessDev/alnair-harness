@@ -6,7 +6,9 @@ Alnair supports several authentication methods, including interactive browser lo
 
 ## Browser Login (Default)
 
-On first launch, Alnair opens your browser to authenticate with alnair.com:
+On first launch, Alnair shows the provider picker. Choose a provider you
+already pay for (Kimi Code, Claude Pro/Max, ChatGPT Plus/Pro, GitHub Copilot,
+or xAI Grok) and sign in, or paste an API key:
 
 ```bash
 alnair
@@ -16,20 +18,20 @@ Alnair stores credentials in `~/.alnair/auth.json` and reuses them across sessio
 
 ### Re-authenticate
 
-To switch accounts or resolve an authentication problem, run:
+To switch providers, re-authenticate, or disconnect one, run:
 
 ```bash
-alnair login
+alnair connect
 ```
 
-Running `alnair login` starts the sign-in flow again, replacing your cached session. By default, it opens your browser and signs in through SpaceXAI OAuth at `auth.x.ai`. Pass a flag to select a different flow:
+`alnair connect` opens the same provider picker the TUI shows on first launch,
+even when you already have credentials. Every provider you have connected
+carries a green `connected` badge; press `d` on a row to remove just that
+provider's credential. Mid-session, `/connect` opens the picker over the live
+session, and `Esc` returns to it.
 
-| Flag | Description |
-|------|-------------|
-| `--oauth` | Sign in through SpaceXAI OAuth at `auth.x.ai`. This is the default, so the flag is optional. |
-| `--device-auth` (alias `--device-code`) | Sign in with the device-code flow for headless or remote environments. |
-
-To sign out, run `alnair logout`. It takes no flags and clears your cached credentials.
+Each provider's credential is stored under its own key, and one provider's
+credentials are never sent to another.
 
 ---
 
@@ -42,7 +44,7 @@ export XAI_API_KEY="xai-..."
 alnair
 ```
 
-Alnair uses the API key as a fallback when no session token is active. If you have already signed in interactively, the stored session token takes precedence. To fall back to the API key, run `alnair logout` or delete `~/.alnair/auth.json`.
+Alnair uses the API key as a fallback when no session token is active. If you have already signed in interactively, the stored session token takes precedence. To fall back to the API key, disconnect the session provider in `/connect`, or delete `~/.alnair/auth.json`.
 
 ---
 
@@ -205,13 +207,13 @@ echo "{\"access_token\": \"$TOKEN\", \"expires_in\": 3600}"
 
 ## Device Code Flow
 
-For headless environments (SSH sessions, Docker containers, remote VMs) where no browser is available locally:
+For headless environments (SSH sessions, Docker containers, remote VMs) where no browser is available locally, pick a provider whose flow is a device code (Kimi Code, GitHub Copilot, xAI Grok) in `alnair connect`. The picker prints a URL and code to the terminal:
 
 ```bash
-alnair login --device-auth    # or: alnair login --device-code
+alnair connect
 ```
 
-This prints a URL and code to the terminal. Open the URL on any device, enter the code, and complete authentication. Alnair polls until the login is confirmed.
+Open the URL on any device, enter the code, and complete authentication. Alnair polls until the connection is confirmed.
 
 You can also implement the device-code flow through an [External Auth Provider](#external-auth-provider) for full control.
 
@@ -255,7 +257,7 @@ When more than one login flow is configured, Alnair populates the session token 
 
 1. **External auth provider** (`auth_provider_command`)
 2. **Enterprise OIDC** -- when OIDC is configured, through `[alnair_com_config.oidc]` in `config.toml` or the `ALNAIR_OIDC_ISSUER` and `ALNAIR_OIDC_CLIENT_ID` environment variables
-3. **SpaceXAI OAuth2 browser login** -- the default
+3. **Subscription OAuth** -- the default, chosen per provider in `/connect`
 
 During a session, the active method handles all mid-session refreshes.
 
@@ -294,7 +296,7 @@ RUST_LOG=debug alnair -p "hello" 2> /tmp/alnair.log
 
 ### Common fixes
 
-- **"Authentication failed"** -- Run `alnair logout` to clear cached credentials, then `alnair login` to sign in again.
+- **"Authentication failed"** -- Run `alnair connect`, press `d` on the failing provider to disconnect it, then pick it again to sign in.
 - **Token expires too quickly** -- Set `auth_token_ttl` or return `expires_in` in your auth provider's JSON output.
 - **OIDC redirect fails** -- Ensure your IdP allows loopback redirect URIs (`http://127.0.0.1/callback`).
 - **External auth provider not found** -- Check that the `auth_provider_command` path is correct and the binary is executable.

@@ -442,28 +442,9 @@ pub async fn ensure_authenticated_or_noninteractive(
     }
 }
 
-/// `alnair login` handler for CLI entry points (tui, pager): the device-code
-/// flow is THE login.
-///
-/// Runs with `force_interactive` semantics — cached credentials are skipped
-/// but not cleared, so abandoning the device prompt doesn't log the user out.
-pub async fn run_cli_login(config: &crate::agent::config::Config) -> anyhow::Result<()> {
-    let alnair_home = alnair_home::alnair_home();
-    let auth_manager = Arc::new(AuthManager::new(
-        &alnair_home,
-        config.kimi_code_config.clone(),
-    ));
-    let (auth, did_auth) =
-        run_auth_flow_inner(&auth_manager, &config.kimi_code_config, false, true, None).await?;
-    if did_auth {
-        report_signed_in(&auth);
-    }
-    Ok(())
-}
-
-/// Result of a logout operation. Used by both the CLI subcommand and
-/// the ACP `/logout` slash command so the presentation layer can format
-/// the outcome without duplicating the auth logic.
+/// Result of a disconnect operation. Used by the ACP `alnair/auth/logout`
+/// handler so the presentation layer can format the outcome without
+/// duplicating the auth logic.
 pub struct LogoutResult {
     /// `true` if a cached OAuth session was found and cleared.
     pub was_logged_in: bool,
@@ -508,31 +489,6 @@ pub fn perform_logout(
         email,
         api_key_still_set: crate::agent::auth_method::has_xai_api_key_env(),
     })
-}
-
-/// `alnair logout` CLI handler. Calls [`perform_logout`] and formats
-/// the result to stderr.
-pub fn run_cli_logout(config: &crate::agent::config::Config) -> anyhow::Result<()> {
-    let alnair_home = alnair_home::alnair_home();
-    let auth_manager = AuthManager::new(&alnair_home, config.kimi_code_config.clone());
-    let result = perform_logout(&auth_manager, None)
-        .map_err(|e| anyhow::anyhow!("Failed to clear auth: {e}"))?;
-    if !result.was_logged_in {
-        eprintln!("No cached session to log out of.");
-        if result.api_key_still_set {
-            eprintln!("You are authenticated via an API-key environment variable.");
-        }
-        return Ok(());
-    }
-    if let Some(email) = result.email {
-        eprintln!("Logged out (was signed in as {email})");
-    } else {
-        eprintln!("Logged out");
-    }
-    if result.api_key_still_set {
-        eprintln!("An API-key environment variable is still set and will be used.");
-    }
-    Ok(())
 }
 
 #[cfg(test)]

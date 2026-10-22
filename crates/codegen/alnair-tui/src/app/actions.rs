@@ -582,8 +582,12 @@ pub enum Action {
     PermissionFollowup(String),
     /// User cancelled the front permission request (Ctrl-C / Esc in Options mode).
     PermissionCancel,
-    /// Log out: remove credentials and return to the login screen.
-    Logout,
+    /// Disconnect a provider: remove the credential stored under `scope` and
+    /// return to the picker. `None` clears the primary session scope (the
+    /// Kimi Code OAuth session), which is what the old `/logout` did.
+    Logout {
+        scope: Option<String>,
+    },
     /// Log out and immediately start a new login flow.
     SwitchAccount,
     /// User pressed login on the welcome screen.
@@ -593,9 +597,9 @@ pub enum Action {
     /// first interactive method, which sent every provider row to the Kimi
     /// device flow.
     LoginWith(acp::AuthMethodId),
-    /// `/login`: show the provider picker (with connected badges) instead of
+    /// `/connect`: show the provider picker (with connected badges) instead of
     /// auto-starting a flow. The user picks a row; `LoginWith` / key entry
-    /// take it from there.
+    /// take it from there, and `d` on a connected row disconnects it.
     OpenLoginPicker,
     /// Cancel an in-progress login that was started from inside a session
     /// (`/login` or a 401 re-auth prompt) and return to the previous view.
@@ -1886,8 +1890,9 @@ pub enum Effect {
         /// interjections — the wire shape stays byte-identical to legacy.
         blocks: Option<Vec<acp::ContentBlock>>,
     },
-    /// Log out via `alnair/auth/logout` (shell clears auth.json + in-memory state).
-    Logout,
+    /// Disconnect via `alnair/auth/logout`, carrying the `auth.json` scope to
+    /// remove. `None` clears the primary session scope (Kimi Code OAuth).
+    Logout { scope: Option<String> },
     /// Log out then authenticate sequentially in one task.
     SwitchAccount {
         request_seq: u64,
@@ -2490,8 +2495,10 @@ pub enum TaskResult {
         agent_id: AgentId,
         commands: Vec<acp::AvailableCommand>,
     },
-    /// Shell acknowledged logout (auth cleared).
-    LogoutComplete,
+    /// Shell acknowledged a disconnect (`auth.json` scope removed).
+    LogoutComplete {
+        scope: Option<String>,
+    },
     /// The 2-second "copied!" display timer expired.
     AuthCopiedTimeout,
     DeepSearchResults {

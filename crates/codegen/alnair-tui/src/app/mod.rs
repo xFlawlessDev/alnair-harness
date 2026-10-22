@@ -1752,7 +1752,7 @@ mod tests {
         assert_eq!(
             first_5,
             vec![
-                "Alnair — unofficial Kimi Code CLI community build",
+                "Alnair — coding agent for the terminal",
                 "",
                 "Usage: alnair [OPTIONS] [PROMPT] [COMMAND]",
                 "",

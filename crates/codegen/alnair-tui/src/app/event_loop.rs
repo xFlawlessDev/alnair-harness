@@ -661,11 +661,15 @@ pub(crate) async fn run(
     // Seed auth state from ACP connection metadata.
     // --force-login overrides: show the login screen even when credentials exist.
     let force_login = args.force_login && !connection.auth_methods.is_empty();
-    let needs_interactive_login = connection.needs_login || force_login;
+    // `alnair connect` / `/connect`: land on the provider picker whether or not
+    // credentials already exist. It never auto-starts a flow — the whole point
+    // is to show every provider, including the ones already connected.
+    let open_picker = args.open_provider_picker && !connection.auth_methods.is_empty();
+    let needs_interactive_login = connection.needs_login || force_login || open_picker;
     if needs_interactive_login {
         app.welcome_prompt_focused = false;
 
-        if connection.needs_login {
+        if connection.needs_login || open_picker {
             // Normal path: use the metadata from startup_auth_metadata()
             app.login_label = connection.login_label;
             app.login_method_id = connection.login_method_id;
@@ -722,11 +726,12 @@ pub(crate) async fn run(
                 error: Some("No login method available".to_string()),
             };
             vec![]
-        } else if super::app_view::login_picker_has_choice(&app.auth_methods) {
+        } else if open_picker || super::app_view::login_picker_has_choice(&app.auth_methods) {
             // Multiple interactive login choices (OAuth + Moonshot API-key
-            // rows): land on the login picker instead of auto-starting the
-            // device flow, so the user can choose a platform. Single-choice
-            // shells keep the historical auto-trigger below.
+            // rows), or an explicit `alnair connect`: land on the provider
+            // picker instead of auto-starting the device flow, so the user can
+            // choose a platform — and disconnect one. Single-choice shells
+            // keep the historical auto-trigger below.
             app.auth_state = super::app_view::AuthState::Pending { error: None };
             vec![]
         } else {
@@ -928,19 +933,6 @@ pub(crate) async fn run(
                 .into_iter()
                 .collect(),
         );
-    }
-
-    // F7: one-time offer to import the official kimi-cli configuration.
-    // Parallel to the Claude-import detection (`has_claude_import`), but
-    // deliberately lightweight: a welcome-screen system line pointing at the
-    // CLI command instead of a modal. Disappears once `alnair import-kimi` has
-    // run (marker file under ~/.alnair); the scan is read-only over ~/.kimi.
-    if alnair_shell::kimi_import::has_pending_kimi_import() {
-        app.startup_warnings.push(crate::startup::StartupWarning {
-            severity: crate::startup::WarningSeverity::Info,
-            message: "Found official kimi-cli settings in ~/.kimi.".to_string(),
-            action: Some("Run `alnair import-kimi` to import them (one-time).".to_string()),
-        });
     }
 
     // Apply initial config (may come from existing ~/.alnair/pager.toml).

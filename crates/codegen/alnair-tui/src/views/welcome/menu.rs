@@ -11,8 +11,16 @@ use super::logo::logo_visual_width;
 
 /// Key-column badge for a login-picker row whose provider already holds a
 /// stored credential. Rendered green (content-based restyle, like the
-/// import row's `[x]`).
+/// import row's `[x]`). A connected row appends the disconnect chord, so the
+/// match is by prefix — the badge alone still counts.
 pub(crate) const CONNECTED_BADGE: &str = "connected";
+
+/// Key-column text for a connected picker row: the badge plus the chord that
+/// removes that provider's credential. `d` is handled in
+/// `handle_welcome_input`'s `AuthState::Pending` arm and is a no-op on a row
+/// that is not connected. ASCII only — `render_menu` measures the key column
+/// with `str::len`, so a multi-byte glyph would misalign the row.
+pub(crate) const CONNECTED_DISCONNECT_HINT: &str = "connected [d]";
 
 /// Render the welcome menu rows as `label … shortcut`, padded within each row.
 ///
@@ -126,7 +134,7 @@ pub fn render_menu(
 
         // Key shortcut flush with the right edge of the menu column. The
         // "connected" badge renders green instead of the shortcut gray.
-        let kstyle = if *key == CONNECTED_BADGE {
+        let kstyle = if key.starts_with(CONNECTED_BADGE) {
             let green = Style::default().fg(theme.accent_success);
             if is_selected {
                 green.bg(theme.bg_highlight)

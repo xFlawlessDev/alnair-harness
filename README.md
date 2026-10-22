@@ -21,7 +21,7 @@ key? OpenAI, Anthropic, Google, DeepSeek, Groq, Moonshot and
 [Graph engineering](#graph-engineering) ·
 [Providers and API keys](#providers-and-api-keys) ·
 [Building from source](#building-from-source) ·
-[Coexistence with the official CLI](#coexistence-with-the-official-kimi-cli) ·
+[One identity](#one-identity-no-coexistence-shims) ·
 [License](#license)
 
 ![Alnair demo](video/Alnair.gif)
@@ -45,8 +45,8 @@ irm https://raw.githubusercontent.com/xFlawlessDev/alnair-harness/master/install
 ```
 
 ```sh
-alnair login   # pick a provider, sign in
-alnair         # go
+alnair connect   # pick a provider, sign in — or disconnect one
+alnair           # go
 ```
 
 Single file, no runtime. macOS and Linux on arm64/x86_64, Windows on x86_64,
@@ -89,13 +89,13 @@ On by default. `ALNAIR_GRAPH=0` turns it off; `ALNAIR_GRAPH_CONCURRENCY` (defaul
 29 platforms ship compiled in: 5 you sign into, 24 you hand a key. Anything
 else is an endpoint you declare yourself ([your own endpoint](#your-own-endpoint)).
 
-**Sign in with a subscription you already pay for.** Run `alnair login` and pick.
-Each provider's token is stored under its own key, and one provider's
+**Sign in with a subscription you already pay for.** Run `alnair connect` and
+pick. Each provider's token is stored under its own key, and one provider's
 credentials are never sent to another.
 
 | Platform id      | Provider                  | Sign-in                                     |
 | ---------------- | ------------------------- | ------------------------------------------- |
-| `kimi-code`      | Kimi Code (original target)| Subscription OAuth (device code)           |
+| `kimi-code`      | Kimi Code                 | Subscription OAuth (device code)            |
 | `claude-pro-max` | Claude Pro/Max            | Subscription OAuth (browser, PKCE)          |
 | `openai-codex`   | ChatGPT Plus/Pro (Codex)  | Subscription OAuth (browser, PKCE)          |
 | `github-copilot` | GitHub Copilot            | Subscription OAuth (device code)            |
@@ -152,10 +152,10 @@ api_key = "xai-..."
 ### Your own endpoint
 
 Anything that speaks the OpenAI Chat Completions API or the Anthropic Messages
-API works: a gateway, a proxy, Ollama, LM Studio, vLLM. In `alnair`, open `/login`
-(or the welcome login screen) and pick **Custom provider (OpenAI compatible)**
-or **(Anthropic compatible)**, then enter a base URL, a name, and an API key.
-Alnair saves the provider,
+API works: a gateway, a proxy, Ollama, LM Studio, vLLM. In `alnair`, open
+`/connect` (or the welcome picker) and pick **Custom provider (OpenAI
+compatible)** or **(Anthropic compatible)**, then enter a base URL, a name, and
+an API key. Alnair saves the provider,
 checks the key against `GET {base}/models`, and `/model` lists what the endpoint
 serves as `name/model`.
 
@@ -169,7 +169,7 @@ api_key = "sk-..."                            # or store it in ~/.alnair/auth.js
 
 A key is required. A local server that ignores auth takes any value. The
 context window is 256K unless the endpoint reports one. To remove a provider,
-delete its table and its `auth.json` entry.
+disconnect it in `/connect`, or delete its table and its `auth.json` entry.
 
 Model lists sync on startup. Pick one with `/model`, set its thinking level
 with `/effort`.
@@ -189,14 +189,18 @@ cargo build --profile release-dist -p alnair-bin
 launcher at `bin/protoc`; install dotslash (`brew install dotslash` or
 `cargo install dotslash`) if it is not already on your PATH.
 
-## Coexistence with the official Kimi CLI
+## One identity, no coexistence shims
 
-Alnair started as an unofficial Kimi Code CLI — a community fork of
-[xai-org/grok-build](https://github.com/xai-org/grok-build), not affiliated
-with Moonshot AI or xAI. It keeps its own binary, its own `~/.alnair`, its own
-keyring entry, and its own `ALNAIR_*` env vars, and never touches what the
-official `kimi` CLI installed. `alnair import-kimi` copies your old config over
-once, read-only.
+Alnair is an independent coding agent — a hard fork of
+[xai-org/grok-build](https://github.com/xai-org/grok-build), provider-agnostic
+rather than a build of any single vendor's CLI, and not affiliated with
+Moonshot AI or xAI. It has its own binary (`alnair`), its own `~/.alnair`, its
+own keyring entry, and its own `ALNAIR_*` env vars.
+
+Because it is its own thing, there is no "which CLI am I" confusion to manage:
+Alnair never reads or writes another CLI's home directory. The single
+exception is opt-in: `alnair import-kimi` copies an old `~/.kimi` config over
+once, read-only. Nothing else touches it.
 
 **Zero telemetry.** It talks to the APIs you configured, the Alnair release
 server, and your own MCP servers. Nothing else.
@@ -207,5 +211,5 @@ Apache-2.0. See [LICENSE](LICENSE), [NOTICE](NOTICE), and
 [THIRD-PARTY-NOTICES](THIRD-PARTY-NOTICES.md). Code ported from
 openai/codex and sst/opencode is documented in
 [crates/codegen/alnair-tools/THIRD_PARTY_NOTICES.md](crates/codegen/alnair-tools/THIRD_PARTY_NOTICES.md).
-Alnair is based on Grok Build Open Source; the `--version` output carries the
-attribution.
+Alnair is based on Grok Build Open Source, Copyright 2025-2026 X.AI Corp.;
+the `--version` output carries that attribution.

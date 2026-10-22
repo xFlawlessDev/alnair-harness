@@ -70,19 +70,18 @@ pub(crate) fn execute(
                     TaskResult::AuthCopiedTimeout
                 });
         }
-        Effect::Logout => {
+        Effect::Logout { scope } => {
             let tx = acp_tx.clone();
-            tasks
-                .spawn(async move {
-                    send_logout(&tx).await;
-                    TaskResult::LogoutComplete
-                });
+            tasks.spawn(async move {
+                send_logout(&tx, scope.clone()).await;
+                TaskResult::LogoutComplete { scope }
+            });
         }
         Effect::SwitchAccount { request_seq, method_id, use_oauth } => {
             let tx = acp_tx.clone();
             let abort_handle = tasks
                 .spawn(async move {
-                    send_logout(&tx).await;
+                    send_logout(&tx, None).await;
                     send_authenticate(&tx, request_seq, method_id, use_oauth, false)
                         .await
                 });

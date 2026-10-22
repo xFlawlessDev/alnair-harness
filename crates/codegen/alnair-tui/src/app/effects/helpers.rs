@@ -570,15 +570,21 @@ pub(super) fn parse_ext_result<T: serde::de::DeserializeOwned>(
         .ok_or_else(|| "malformed ext response: no result field".to_string())?;
     serde_json::from_value(result.clone()).map_err(|e| format!("unexpected ext result: {e}"))
 }
-pub(super) async fn send_logout(tx: &AcpAgentTx) {
+/// Ask the shell to remove one `auth.json` scope. `scope: None` clears the
+/// primary session scope (Kimi Code OAuth) — the old `/logout` behaviour.
+pub(super) async fn send_logout(tx: &AcpAgentTx, scope: Option<String>) {
+    let params = match scope {
+        Some(scope) => serde_json::json!({ "scope": scope }),
+        None => serde_json::json!({}),
+    };
     let req = acp::ExtRequest::new(
         "alnair/auth/logout",
-        serde_json::value::to_raw_value(&serde_json::json!({}))
+        serde_json::value::to_raw_value(&params)
             .expect("serialize auth/logout params")
             .into(),
     );
     if let Err(e) = acp_send(req, tx).await {
-        tracing::warn!(error = % e, "logout failed");
+        tracing::warn!(error = % e, "disconnect failed");
     }
 }
 pub(super) async fn send_authenticate(

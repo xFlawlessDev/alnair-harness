@@ -1,6 +1,7 @@
 //! Async task-result application: routes task results into state.
 use super::auth::{
-    ensure_login_method, handle_auth_complete, handle_auth_url_ready, handle_mcp_auth_trigger_done,
+    clear_connected_for_scope, ensure_login_method, handle_auth_complete, handle_auth_url_ready,
+    handle_mcp_auth_trigger_done,
 };
 use super::ctx::{find_agent_by_session_id, get_active_agent_mut};
 use super::notes::{handle_btw_response, handle_memory_note_saved};
@@ -891,12 +892,27 @@ pub(super) fn dispatch_task_result(result: TaskResult, app: &mut AppView) -> Vec
             app.auth_clipboard_copied = false;
             vec![]
         }
-        TaskResult::LogoutComplete => {
+        TaskResult::LogoutComplete { scope } => {
+            // A per-provider disconnect removes one scope, so drop that row's
+            // badge; the whole picker is rebuilt from advertised methods.
+            if let Some(scope) = scope.as_deref() {
+                clear_connected_for_scope(&mut app.auth_methods, scope);
+            }
+            // Only the PRIMARY session scope leaves the running session
+            // without a credential. Disconnecting, say, claude-pro-max while
+            // the session runs on kimi-code must not throw the user back to
+            // Welcome.
+            let primary_cleared = scope
+                .as_deref()
+                .is_none_or(|s| s == alnair_shell::auth::KIMI_CODE_OAUTH_SCOPE);
             app.auth_state = AuthState::Pending { error: None };
             app.login_method_id = None;
             ensure_login_method(app);
             app.auth_clipboard_copied = false;
             app.custom_select = None;
+            if !primary_cleared {
+                return vec![];
+            }
             let effects = dispatch_exit_session(app);
             app.welcome_prompt_focused = false;
             effects

@@ -1,26 +1,26 @@
-//! `/login` -- pick a provider to log in or re-authenticate with.
+//! `/connect` -- pick a provider to connect, re-authenticate, or disconnect.
 
 use crate::app::actions::Action;
 use crate::slash::command::{CommandExecCtx, CommandResult, SlashCommand};
 
-pub struct LoginCommand;
+pub struct ConnectCommand;
 
-impl SlashCommand for LoginCommand {
+impl SlashCommand for ConnectCommand {
     fn name(&self) -> &str {
-        "login"
+        "connect"
     }
 
     fn description(&self) -> &str {
-        "Pick a provider to log in with (connected ones are marked)"
+        "Connect a provider, or disconnect a connected one"
     }
 
     fn usage(&self) -> &str {
-        "/login"
+        "/connect"
     }
 
     /// Opens the provider picker rather than auto-starting a flow: the user
     /// chooses a row there, and already-connected providers show a green
-    /// "connected" badge.
+    /// "connected" badge plus a `d` disconnect chord.
     fn run(&self, _ctx: &mut CommandExecCtx, _args: &str) -> CommandResult {
         CommandResult::Action(Action::OpenLoginPicker)
     }

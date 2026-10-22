@@ -22,8 +22,7 @@ pub(crate) use flow::try_ensure_session_noninteractive;
 pub use flow::{
     AuthChannels, AuthUrlInfo, AuthUrlMode, LogoutResult, ensure_authenticated,
     ensure_authenticated_or_noninteractive, perform_logout, run_auth_flow,
-    run_auth_flow_with_stderr_bridge, run_cli_login, run_cli_logout, run_oauth_provider_flow,
-    try_ensure_fresh_auth,
+    run_auth_flow_with_stderr_bridge, run_oauth_provider_flow, try_ensure_fresh_auth,
 };
 mod meta;
 pub use device::device_headers;

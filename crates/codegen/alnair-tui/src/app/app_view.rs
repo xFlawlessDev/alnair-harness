@@ -339,6 +339,21 @@ impl PendingMenuItem {
             Self::Quit => "Quit",
         }
     }
+    /// The `auth.json` scope this row's credential lives under, for the
+    /// per-provider disconnect action. `None` when the row holds nothing a
+    /// disconnect could remove (the fallback row, the custom-provider
+    /// declaration starters, Quit).
+    pub fn disconnect_scope(&self) -> Option<String> {
+        match self {
+            Self::Login {
+                method_id: Some(id),
+                ..
+            } => alnair_shell::agent::auth_method::disconnect_scope_for_method_id(id),
+            Self::ApiKey { target, .. } => Some(target.platform_id().as_str().to_owned()),
+            _ => None,
+        }
+    }
+
     /// Whether the shell advertised this row's method as already holding a
     /// stored credential (`_meta.connected`, stamped at initialize and kept
     /// fresh by the TUI after in-session logins). Drives the green
@@ -2946,6 +2961,24 @@ fn handle_welcome_input(ev: &Event, ctx: &mut WelcomeInputCtx<'_>) -> InputOutco
                 // 'l' keeps its muscle-memory meaning: the first (OAuth) row.
                 if key!('l').matches(key) {
                     return dispatch_pending_menu_action(&items, 0, ctx.mid_session_login);
+                }
+                // 'd' disconnects the highlighted row, and only when that row
+                // actually holds a credential. The picker is the ONE place a
+                // provider is removed, so the chord lives here rather than on
+                // a separate command that could only ever reach the primary
+                // scope.
+                if key!('d').matches(key) {
+                    let index = ctx.menu_index.filter(|i| *i < items.len()).unwrap_or(0);
+                    let Some(item) = items.get(index) else {
+                        return InputOutcome::Unchanged;
+                    };
+                    if !item.connected(ctx.auth_methods) {
+                        return InputOutcome::Unchanged;
+                    }
+                    let Some(scope) = item.disconnect_scope() else {
+                        return InputOutcome::Unchanged;
+                    };
+                    return InputOutcome::Action(Action::Logout { scope: Some(scope) });
                 }
                 if key!(Enter).matches(key) {
                     let index = ctx.menu_index.filter(|i| *i < items.len()).unwrap_or(0);

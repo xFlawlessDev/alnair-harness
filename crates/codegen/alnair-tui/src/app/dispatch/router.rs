@@ -928,7 +928,7 @@ pub(crate) fn dispatch(action: Action, app: &mut AppView) -> Vec<Effect> {
         Action::PermissionSelect(option_id) => dispatch_permission_select(app, option_id),
         Action::PermissionFollowup(text) => dispatch_permission_followup(app, text),
         Action::PermissionCancel => dispatch_permission_cancel(app),
-        Action::Logout => dispatch_logout(app),
+        Action::Logout { scope } => dispatch_logout(app, scope),
         Action::SwitchAccount => dispatch_switch_account(app),
         Action::OpenUrl(url) => {
             use crate::terminal::hyperlinks::SchemeFilter;

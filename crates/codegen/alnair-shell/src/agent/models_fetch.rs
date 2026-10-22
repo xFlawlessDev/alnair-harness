@@ -276,8 +276,8 @@ fn fetch_platform_models_blocking(
     let enabled = enabled_platforms(auth.is_some(), oauth_tokens, platform_keys);
     if enabled.is_empty() && platform_keys.custom().is_empty() {
         return Err(BackendError::Auth(
-            "No platform credentials: log in with `alnair login`, paste a platform API key in \
-             the login screen (stored in ~/.alnair/auth.json), or set a platform env var such \
+            "No platform credentials: connect a provider with `alnair connect`, paste a platform API key in \
+             the provider picker (stored in ~/.alnair/auth.json), or set a platform env var such \
              as ALNAIR_MOONSHOT_API_KEY."
                 .into(),
         ));

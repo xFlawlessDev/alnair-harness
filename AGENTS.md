@@ -6,13 +6,26 @@ stack or product direction changes.
 
 ## What this is
 
-Alnair is an unofficial Kimi Code CLI community build: a hard fork of
-xai-org/grok-build (Apache-2.0, Rust) re-targeted at the Kimi Code
-subscription API and the Moonshot open platform. It coexists with the
-official `kimi` CLI: binary `alnair`, config dir `~/.alnair`
+Alnair is an independent coding agent for the terminal: a hard fork of
+xai-org/grok-build (Apache-2.0, Rust), provider-agnostic rather than bound to
+any one vendor. First-party endpoints default to the Kimi Code subscription
+API and the Moonshot open platform, and on top of those it speaks to
+subscription-OAuth providers (Kimi Code, Claude Pro/Max, ChatGPT/Codex,
+GitHub Copilot, xAI Grok), API-key platforms, and user-declared providers by
+base URL.
+
+Upstream attribution is a permanent constraint, not a phase: the fork's
+`NOTICE`, the `--version` line's "Based on Grok Build Open Source" note
+(`crates/codegen/alnair-tui/src/app/version_attribution.txt`, asserted by a
+release-gate grep), and the Apache-2.0 §4(b) change notice in NOTICE must
+survive any rebrand. Keep them current when the identity copy changes.
+
+The identity is its own: binary `alnair`, config dir `~/.alnair`
 (`ALNAIR_SHARE_DIR` override), keyring service `alnair`, env prefix `ALNAIR_*`.
-Never read or write `~/.kimi` (except the explicit one-time read-only
-import) or any `KIMI_*` env var.
+Alnair is not a redistribution of any vendor CLI and does not read or write
+another CLI's home directory. The one legacy exception is the opt-in,
+read-only `~/.kimi` import (`alnair import-kimi`, PRD F7) — nothing else may
+touch `~/.kimi` or a `KIMI_*` env var.
 
 Upstream sync record (update on every sync): fork baseline is upstream
 snapshot `8adf901` (2026-07-16, ≈v0.2.102); bug fixes evaluated and
@@ -20,8 +33,9 @@ selectively ported through upstream `77cd7eb` (2026-08-25, ≈v1.0.10) in
 the 0.1.13 cycle, through `3794978` (2026-09-09, ≈v1.0.24) in the 0.1.15
 cycle, through `a28ee2b` (2026-09-17, ≈v1.0.35) in the 0.1.16 cycle, and
 through `2bdd1d6` (2026-09-29, ≈v1.0.45) in the 0.1.19 cycle.
-The local release is 0.1.20; it adds custom providers declared by base
-URL (`[platforms.<name>]`, see CUSTOM PROVIDERS below).
+The local release line was reset to 0.1.1 when the project stopped presenting
+itself as a Kimi Code community build; it adds custom providers declared by
+base URL (`[platforms.<name>]`, see CUSTOM PROVIDERS below).
 Every upstream reference comes from the local clone at `./grok-build`
 (gitignored, never committed): `git -C grok-build pull` before a sync,
 then read upstream code and history there, not from the web.
@@ -235,8 +249,8 @@ row from being painted with one meaning and dispatched with another.
 
 The dashboard is the session list, so it owns the session's own lifecycle
 verbs: rename (`Ctrl+R`), stop/close (`Ctrl+X`), delete (`Ctrl+Shift+D`), and
-new-in-a-directory (`Ctrl+Shift+N`). Rename and new already existed; the other
-two are the 0.1.21 additions.
+new-in-a-directory (`Ctrl+Shift+N`). Rename and new already existed; stop and
+delete were the later additions.
 
 **Stop and delete are different actions and must stay that way.** `Ctrl+X`
 closes the agent view and leaves the transcript on disk (resumable via
@@ -710,8 +724,24 @@ client-side, no backend surface.
 - Every OAuth picker row carries ITS OWN method id (`PendingMenuItem::Login
   { method_id }` → `Action::LoginWith`); an unknown id fails closed. The
   id-less `Action::Login` (auto-login, 401 re-auth) resolves the first
-  interactive method. `/login` opens the picker (`Action::OpenLoginPicker`),
+  interactive method. `/connect` opens the picker (`Action::OpenLoginPicker`),
   never a flow directly; mid-session its last row is Cancel, not Quit.
+- The picker is also the ONLY disconnect surface. `/logout` and `alnair
+  logout` were removed with the identity reset: they could only ever clear the
+  primary session scope (Kimi Code), because `perform_logout(None)` resolves
+  `AuthManager::clear()` → `remove_scope(&self.scope)`, so the name promised
+  "sign out of everything" while leaving every other provider's credential in
+  `auth.json`. `d` on a connected row now emits
+  `Action::Logout { scope: Some(..) }`, and
+  `alnair_shell::agent::auth_method::disconnect_scope_for_method_id` is the
+  ONE picker→scope mapping (kimi-code → `oauth/kimi-code`, OAuth platforms →
+  their `OAuthConfig.scope_key`, API-key platforms → the bare platform id,
+  saved custom providers → their name). A disconnect of a non-primary scope
+  removes that entry and does NOT drop the running session back to Welcome.
+- `alnair connect` is the CLI entry to that same picker: the subcommand sets
+  `--open-provider-picker` and clears itself, so the pager starts in the
+  normal TUI with `AuthState::Pending`. It never auto-starts a flow — that is
+  the whole difference from the hidden `--force-login`, which pins a method.
 - `_meta.connected` on an advertised method is DISPLAY state (green badge on
   the picker): stamped at `initialize()` from stored credentials
   (`connected_method_ids` + `stamp_connected_meta`), kept fresh TUI-side
@@ -989,7 +1019,7 @@ client-side, no backend surface.
   the same `ModelsManager::sampling_config()` call, never a fresh lookup against
   the live cell: once the two drift, re-resolving the config's bare slug falls
   through to `resolve_catalog_key`'s `.rev()` scan, answers the API-key twin, and
-  a post-expiry `alnair login` silently leaves the EXPIRED bearer in the config
+  a post-expiry `alnair connect` silently leaves the EXPIRED bearer in the config
   that seeds every subagent (H-a). REFUSE RATHER THAN GUESS (H-b):
   when the per-session key does not name the slug, `platform_for_slug` returns
   `None` for a slug that collides across platforms rather than trusting

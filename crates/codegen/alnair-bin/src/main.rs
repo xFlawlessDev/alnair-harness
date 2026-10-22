@@ -119,7 +119,7 @@ async fn run_setup_command(json: bool) {
     if !managed_config::has_principal() {
         eprintln!("No deployment key or team sign-in found.");
         eprintln!();
-        eprintln!("To install managed configuration, sign in with a team using `alnair login`,");
+        eprintln!("To install managed configuration, sign in with a team using `alnair connect`,");
         eprintln!("or set a deployment key:");
         eprintln!();
         if cfg!(unix) {
@@ -1522,24 +1522,9 @@ async fn async_main() -> Result<()> {
                 )
                 .await;
             }
-            Command::Login => {
-                init_tracing_simple("cli");
-                let config = alnair_shell::config::load_effective_config_disk_only()
-                    .map_err(|e| anyhow::anyhow!("Failed to load config: {e}"))?;
-                let config = AgentConfig::new_from_toml_cfg(&config)
-                    .map_err(|e| anyhow::anyhow!("Failed to create agent config: {e}"))?;
-                alnair_shell::auth::run_cli_login(&config).await?;
-                println!();
-                alnair_shell::instrumentation::finalize_and_exit(0);
-            }
-            Command::Logout => {
-                init_tracing_simple("cli");
-                let config = alnair_shell::config::load_effective_config_disk_only()
-                    .map_err(|e| anyhow::anyhow!("Failed to load config: {e}"))?;
-                let config = AgentConfig::new_from_toml_cfg(&config)
-                    .map_err(|e| anyhow::anyhow!("Failed to create agent config: {e}"))?;
-                alnair_shell::auth::run_cli_logout(&config)?;
-                alnair_shell::instrumentation::finalize_and_exit(0);
+            Command::Connect => {
+                args.command = None;
+                args.open_provider_picker = true;
             }
             Command::Wrap(ref wrap_args) => {
                 return alnair_tui::wrap_cmd::run(wrap_args);

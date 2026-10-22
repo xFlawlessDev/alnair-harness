@@ -616,7 +616,7 @@ pub fn render_welcome(
                 .enumerate()
                 .map(|(i, item)| {
                     let key = if item.connected(params.auth_methods) {
-                        menu::CONNECTED_BADGE
+                        menu::CONNECTED_DISCONNECT_HINT
                     } else {
                         item.shortcut(i)
                     };

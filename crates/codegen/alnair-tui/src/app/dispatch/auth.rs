@@ -12,9 +12,11 @@ use crate::app::custom_entry::{CustomEntryOutcome, CustomEntryStep};
 use crate::scrollback::block::RenderBlock;
 use crate::scrollback::blocks::SessionEvent;
 
-/// `/logout` -- ask the shell to clear auth, then return to the login screen.
-pub(super) fn dispatch_logout(_app: &mut AppView) -> Vec<Effect> {
-    vec![Effect::Logout]
+/// Disconnect a provider: ask the shell to remove its `auth.json` scope, then
+/// return to the picker. `scope: None` clears the primary session scope (the
+/// Kimi Code OAuth session) — the behaviour the old `/logout` had.
+pub(super) fn dispatch_logout(_app: &mut AppView, scope: Option<String>) -> Vec<Effect> {
+    vec![Effect::Logout { scope }]
 }
 
 /// Ensure `login_method_id` is populated from stored auth methods.
@@ -545,6 +547,34 @@ fn mark_method_connected(
                 serde_json::Value::Bool(true),
             );
             agent.meta = Some(meta);
+        }
+    }
+}
+
+/// Drop the green "connected" badge from the row whose stored credential lives
+/// under `scope`, after a per-provider disconnect.
+///
+/// The badge is matched by SCOPE rather than by method id: the row the user
+/// pressed `d` on is gone from the picker by the time the answer arrives, and
+/// the shell's advertised ids are not the storage keys (`kimi-code` stores
+/// under `oauth/kimi-code`, a custom provider under its own name).
+pub(super) fn clear_connected_for_scope(
+    methods: &mut [agent_client_protocol::AuthMethod],
+    scope: &str,
+) {
+    use alnair_shell::agent::auth_method::{CONNECTED_META_KEY, disconnect_scope_for_method_id};
+    for method in methods.iter_mut() {
+        let matches = disconnect_scope_for_method_id(method.id()).as_deref() == Some(scope);
+        if !matches {
+            continue;
+        }
+        if let agent_client_protocol::AuthMethod::Agent(agent) = method
+            && let Some(meta) = agent.meta.as_mut()
+        {
+            meta.insert(
+                CONNECTED_META_KEY.to_string(),
+                serde_json::Value::Bool(false),
+            );
         }
     }
 }

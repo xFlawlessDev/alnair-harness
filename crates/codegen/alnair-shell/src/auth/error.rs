@@ -3,14 +3,14 @@ use thiserror::Error;
 #[derive(Debug, Error)]
 #[non_exhaustive]
 pub enum AuthError {
-    #[error("Not logged in. Run `alnair login`.")]
+    #[error("Not logged in. Run `alnair connect`.")]
     NotLoggedIn,
 
-    #[error("Token expired. Run `alnair login` to re-authenticate.")]
+    #[error("Token expired. Run `alnair connect` to re-authenticate.")]
     TokenExpiredNoRefresh,
 
     /// Server rejected the token (401) with no recovery path.
-    #[error("Authentication rejected by server. Run `alnair login` to re-authenticate.")]
+    #[error("Authentication rejected by server. Run `alnair connect` to re-authenticate.")]
     ServerRejectedNoRecovery,
 
     #[error("Auth recovery exhausted; re-authentication required.")]
@@ -82,10 +82,10 @@ impl RefreshTokenFailedReason {
     pub(crate) fn user_message(self) -> &'static str {
         match self {
             Self::RefreshTokenRejected => {
-                "Your session has expired. Run `alnair login` to sign in again."
+                "Your session has expired. Run `alnair connect` to sign in again."
             }
             Self::Other => {
-                "Authentication could not be refreshed. Run `alnair login` to sign in again."
+                "Authentication could not be refreshed. Run `alnair connect` to sign in again."
             }
         }
     }

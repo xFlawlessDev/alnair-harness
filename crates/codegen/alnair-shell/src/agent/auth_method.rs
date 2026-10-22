@@ -341,9 +341,9 @@ pub(crate) fn session_token_auth_gate(
 }
 
 pub const AUTH_ERROR_SESSION_EXPIRED: &str =
-    "Session expired. Run `alnair login` to re-authenticate.";
+    "Session expired. Run `alnair connect` to re-authenticate.";
 
-pub const AUTH_ERROR_API_KEY: &str = "Authentication failed. Run `alnair login`, set ALNAIR_API_KEY, or add api_key to ~/.alnair/config.toml.";
+pub const AUTH_ERROR_API_KEY: &str = "Authentication failed. Run `alnair connect`, set ALNAIR_API_KEY, or add api_key to ~/.alnair/config.toml.";
 
 /// Next ACP method id when `cached_token` cannot proceed (missing / expired):
 /// prefer non-interactive `xai.api_key` when advertiseable, else the
@@ -421,6 +421,39 @@ pub fn platform_for_method_id(id: &acp::AuthMethodId) -> Option<alnair_models::P
 
 fn platform_for_method_id_str(id: &str) -> Option<alnair_models::PlatformId> {
     alnair_models::PlatformId::parse(id).filter(|p| !p.uses_oauth())
+}
+
+/// The `auth.json` scope a picker row's stored credential lives under, for
+/// the per-provider disconnect action.
+///
+/// This is the ONLY place the picker→scope mapping is written down. It has to
+/// exist because the three row families store credentials under different keys:
+/// subscription-OAuth rows under `oauth/<provider>`, API-key platform rows
+/// under the bare platform id, and a saved custom provider under its own name.
+/// `None` means the row holds nothing a disconnect could remove — the two
+/// `custom-openai` / `custom-anthropic` picker rows (declaration starters, not
+/// logins), `xai.api_key` / `cached_token` (eager-auth, never listed), and any
+/// id the registry does not know.
+///
+/// Note that `kimi-code` is checked BEFORE the registry lookup: its platform
+/// row is `uses_oauth` with `oauth: None` (the bespoke device flow), so the
+/// generic branches would answer `None` for the one row that always has a
+/// credential.
+pub fn disconnect_scope_for_method_id(id: &acp::AuthMethodId) -> Option<String> {
+    let raw = id.0.as_ref();
+    if raw == KIMI_CODE_METHOD_ID {
+        return Some(crate::auth::KIMI_CODE_OAUTH_SCOPE.to_owned());
+    }
+    if let Some(name) = crate::agent::custom_providers::login_provider_name(raw) {
+        return Some(name.to_owned());
+    }
+    let platform = alnair_models::PlatformId::parse(raw)?;
+    match platform.oauth() {
+        Some(oauth) => Some(oauth.scope_key.to_owned()),
+        // `uses_oauth` with no `OAuthConfig` is only kimi-code, handled above.
+        None if !platform.uses_oauth() => Some(platform.as_str().to_owned()),
+        None => None,
+    }
 }
 
 /// An API-key registry platform's login method (picker label + description
@@ -616,6 +649,49 @@ mod tests {
                 AuthMethodKind::Unknown,
                 "{picker} only opens the TUI flow; it cannot authenticate"
             );
+        }
+    }
+
+    /// The picker→scope mapping must cover every family that stores a
+    /// credential, and must answer `None` for the rows that store nothing.
+    ///
+    /// The `kimi-code` case is the one that reads wrong if the registry is
+    /// consulted first: that platform is `uses_oauth` with `oauth: None` (the
+    /// bespoke device flow), so the generic OAuth branch answers `None` and the
+    /// API-key branch is skipped by the `!uses_oauth` guard. It is checked
+    /// first for exactly that reason.
+    #[test]
+    fn disconnect_scope_maps_every_credential_family() {
+        let scope = |id: &str| disconnect_scope_for_method_id(&acp::AuthMethodId::new(id));
+
+        assert_eq!(scope("kimi-code").as_deref(), Some("oauth/kimi-code"));
+        assert_eq!(
+            scope("claude-pro-max").as_deref(),
+            Some("oauth/claude-pro-max")
+        );
+        assert_eq!(scope("openai-codex").as_deref(), Some("oauth/openai-codex"));
+        assert_eq!(scope("xai-grok").as_deref(), Some("oauth/xai"));
+        assert_eq!(
+            scope("github-copilot").as_deref(),
+            Some("oauth/github-copilot")
+        );
+
+        // API-key platforms store under the bare platform id.
+        assert_eq!(scope("moonshot-cn").as_deref(), Some("moonshot-cn"));
+        assert_eq!(scope("anthropic").as_deref(), Some("anthropic"));
+
+        // A saved custom provider stores under its own name.
+        assert_eq!(scope("custom:my-proxy").as_deref(), Some("my-proxy"));
+
+        // Rows that hold nothing a disconnect could remove.
+        for none in [
+            "custom-openai",
+            "custom-anthropic",
+            "xai.api_key",
+            "cached_token",
+            "no-such-provider",
+        ] {
+            assert_eq!(scope(none), None, "{none} must not claim a scope");
         }
     }
 

@@ -11,10 +11,10 @@ languages, adapted to this crate's `Tool` trait and runtime, and extended);
 this file constitutes the prominent notice of those changes required by
 Apache License 2.0 §4(b).
 
-As part of the Alnair fork (an unofficial Kimi Code CLI community build based
-on Grok Build), these files were further modified: crates renamed into the
-`alnair-*` namespace, xAI/Grok service integrations removed or re-targeted at
-Kimi/Moonshot endpoints, and telemetry emission removed. This paragraph
+As part of the Alnair fork (an independent coding agent based on Grok Build),
+these files were further modified: crates renamed into the `alnair-*`
+namespace, xAI/Grok service integrations removed or re-targeted at
+provider endpoints, and telemetry emission removed. This paragraph
 extends the Apache License 2.0 §4(b) change notice to those modifications.
 
 ## Ported source code

@@ -76,7 +76,8 @@ pub fn map_sampling_err_to_acp(err: SamplingError) -> acp::Error {
                     format!(
                         "{message}\n\nYou have an API key set (ALNAIR_API_KEY). \
                          Your cached OAuth session is being used instead. \
-                         To use your API key, run `alnair logout` or type /logout in the TUI."
+                         To use your API key, disconnect the provider: type /connect \
+                         in the TUI and press `d` on the connected row."
                     )
                 } else {
                     message
@@ -624,12 +625,12 @@ mod tests {
             let data = acp_err.data.unwrap();
             let msg = data.as_str().unwrap();
             assert!(
-                msg.contains("alnair logout"),
-                "should suggest alnair logout when API key is available: {msg}"
+                msg.contains("/connect"),
+                "should suggest disconnecting the provider when API key is available: {msg}"
             );
             assert!(
-                msg.contains("/logout"),
-                "should mention /logout TUI command: {msg}"
+                msg.contains("press `d`"),
+                "should name the disconnect chord: {msg}"
             );
         });
     }
@@ -648,8 +649,8 @@ mod tests {
             let data = acp_err.data.unwrap();
             let msg = data.as_str().unwrap();
             assert!(
-                !msg.contains("alnair logout"),
-                "should NOT suggest logout when no API key is available: {msg}"
+                !msg.contains("/connect"),
+                "should NOT suggest disconnecting when no API key is available: {msg}"
             );
         });
     }

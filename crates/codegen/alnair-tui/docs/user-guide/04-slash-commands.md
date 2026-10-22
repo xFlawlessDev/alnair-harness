@@ -445,20 +445,14 @@ Manage personas -- create, edit, and delete personas. A subagent can apply a per
 
 ## Account and Billing
 
-### `/login`
+### `/connect`
 
-Log in or re-authenticate with your account without leaving the session.
-
-```
-/login
-```
-
-### `/logout`
-
-Log out and return to the login screen.
+Connect a provider, re-authenticate, or disconnect one without leaving the
+session. Rows whose provider already holds a stored credential show a green
+`connected` badge; press `d` on one to remove just that provider's credential.
 
 ```
-/logout
+/connect
 ```
 
 ### `/usage`
