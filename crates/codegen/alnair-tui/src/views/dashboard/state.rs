@@ -451,6 +451,16 @@ pub struct DashboardState {
     /// [`STOP_CONFIRM_WINDOW`] closes the agent. Mirrors the session-close
     /// close-confirm pattern.
     pub stop_confirm: Option<(DashboardRowId, Instant)>,
+    /// Pending delete confirmation. `Some((row, set_at))` after the first
+    /// `Ctrl+Shift+D` press on a top-level row; the second press within
+    /// [`STOP_CONFIRM_WINDOW`] deletes the session's history from disk.
+    ///
+    /// Deliberately a SEPARATE field from [`Self::stop_confirm`]: closing an
+    /// agent (Ctrl+X) is reversible — the transcript stays on disk and
+    /// `/resume` brings it back — while deleting destroys it. Sharing one
+    /// confirm slot would let a user who armed "close" then press the delete
+    /// chord and confirm the wrong action.
+    pub delete_confirm: Option<(DashboardRowId, Instant)>,
     /// Tick counter for spinner animation. The
     /// counter is bumped by [`crate::app::app_view::AppView::tick`]
     /// (NOT the renderer, which is read-only).
@@ -913,6 +923,7 @@ impl DashboardState {
             rename: None,
             error_toast: None,
             stop_confirm: None,
+            delete_confirm: None,
             spinner_tick: 0,
             row_rects: Vec::new(),
             section_rects: Vec::new(),
@@ -1011,6 +1022,7 @@ impl DashboardState {
     /// invariant stays honoured. Idempotent — safe to call when
     /// the button is already focused.
     pub fn focus_new_agent_button(&mut self) {
+        self.disarm_confirmations_except(None);
         self.new_agent_button_focused = true;
         self.selected = None;
         self.selected_section = None;
@@ -1024,16 +1036,40 @@ impl DashboardState {
     /// risk — the invariant only holds when both fields are
     /// written through here.
     pub fn focus_row(&mut self, id: DashboardRowId) {
+        // A confirmation is bound to the row it was armed on. Moving the cursor
+        // off that row must disarm it — including when the move comes from a
+        // mouse click, which never passes through `handle_key` and so would
+        // otherwise leave a live "press again to delete" armed against a row
+        // the user has since left.
+        self.disarm_confirmations_except(Some(&id));
         self.selected = Some(id);
         self.new_agent_button_focused = false;
         self.selected_section = None;
         self.selected_idle_overflow = false;
     }
 
+    /// Drop any pending stop / delete confirmation that names a row other than
+    /// `keep`. Passing `None` clears both.
+    ///
+    /// The two confirms are independent (closing an agent is reversible,
+    /// deleting its history is not), so each is checked on its own.
+    fn disarm_confirmations_except(&mut self, keep: Option<&DashboardRowId>) {
+        let stale = |armed: &Option<(DashboardRowId, Instant)>| {
+            armed.as_ref().is_some_and(|(row, _)| Some(row) != keep)
+        };
+        if stale(&self.stop_confirm) {
+            self.stop_confirm = None;
+        }
+        if stale(&self.delete_confirm) {
+            self.delete_confirm = None;
+        }
+    }
+
     /// Focus the section header identified by `key` — the third cursor
     /// target alongside rows and the `[+ New Agent]` button. Clears the
     /// row selection and button focus so exactly one cursor is active.
     pub fn focus_section(&mut self, key: SectionKey) {
+        self.disarm_confirmations_except(None);
         self.selected_section = Some(key);
         self.selected = None;
         self.new_agent_button_focused = false;
@@ -1044,6 +1080,7 @@ impl DashboardState {
     /// the fourth cursor target. Clears the other three so exactly one
     /// cursor is active.
     pub fn focus_idle_overflow(&mut self) {
+        self.disarm_confirmations_except(None);
         self.selected_idle_overflow = true;
         self.selected = None;
         self.selected_section = None;
@@ -2489,7 +2526,11 @@ impl DashboardState {
         // press arms both, the second press observes them and closes.
         let preserve_stop_state =
             matches!(from_registry, Some(crate::actions::ActionId::DashboardStop));
-        if !preserve_stop_state {
+        let preserve_delete_state = matches!(
+            from_registry,
+            Some(crate::actions::ActionId::DashboardDelete)
+        );
+        if !preserve_stop_state && !preserve_delete_state {
             self.error_toast = None;
             // The disarm is NOT gated on `error_toast` being set (the
             // Ctrl+X arm path deliberately plants no toast): a pending
@@ -2498,6 +2539,7 @@ impl DashboardState {
             // must disarm it. Otherwise the footer's "press again to
             // close" hint lingers while the cursor moves to other agents.
             self.stop_confirm = None;
+            self.delete_confirm = None;
         }
 
         // Shift+Tab while the peek is open cycles the PEEKED agent's live
@@ -3395,9 +3437,22 @@ impl DashboardState {
         let Some(modal) = self.location_picker.as_mut() else {
             return InputOutcome::Unchanged;
         };
+        // The picker answers only "which directory?" — what the answer MEANS
+        // is the opener's decision. Ctrl+L retargets the dashboard's dispatch
+        // cwd; Ctrl+Shift+N starts one agent elsewhere and leaves the dashboard
+        // where it was. Routing both through `DashboardChangeLocation` would
+        // silently move the dashboard for the second case.
+        let creates = matches!(
+            modal.purpose,
+            crate::views::location_picker::LocationPickerPurpose::NewSession
+        );
         match modal.state.handle_input(ev) {
             LocationPickerOutcome::Chosen(input) => {
-                InputOutcome::Action(Action::DashboardChangeLocation { input })
+                if creates {
+                    InputOutcome::Action(Action::DashboardCreateAgentInDirectory { input })
+                } else {
+                    InputOutcome::Action(Action::DashboardChangeLocation { input })
+                }
             }
             LocationPickerOutcome::Closed => {
                 InputOutcome::Action(Action::DashboardCloseLocationPicker)
@@ -3675,6 +3730,10 @@ fn dashboard_action_for_id(
         ActionId::DashboardTogglePin => Some(InputOutcome::Action(Action::DashboardTogglePin)),
         ActionId::DashboardBeginRename => Some(InputOutcome::Action(Action::DashboardBeginRename)),
         ActionId::DashboardStop => Some(InputOutcome::Action(Action::DashboardStop)),
+        ActionId::DashboardDelete => Some(InputOutcome::Action(Action::DashboardDelete)),
+        ActionId::DashboardNewAgentInDirectory => {
+            Some(InputOutcome::Action(Action::DashboardNewAgentInDirectory))
+        }
         ActionId::DashboardCycleMode => Some(InputOutcome::Action(Action::DashboardCycleMode)),
         ActionId::DashboardToggleAutoApprove => {
             Some(InputOutcome::Action(Action::DashboardToggleAutoApprove))

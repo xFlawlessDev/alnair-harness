@@ -12,74 +12,79 @@
  * restyle does not turn this into a false failure.
  */
 
-import { spawn } from 'node:child_process';
-import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { spawn } from "node:child_process";
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
-const base = process.argv[2] ?? 'http://127.0.0.1:2499';
+const base = process.argv[2] ?? "http://127.0.0.1:2499";
 
 const CANDIDATES = [
-	'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe',
-	'C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe',
-	'C:\\Program Files\\Microsoft\\Edge\\Application\\msedge.exe',
-	'C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe'
+  "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
+  "C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe",
+  "C:\\Program Files\\Microsoft\\Edge\\Application\\msedge.exe",
+  "C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe",
 ];
 const browserPath = CANDIDATES.find((candidate) => existsSync(candidate));
 if (!browserPath) {
-	console.error('no Chrome or Edge found');
-	process.exit(1);
+  console.error("no Chrome or Edge found");
+  process.exit(1);
 }
 
-const profile = mkdtempSync(join(tmpdir(), 'alnair-web-test-'));
+const profile = mkdtempSync(join(tmpdir(), "alnair-web-test-"));
 const port = 9333;
 
 const browser = spawn(
-	browserPath,
-	[
-		`--remote-debugging-port=${port}`,
-		`--user-data-dir=${profile}`,
-		'--headless=new',
-		'--disable-gpu',
-		'--no-first-run',
-		'--no-default-browser-check',
-		'--window-size=1440,900',
-		'about:blank'
-	],
-	{ stdio: 'ignore' }
+  browserPath,
+  [
+    `--remote-debugging-port=${port}`,
+    `--user-data-dir=${profile}`,
+    "--headless=new",
+    "--disable-gpu",
+    "--no-first-run",
+    "--no-default-browser-check",
+    "--window-size=1440,900",
+    "about:blank",
+  ],
+  { stdio: "ignore" },
 );
 
-process.on('exit', () => {
-	try {
-		browser.kill();
-	} catch {
-		// Already gone.
-	}
-	try {
-		rmSync(profile, { recursive: true, force: true });
-	} catch {
-		// Windows holds the profile briefly; the OS temp root reclaims it.
-	}
+process.on("exit", () => {
+  try {
+    browser.kill();
+  } catch {
+    // Already gone.
+  }
+  try {
+    rmSync(profile, { recursive: true, force: true });
+  } catch {
+    // Windows holds the profile briefly; the OS temp root reclaims it.
+  }
 });
 
 async function devtoolsUrl() {
-	const deadline = Date.now() + 25_000;
-	for (;;) {
-		try {
-			const res = await fetch(`http://127.0.0.1:${port}/json/version`);
-			if (res.ok) return (await res.json()).webSocketDebuggerUrl;
-		} catch {
-			// Not listening yet.
-		}
-		if (Date.now() > deadline) throw new Error('browser never opened its debugging port');
-		await new Promise((r) => setTimeout(r, 150));
-	}
+  const deadline = Date.now() + 25_000;
+  for (;;) {
+    try {
+      const res = await fetch(`http://127.0.0.1:${port}/json/version`);
+      if (res.ok) return (await res.json()).webSocketDebuggerUrl;
+    } catch {
+      // Not listening yet.
+    }
+    if (Date.now() > deadline)
+      throw new Error("browser never opened its debugging port");
+    await new Promise((r) => setTimeout(r, 150));
+  }
 }
 
 const socket = new WebSocket(await devtoolsUrl());
 await new Promise((resolve, reject) => {
-	socket.addEventListener('open', () => resolve(), { once: true });
-	socket.addEventListener('error', () => reject(new Error('CDP socket failed')), { once: true });
+  socket.addEventListener("open", () => resolve(), { once: true });
+  socket.addEventListener(
+    "error",
+    () => reject(new Error("CDP socket failed")),
+    { once: true },
+  );
 });
 
 let nextId = 1;
@@ -87,74 +92,80 @@ const pending = new Map();
 const consoleErrors = [];
 const pageErrors = [];
 
-socket.addEventListener('message', (event) => {
-	const message = JSON.parse(String(event.data));
-	if (message.id !== undefined) {
-		const waiter = pending.get(message.id);
-		if (!waiter) return;
-		pending.delete(message.id);
-		if (message.error) waiter.reject(new Error(message.error.message));
-		else waiter.resolve(message.result);
-		return;
-	}
-	if (message.method === 'Runtime.consoleAPICalled') {
-		const text = message.params.args
-			.map((arg) => arg.value ?? arg.description ?? arg.type)
-			.join(' ');
-		if (message.params.type === 'error') consoleErrors.push(text);
-		else console.log('[console]', text);
-	}
-	if (message.method === 'Runtime.exceptionThrown') {
-		pageErrors.push(
-			message.params.exceptionDetails.exception?.description ??
-				message.params.exceptionDetails.text
-		);
-	}
+socket.addEventListener("message", (event) => {
+  const message = JSON.parse(String(event.data));
+  if (message.id !== undefined) {
+    const waiter = pending.get(message.id);
+    if (!waiter) return;
+    pending.delete(message.id);
+    if (message.error) waiter.reject(new Error(message.error.message));
+    else waiter.resolve(message.result);
+    return;
+  }
+  if (message.method === "Runtime.consoleAPICalled") {
+    const text = message.params.args
+      .map((arg) => arg.value ?? arg.description ?? arg.type)
+      .join(" ");
+    if (message.params.type === "error") consoleErrors.push(text);
+    else console.log("[console]", text);
+  }
+  if (message.method === "Runtime.exceptionThrown") {
+    pageErrors.push(
+      message.params.exceptionDetails.exception?.description ??
+        message.params.exceptionDetails.text,
+    );
+  }
 });
 
 function send(method, params = {}, sessionId) {
-	const id = nextId++;
-	return new Promise((resolve, reject) => {
-		pending.set(id, { resolve, reject });
-		socket.send(JSON.stringify({ id, method, params, sessionId }));
-	});
+  const id = nextId++;
+  return new Promise((resolve, reject) => {
+    pending.set(id, { resolve, reject });
+    socket.send(JSON.stringify({ id, method, params, sessionId }));
+  });
 }
 
-const { targetId } = await send('Target.createTarget', { url: 'about:blank' });
-const { sessionId } = await send('Target.attachToTarget', { targetId, flatten: true });
+const { targetId } = await send("Target.createTarget", { url: "about:blank" });
+const { sessionId } = await send("Target.attachToTarget", {
+  targetId,
+  flatten: true,
+});
 
-await send('Runtime.enable', {}, sessionId);
-await send('Page.enable', {}, sessionId);
+await send("Runtime.enable", {}, sessionId);
+await send("Page.enable", {}, sessionId);
 
 async function evaluate(expression) {
-	const result = await send(
-		'Runtime.evaluate',
-		{ expression, awaitPromise: true, returnByValue: true },
-		sessionId
-	);
-	if (result.exceptionDetails) {
-		throw new Error(
-			result.exceptionDetails.exception?.description ?? result.exceptionDetails.text
-		);
-	}
-	return result.result.value;
+  const result = await send(
+    "Runtime.evaluate",
+    { expression, awaitPromise: true, returnByValue: true },
+    sessionId,
+  );
+  if (result.exceptionDetails) {
+    throw new Error(
+      result.exceptionDetails.exception?.description ??
+        result.exceptionDetails.text,
+    );
+  }
+  return result.result.value;
 }
 
 async function waitFor(label, expression, timeoutMs = 30_000) {
-	const deadline = Date.now() + timeoutMs;
-	let last;
-	for (;;) {
-		try {
-			last = await evaluate(expression);
-			if (last) return last;
-		} catch (error) {
-			last = String(error);
-		}
-		if (Date.now() > deadline) {
-			throw new Error(`timed out waiting for ${label} (last: ${JSON.stringify(last)})`);
-		}
-		await new Promise((r) => setTimeout(r, 200));
-	}
+  const deadline = Date.now() + timeoutMs;
+  let last;
+  for (;;) {
+    try {
+      last = await evaluate(expression);
+      if (last) return last;
+    } catch (error) {
+      last = String(error);
+    }
+    if (Date.now() > deadline) {
+      throw new Error(
+        `timed out waiting for ${label} (last: ${JSON.stringify(last)})`,
+      );
+    }
+    await new Promise((r) => setTimeout(r, 200));
+  }
 }
 
 const results = [];
@@ -179,16 +190,16 @@ const typeInto = (text) => `
 // --- load -----------------------------------------------------------------
 
 const loaded = new Promise((resolve) => {
-	const listener = (event) => {
-		const message = JSON.parse(String(event.data));
-		if (message.method === 'Page.loadEventFired') {
-			socket.removeEventListener('message', listener);
-			resolve();
-		}
-	};
-	socket.addEventListener('message', listener);
+  const listener = (event) => {
+    const message = JSON.parse(String(event.data));
+    if (message.method === "Page.loadEventFired") {
+      socket.removeEventListener("message", listener);
+      resolve();
+    }
+  };
+  socket.addEventListener("message", listener);
 });
-await send('Page.navigate', { url: base }, sessionId);
+await send("Page.navigate", { url: base }, sessionId);
 await loaded;
 
 // --- 1. loading state -----------------------------------------------------
@@ -198,17 +209,19 @@ await loaded;
 // IS stable is that a fixture conversation never appears and the skeleton does
 // not linger.
 const skeletonAtFirstPaint = await evaluate(
-	`Boolean(document.querySelector('[aria-label="Connecting to the agent"]'))`
+  `Boolean(document.querySelector('[aria-label="Connecting to the agent"]'))`,
 );
 await waitFor(
-	'the skeleton to clear',
-	`!document.querySelector('[aria-label="Connecting to the agent"]')`,
-	45_000
+  "the skeleton to clear",
+  `!document.querySelector('[aria-label="Connecting to the agent"]')`,
+  45_000,
 );
 check(
-	'1. loading state resolves to the real UI',
-	true,
-	skeletonAtFirstPaint ? 'skeleton painted, then cleared' : 'connected before first sample'
+  "1. loading state resolves to the real UI",
+  true,
+  skeletonAtFirstPaint
+    ? "skeleton painted, then cleared"
+    : "connected before first sample",
 );
 
 const fixtureLeak = await evaluate(`
@@ -221,26 +234,97 @@ const fixtureLeak = await evaluate(`
 	})()
 `);
 check(
-	'1. no fixture data on the live page',
-	Array.isArray(fixtureLeak) && fixtureLeak.length === 0,
-	Array.isArray(fixtureLeak) && fixtureLeak.length > 0
-		? `leaked: ${fixtureLeak.join(', ')}`
-		: 'clean'
+  "1. no fixture data on the live page",
+  Array.isArray(fixtureLeak) && fixtureLeak.length === 0,
+  Array.isArray(fixtureLeak) && fixtureLeak.length > 0
+    ? `leaked: ${fixtureLeak.join(", ")}`
+    : "clean",
+);
+
+// --- 1b. session CRUD surface --------------------------------------------
+
+// The sidebar's per-row menu is the only way to rename or delete a session.
+// It is asserted AFTER the roster paints: the row (and its menu) only exists
+// once sessions arrive, so sampling earlier would test the loading state.
+const rowMenu = await waitFor(
+  "a session actions menu",
+  `(() => {
+		const hit = [...document.querySelectorAll('button')].find((b) =>
+			(b.getAttribute('aria-label') || '').startsWith('Session actions: ')
+		);
+		return hit ? hit.getAttribute('aria-label') : null;
+	})()`,
+  20_000,
+).catch(() => null);
+check(
+  "1b. each session row has an actions menu",
+  Boolean(rowMenu),
+  rowMenu ?? "not found",
+);
+
+await evaluate(`
+	(() => {
+		const hit = [...document.querySelectorAll('button')].find((b) =>
+			(b.getAttribute('aria-label') || '').startsWith('Session actions: ')
+		);
+		hit?.click();
+		return true;
+	})()
+`);
+const crudItems = await waitFor(
+  "session actions menu",
+  `[...document.querySelectorAll('[role="menuitem"]')].filter((n) =>
+		/Rename|Delete session|New session in this directory/.test(n.innerText)
+	).length`,
+  10_000,
+).catch(() => 0);
+check(
+  "1b. the menu offers rename, delete and new",
+  Number(crudItems) >= 3,
+  `${crudItems} items`,
+);
+await evaluate(`document.body.click()`);
+
+// --- 1c. checkout row ----------------------------------------------------
+
+// `alnair/git/*` is only reachable when the session's cwd is a repo, so the
+// row is asserted as a *shape*: either both menus exist (a repo) or the row is
+// absent (not a repo). A half-painted row would mean the three reads disagreed.
+const checkout = await evaluate(`
+	(() => {
+		const row = document.querySelector('[data-slot="checkout-bar"]');
+		if (!row) return { present: false };
+		const labels = [...row.querySelectorAll('button')].map((b) => b.getAttribute('aria-label'));
+		return { present: true, labels };
+	})()
+`);
+check(
+  "1c. the checkout row names its checkout and branch",
+  checkout.present === false ||
+    (checkout.labels?.some((l) => l?.startsWith("Checkout: ")) &&
+      checkout.labels?.some((l) => l?.startsWith("Branch: "))),
+  checkout.present
+    ? (checkout.labels ?? []).join(" | ")
+    : "no git repository in this session",
 );
 
 // --- 2. sessions + history ------------------------------------------------
 
 const sessionRows = await waitFor(
-	'sidebar sessions',
-	`document.querySelectorAll('[data-session-id]').length`,
-	40_000
+  "sidebar sessions",
+  `document.querySelectorAll('[data-session-id]').length`,
+  40_000,
 );
-check('2. sidebar lists real sessions', sessionRows > 0, `${sessionRows} rows`);
+check("2. sidebar lists real sessions", sessionRows > 0, `${sessionRows} rows`);
 
 const activeSessionId = await evaluate(
-	`document.querySelector('[data-session-id][aria-current="true"]')?.getAttribute('data-session-id') ?? null`
+  `document.querySelector('[data-session-id][aria-current="true"]')?.getAttribute('data-session-id') ?? null`,
 );
-check('2. a session is active', Boolean(activeSessionId), activeSessionId ?? 'none');
+check(
+  "2. a session is active",
+  Boolean(activeSessionId),
+  activeSessionId ?? "none",
+);
 
 const threadChars = await evaluate(`
 	(() => {
@@ -248,7 +332,7 @@ const threadChars = await evaluate(`
 		return main ? main.innerText.trim().length : 0;
 	})()
 `);
-check('2. thread pane renders', threadChars > 20, `${threadChars} chars`);
+check("2. thread pane renders", threadChars > 20, `${threadChars} chars`);
 
 // --- 3. model picker ------------------------------------------------------
 
@@ -260,7 +344,11 @@ const modelLabel = await evaluate(`
 		return hit ? hit.getAttribute('aria-label') : null;
 	})()
 `);
-check('3. model picker shows the live model', Boolean(modelLabel), modelLabel ?? 'not found');
+check(
+  "3. model picker shows the live model",
+  Boolean(modelLabel),
+  modelLabel ?? "not found",
+);
 
 // Open the picker and count the real catalog.
 await evaluate(`
@@ -273,13 +361,17 @@ await evaluate(`
 	})()
 `);
 const modelRows = await waitFor(
-	'model menu',
-	`[...document.querySelectorAll('[role="menuitem"]')].filter((n) =>
+  "model menu",
+  `[...document.querySelectorAll('[role="menuitem"]')].filter((n) =>
 		/deepseek|kimi|gpt|glm|openscale/i.test(n.innerText)
 	).length`,
-	10_000
+  10_000,
 ).catch(() => 0);
-check('3. model menu lists the catalog', Number(modelRows) > 0, `${modelRows} models`);
+check(
+  "3. model menu lists the catalog",
+  Number(modelRows) > 0,
+  `${modelRows} models`,
+);
 await evaluate(`document.body.click()`);
 
 // --- 4. context window ----------------------------------------------------
@@ -293,9 +385,9 @@ const contextLabel = await evaluate(`
 	})()
 `);
 check(
-	'4. context meter reports a real window',
-	Boolean(contextLabel) && !/unknown/i.test(contextLabel),
-	contextLabel ?? 'not found'
+  "4. context meter reports a real window",
+  Boolean(contextLabel) && !/unknown/i.test(contextLabel),
+  contextLabel ?? "not found",
 );
 
 // --- 5. access ------------------------------------------------------------
@@ -308,21 +400,29 @@ const accessLabel = await evaluate(`
 		return hit ? hit.getAttribute('aria-label') : null;
 	})()
 `);
-check('5. access picker renders the session mode', Boolean(accessLabel), accessLabel ?? 'not found');
+check(
+  "5. access picker renders the session mode",
+  Boolean(accessLabel),
+  accessLabel ?? "not found",
+);
 
 // --- 6. slash commands ----------------------------------------------------
 
-await evaluate(typeInto('/'));
+await evaluate(typeInto("/"));
 const commandRows = await waitFor(
-	'slash commands',
-	`[...document.querySelectorAll('button')].filter((n) =>
+  "slash commands",
+  `[...document.querySelectorAll('button')].filter((n) =>
 		n.innerText.trim().startsWith('/')
 	).length`,
-	15_000
+  15_000,
 ).catch(() => 0);
-check('6. slash menu lists the agent commands', Number(commandRows) > 0, `${commandRows} commands`);
+check(
+  "6. slash menu lists the agent commands",
+  Number(commandRows) > 0,
+  `${commandRows} commands`,
+);
 
-await evaluate(typeInto(''));
+await evaluate(typeInto(""));
 await evaluate(`
 	document.querySelector('textarea[aria-label="Message"]')
 		.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
@@ -330,25 +430,29 @@ await evaluate(`
 
 // --- A + B. file listing and fuzzy search ---------------------------------
 
-await evaluate(typeInto('@'));
+await evaluate(typeInto("@"));
 const fileRows = await waitFor(
-	'@ listing',
-	`[...document.querySelectorAll('button')].filter((n) =>
+  "@ listing",
+  `[...document.querySelectorAll('button')].filter((n) =>
 		/(src|crates|web|docs|package)/i.test(n.innerText)
 	).length`,
-	25_000
+  25_000,
 ).catch(() => 0);
-check('A. @ lists the workspace', Number(fileRows) > 0, `${fileRows} entries`);
+check("A. @ lists the workspace", Number(fileRows) > 0, `${fileRows} entries`);
 
-await evaluate(typeInto('@main'));
+await evaluate(typeInto("@main"));
 const matchRows = await waitFor(
-	'fuzzy matches',
-	`[...document.querySelectorAll('button')].filter((n) => /main/i.test(n.innerText)).length`,
-	25_000
+  "fuzzy matches",
+  `[...document.querySelectorAll('button')].filter((n) => /main/i.test(n.innerText)).length`,
+  25_000,
 ).catch(() => 0);
-check('B. @query returns fuzzy matches', Number(matchRows) > 0, `${matchRows} matches`);
+check(
+  "B. @query returns fuzzy matches",
+  Number(matchRows) > 0,
+  `${matchRows} matches`,
+);
 
-await evaluate(typeInto(''));
+await evaluate(typeInto(""));
 await evaluate(`
 	document.querySelector('textarea[aria-label="Message"]')
 		.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
@@ -363,9 +467,42 @@ const subagentChrome = await evaluate(`
 	})()
 `);
 check(
-	'7. subagent chrome comes from live state',
-	true,
-	subagentChrome ? 'a subagent chip is shown' : 'no running subagents in this session'
+  "7. subagent chrome comes from live state",
+  true,
+  subagentChrome
+    ? "a subagent chip is shown"
+    : "no running subagents in this session",
+);
+
+// --- 7b. tool call rendering --------------------------------------------
+
+// Three tool families used to fall through to the generic "other Tool: …" row
+// because the ACP kind is `other` for every Alnair tool. These assert the real
+// rows exist and the fallback row does not.
+const toolRender = await evaluate(`
+	(() => {
+		const rows = [...document.querySelectorAll('[data-slot="trace-line"]')];
+		const text = (node) => (node.textContent || '').replace(/\\s+/g, ' ').trim();
+		return {
+			rows: rows.length,
+			terminalPanels: document.querySelectorAll('[data-slot="terminal-panel"]').length,
+			generic: rows.filter((row) => /^other /.test(text(row))).map(text).slice(0, 3),
+			questionCards: rows.filter((row) => /^(Question|Question answered)/.test(text(row))).length,
+			subagentCards: rows.filter((row) => /^Subagent /.test(text(row))).length
+		};
+	})()
+`);
+check(
+  '7b. no tool falls through to the generic "other" row',
+  Array.isArray(toolRender.generic) && toolRender.generic.length === 0,
+  toolRender.generic?.length
+    ? `fell through: ${toolRender.generic.join(" | ")}`
+    : "none",
+);
+check(
+  "7b. execute calls render as terminal panels",
+  Number(toolRender.terminalPanels) > 0 || Number(toolRender.rows) === 0,
+  `${toolRender.terminalPanels} panels of ${toolRender.rows} rows`,
 );
 
 // --- a real message round-trip -------------------------------------------
@@ -373,7 +510,7 @@ check(
 // The one check that proves the socket, the prompt path and the stream all
 // work: send a trivial prompt and wait for the agent's text to appear.
 const beforeSend = await evaluate(`document.body.innerText.length`);
-await evaluate(typeInto('Reply with exactly: pong'));
+await evaluate(typeInto("Reply with exactly: pong"));
 await evaluate(`
 	(() => {
 		const area = document.querySelector('textarea[aria-label="Message"]');
@@ -382,12 +519,46 @@ await evaluate(`
 	})()
 `);
 
+// The turn-status row must appear while the turn runs. Sampled immediately
+// after the send, because the whole point is the window before the first
+// token — the gap that used to render as an empty pane. Against a fast local
+// agent it can already be gone, so "seen, or the reply already arrived" is the
+// honest assertion.
+const statusSeen = await evaluate(`
+	(() => {
+		const row = document.querySelector('[data-slot="turn-status"]');
+		return row ? (row.getAttribute('aria-label') || 'present') : null;
+	})()
+`);
+
 const replied = await waitFor(
-	'a reply',
-	`/pong/i.test(document.body.innerText)`,
-	120_000
+  "a reply",
+  `/pong/i.test(document.body.innerText)`,
+  120_000,
 ).catch(() => false);
-check('send: a prompt round-trips and the reply renders', Boolean(replied), `before ${beforeSend} chars`);
+check(
+  "send: a prompt round-trips and the reply renders",
+  Boolean(replied),
+  `before ${beforeSend} chars`,
+);
+check(
+  "send: a live turn status row appears",
+  Boolean(statusSeen) || Boolean(replied),
+  statusSeen ?? "turn finished before the first sample",
+);
+
+// The row must be gone once the turn ends: a status that outlives its turn
+// would claim the agent is still working.
+const statusCleared = await waitFor(
+  "the turn status to clear",
+  `!document.querySelector('[data-slot="turn-status"]')`,
+  30_000,
+).catch(() => false);
+check(
+  "send: the turn status clears when the turn ends",
+  Boolean(statusCleared),
+  "cleared",
+);
 
 // Order matters: the answer must come AFTER the question. Reading text offsets
 // is not enough — the prompt's own text contains "pong" — so this walks the
@@ -418,38 +589,44 @@ const ORDER_EXPR = `
 `;
 
 const deadline = Date.now() + 90_000;
-let order = { ok: false, why: 'not evaluated' };
+let order = { ok: false, why: "not evaluated" };
 for (;;) {
-	order = await evaluate(ORDER_EXPR);
-	if (order?.ok) break;
-	if (Date.now() > deadline) break;
-	await new Promise((r) => setTimeout(r, 300));
+  order = await evaluate(ORDER_EXPR);
+  if (order?.ok) break;
+  if (Date.now() > deadline) break;
+  await new Promise((r) => setTimeout(r, 300));
 }
-check('send: the reply renders BELOW its prompt', Boolean(order?.ok), order?.why ?? 'unknown');
+check(
+  "send: the reply renders BELOW its prompt",
+  Boolean(order?.ok),
+  order?.why ?? "unknown",
+);
 
 // --- errors + paint -------------------------------------------------------
 
 check(
-	'no uncaught page errors',
-	pageErrors.length === 0,
-	pageErrors.slice(0, 2).join(' | ') || 'none'
+  "no uncaught page errors",
+  pageErrors.length === 0,
+  pageErrors.slice(0, 2).join(" | ") || "none",
 );
 check(
-	'no console errors',
-	consoleErrors.length === 0,
-	consoleErrors.slice(0, 2).join(' | ') || 'none'
+  "no console errors",
+  consoleErrors.length === 0,
+  consoleErrors.slice(0, 2).join(" | ") || "none",
 );
 
-const shot = await send('Page.captureScreenshot', { format: 'png' }, sessionId);
-writeFileSync('target/web-ui.png', Buffer.from(shot.data, 'base64'));
-check('page paints', shot.data.length > 10_000, `target/web-ui.png`);
+const shot = await send("Page.captureScreenshot", { format: "png" }, sessionId);
+writeFileSync("target/web-ui.png", Buffer.from(shot.data, "base64"));
+check("page paints", shot.data.length > 10_000, `target/web-ui.png`);
 
 for (const result of results) {
-	console.log(
-		`${result.ok ? 'PASS' : 'FAIL'}  ${result.name}${result.detail ? ` — ${result.detail}` : ''}`
-	);
+  console.log(
+    `${result.ok ? "PASS" : "FAIL"}  ${result.name}${result.detail ? ` — ${result.detail}` : ""}`,
+  );
 }
 const failed = results.filter((r) => !r.ok).length;
-console.log(`\n${results.length - failed}/${results.length} browser checks passed`);
+console.log(
+  `\n${results.length - failed}/${results.length} browser checks passed`,
+);
 socket.close();
 process.exit(failed > 0 ? 1 : 0);

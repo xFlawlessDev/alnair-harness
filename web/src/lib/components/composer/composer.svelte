@@ -6,11 +6,14 @@
 	import * as Tooltip from '#lib/components/ui/tooltip/index.js';
 	import type {
 		AccessMode,
+		BranchEntry,
 		ComposerContext,
 		ContextUsage,
 		FileEntry,
+		GitContext,
 		ModelOption,
-		SlashCommand
+		SlashCommand,
+		WorktreeEntry
 	} from '#lib/harness/types.js';
 	import {
 		filterCommands,
@@ -40,6 +43,9 @@
 		effort,
 		usage,
 		context,
+		git,
+		branches,
+		worktrees,
 		busy,
 		commands = [],
 		onsend,
@@ -48,13 +54,21 @@
 		oneffort,
 		onaccess,
 		onbrowse,
-		onsearch
+		onsearch,
+		onbranch,
+		onworktree,
+		onrefreshgit,
+		onrefreshcontext
 	}: {
 		models: ModelOption[];
 		model: string;
 		effort: string;
 		usage: ContextUsage;
 		context: ComposerContext;
+		/** The session's repository, when it has one. */
+		git?: GitContext;
+		branches?: BranchEntry[];
+		worktrees?: WorktreeEntry[];
 		busy: boolean;
 		/** Commands the agent advertised; empty until it does. */
 		commands?: SlashCommand[];
@@ -77,6 +91,21 @@
 		 * `alnair/fs/search`.
 		 */
 		onsearch?: (query: string) => Promise<FileEntry[]>;
+		/** Check out a branch; `create` makes a new one at HEAD. */
+		onbranch?: (name: string, create?: boolean) => void;
+		/** Create a worktree from the current checkout. */
+		onworktree?: (label: string, gitRef?: string) => void;
+		/** Re-read the repository (branch, worktrees) from disk. */
+		onrefreshgit?: () => void;
+		/**
+		 * Re-read the exact context snapshot (`alnair/session/info`).
+		 *
+		 * The ring's figure streams with the conversation, but the itemized
+		 * breakdown — system prompt, tool definitions, turn and tool-call
+		 * counters — only exists in the snapshot. Asking on open is what makes
+		 * the panel describe the session now rather than when it attached.
+		 */
+		onrefreshcontext?: () => void;
 	} = $props();
 
 	let draft = $state('');
@@ -368,7 +397,7 @@
 				<div class="ml-auto flex items-center gap-1.5">
 					<ModelPicker {models} {model} {effort} {onmodel} {oneffort} />
 
-					<ContextMeter {usage} />
+					<ContextMeter {usage} onopen={() => onrefreshcontext?.()} />
 
 					{#if busy}
 						<Tooltip.Root>
@@ -401,6 +430,14 @@
 			</div>
 		</div>
 
-		<CheckoutBar {context} />
+		<CheckoutBar
+			{context}
+			{git}
+			branches={branches ?? []}
+			worktrees={worktrees ?? []}
+			onbranch={(name, create) => onbranch?.(name, create)}
+			onworktree={(label, ref) => onworktree?.(label, ref)}
+			onrefreshgit={() => onrefreshgit?.()}
+		/>
 	</form>
 </div>

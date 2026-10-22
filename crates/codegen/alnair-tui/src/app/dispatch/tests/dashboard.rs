@@ -5055,3 +5055,252 @@ fn dashboard_attach_build_roster_row_keeps_disk_resume() {
         "expected Build disk resume with roster cwd, got {effects:?}"
     );
 }
+
+/* ------------------------------------------------------- session CRUD */
+
+/// Two titled agents on the dashboard, with the first selected.
+///
+/// The rows need real titles: the dashboard hides empty sessions, so a
+/// placeholder agent would make `dashboard_neighbor_row` return `None` and the
+/// cursor assertions below would pass for the wrong reason.
+fn dashboard_with_two_sessions() -> (AppView, AgentId, AgentId) {
+    let mut app = test_app_with_agent();
+    let first = AgentId(0);
+    let second = AgentId(1);
+    let session = make_test_agent_session(&app, second, "second-session");
+    let mut agent = AgentView::new(session, ScrollbackState::new());
+    agent.generated_session_title = Some("Second".into());
+    app.agents.insert(second, agent);
+    app.next_agent_id = 2;
+    if let Some(a) = app.agents.get_mut(&first) {
+        a.generated_session_title = Some("First".into());
+    }
+
+    app.active_view = ActiveView::AgentDashboard;
+    ensure_dashboard_state(&mut app);
+    if let Some(d) = app.dashboard.as_mut() {
+        d.focus_row(crate::views::dashboard::DashboardRowId::TopLevel(first));
+    }
+    (app, first, second)
+}
+
+/// The first `Ctrl+Shift+D` arms and does nothing destructive.
+#[test]
+fn dashboard_delete_first_press_arms_without_deleting() {
+    let (mut app, first, _) = dashboard_with_two_sessions();
+
+    let effects = dispatch(Action::DashboardDelete, &mut app);
+
+    assert!(
+        effects.is_empty(),
+        "the first press must not act, got {effects:?}"
+    );
+    assert!(
+        app.agents.contains_key(&first),
+        "the agent must still be open"
+    );
+    let armed = app
+        .dashboard
+        .as_ref()
+        .and_then(|d| d.delete_confirm.clone());
+    assert_eq!(
+        armed.map(|(row, _)| row),
+        Some(crate::views::dashboard::DashboardRowId::TopLevel(first)),
+        "the delete confirm must name the selected row",
+    );
+}
+
+/// The second press closes the agent AND emits the delete effect.
+#[test]
+fn dashboard_delete_second_press_closes_and_deletes() {
+    let (mut app, first, _) = dashboard_with_two_sessions();
+    dispatch(Action::DashboardDelete, &mut app);
+
+    let effects = dispatch(Action::DashboardDelete, &mut app);
+
+    assert!(
+        !app.agents.contains_key(&first),
+        "the closed agent must be dropped from the view",
+    );
+    assert!(
+        effects.iter().any(|effect| matches!(
+            effect,
+            Effect::DeleteSession { source, session_id, cwd }
+                if source == "local" && session_id == "test-session" && cwd == "/tmp"
+        )),
+        "expected DeleteSession for the selected session, got {effects:?}",
+    );
+    assert!(
+        app.dashboard
+            .as_ref()
+            .is_some_and(|d| d.delete_confirm.is_none()),
+        "the confirm must be cleared once it fires",
+    );
+}
+
+/// A delete confirm does not survive moving the cursor to another row.
+///
+/// The disarm cannot live only in the key handler: a mouse click moves the
+/// cursor through `focus_row` without ever reaching `handle_key`, and a
+/// confirmation bound to a row the user has left is a confirmation for the
+/// wrong row. This drives the state helper directly, which is the path every
+/// cursor move goes through.
+#[test]
+fn dashboard_delete_confirm_disarms_when_the_cursor_moves() {
+    use crate::views::dashboard::{DashboardRowId, DashboardState};
+
+    let first = DashboardRowId::TopLevel(AgentId(0));
+    let second = DashboardRowId::TopLevel(AgentId(1));
+    let mut state = DashboardState::new();
+    state.focus_row(first.clone());
+    state.delete_confirm = Some((first.clone(), std::time::Instant::now()));
+
+    state.focus_row(second.clone());
+
+    assert!(
+        state.delete_confirm.is_none(),
+        "moving the cursor must disarm the delete",
+    );
+
+    // Re-arming on the new row, then re-focusing the SAME row, keeps it: the
+    // confirm still names the row under the cursor.
+    state.delete_confirm = Some((second.clone(), std::time::Instant::now()));
+    state.focus_row(second);
+    assert!(
+        state.delete_confirm.is_some(),
+        "re-focusing the same row must not disarm its own confirmation",
+    );
+}
+
+/// Deleting the only session is refused: there would be nothing left to render.
+#[test]
+fn dashboard_delete_refuses_the_only_session() {
+    let mut app = test_app_with_agent();
+    let only = AgentId(0);
+    if let Some(a) = app.agents.get_mut(&only) {
+        a.generated_session_title = Some("Only".into());
+    }
+    app.active_view = ActiveView::AgentDashboard;
+    ensure_dashboard_state(&mut app);
+    if let Some(d) = app.dashboard.as_mut() {
+        d.focus_row(crate::views::dashboard::DashboardRowId::TopLevel(only));
+    }
+
+    dispatch(Action::DashboardDelete, &mut app);
+    let effects = dispatch(Action::DashboardDelete, &mut app);
+
+    assert!(
+        app.agents.contains_key(&only),
+        "the only session must survive"
+    );
+    assert!(
+        !effects
+            .iter()
+            .any(|effect| matches!(effect, Effect::DeleteSession { .. })),
+        "no delete may be emitted for the last session, got {effects:?}",
+    );
+}
+
+/// Stop and delete are separate confirmations: arming one must not fire the
+/// other.
+#[test]
+fn dashboard_stop_confirm_does_not_authorize_delete() {
+    let (mut app, first, _) = dashboard_with_two_sessions();
+
+    // Arm stop, then press delete: the stop confirm must not satisfy delete.
+    dispatch(Action::DashboardStop, &mut app);
+    let effects = dispatch(Action::DashboardDelete, &mut app);
+
+    assert!(
+        app.agents.contains_key(&first),
+        "delete must still be armed, not fired"
+    );
+    assert!(
+        !effects
+            .iter()
+            .any(|effect| matches!(effect, Effect::DeleteSession { .. })),
+        "a stop confirm must never authorize a delete, got {effects:?}",
+    );
+}
+
+/// The picker's `NewSession` purpose routes to the create action, not to the
+/// dashboard-moving one.
+#[test]
+fn dashboard_location_picker_new_session_creates_without_moving() {
+    let mut app = test_app();
+    app.active_view = ActiveView::AgentDashboard;
+    let dir = std::env::temp_dir();
+    let target = dunce::canonicalize(&dir).unwrap_or(dir);
+    let state = crate::views::location_picker::LocationPickerState::new(
+        vec![],
+        std::path::PathBuf::from("/base"),
+        std::collections::HashMap::new(),
+    );
+    app.dashboard = Some(crate::views::dashboard::DashboardState::new());
+    if let Some(d) = app.dashboard.as_mut() {
+        d.location_picker = Some(crate::views::location_picker::LocationPicker::new(
+            state,
+            crate::views::location_picker::LocationPickerPurpose::NewSession,
+        ));
+    }
+    let before = app.cwd.clone();
+
+    let effects = dispatch(
+        Action::DashboardCreateAgentInDirectory {
+            input: target.to_string_lossy().into_owned(),
+        },
+        &mut app,
+    );
+
+    assert_eq!(
+        app.cwd, before,
+        "creating elsewhere must not re-target the dashboard",
+    );
+    assert!(
+        effects
+            .iter()
+            .any(|effect| matches!(effect, Effect::CreateSession { cwd, .. } if cwd == &target)),
+        "expected a CreateSession in the chosen directory, got {effects:?}",
+    );
+}
+
+/// A bad path keeps the modal open with an inline error, exactly like `/cd`.
+#[test]
+fn dashboard_create_in_directory_rejects_a_missing_path() {
+    let mut app = test_app();
+    app.active_view = ActiveView::AgentDashboard;
+    app.dashboard = Some(crate::views::dashboard::DashboardState::new());
+    if let Some(d) = app.dashboard.as_mut() {
+        d.location_picker = Some(crate::views::location_picker::LocationPicker::new(
+            crate::views::location_picker::LocationPickerState::new(
+                vec![],
+                std::path::PathBuf::from("/base"),
+                std::collections::HashMap::new(),
+            ),
+            crate::views::location_picker::LocationPickerPurpose::NewSession,
+        ));
+    }
+
+    let effects = dispatch(
+        Action::DashboardCreateAgentInDirectory {
+            input: "/definitely/not/a/real/dir".into(),
+        },
+        &mut app,
+    );
+
+    assert!(
+        effects.is_empty(),
+        "nothing may be created, got {effects:?}"
+    );
+    let error = app
+        .dashboard
+        .as_ref()
+        .and_then(|d| d.location_picker.as_ref())
+        .and_then(|lp| lp.state.error.clone());
+    assert!(
+        error
+            .as_ref()
+            .is_some_and(|message| message.contains("Not a directory")),
+        "the modal must show the reason, got {error:?}",
+    );
+}

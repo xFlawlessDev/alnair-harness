@@ -13,8 +13,22 @@
 	 * `ContextInfo` actually reports. The agent measures the system prompt,
 	 * the tool definitions, and all non-system conversation items as one
 	 * estimate, so files and memory have no separate figure here.
+	 *
+	 * Two figures move at different rates. `used` streams in on every frame
+	 * (`_meta.totalTokens`, the same source the TUI's context bar reads), so the
+	 * ring and the percentage are live. The itemized breakdown — system prompt,
+	 * tool definitions, the turn and tool-call counters — is only in the
+	 * snapshot, so opening the panel re-reads `alnair/session/info` rather than
+	 * showing whatever the attach happened to capture.
 	 */
-	let { usage }: { usage: ContextUsage } = $props();
+	let {
+		usage,
+		onopen
+	}: {
+		usage: ContextUsage;
+		/** Re-read the exact snapshot; called when the panel opens. */
+		onopen?: () => void;
+	} = $props();
 
 	/**
 	 * Whether the agent has reported a window yet.
@@ -73,6 +87,8 @@
 				aria-label={known
 					? `Context ${formatPercent(percent / 100)} used`
 					: 'Context usage unknown'}
+				onmouseenter={() => onopen?.()}
+				onfocus={() => onopen?.()}
 			>
 				<span class={['tabular font-mono text-[11.5px]', known ? tone : 'text-ink-tertiary']}>
 					{known ? formatPercent(percent / 100) : '—'}

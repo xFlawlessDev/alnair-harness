@@ -239,7 +239,10 @@ fn dispatch_move_pager_cwd(app: &mut AppView, path: std::path::PathBuf) -> Vec<E
 /// process cwd: a global strip spans repositories, so re-rooting the pager
 /// would silently change where unrelated later actions resolve relative
 /// paths. `/cd` remains the explicit way to move the pager itself.
-fn dispatch_new_session_in_dir(app: &mut AppView, path: std::path::PathBuf) -> Vec<Effect> {
+pub(in crate::app::dispatch) fn dispatch_new_session_in_dir(
+    app: &mut AppView,
+    path: std::path::PathBuf,
+) -> Vec<Effect> {
     use super::session::lifecycle::dispatch_new_session_inner;
 
     // The project picker's question is answered by this dialog; asking it

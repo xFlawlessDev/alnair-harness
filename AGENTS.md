@@ -204,8 +204,15 @@ modal:
 | Purpose | Opened by | Enter does |
 |---|---|---|
 | `Dashboard` | `Ctrl+L`, `/cd`, the header label | retarget the dashboard's dispatch cwd |
-| `NewSession` | `/new`, the strip's `+` | create a session in that directory |
+| `NewSession` | `/new`, the strip's `+`, the dashboard's `Ctrl+Shift+N` | create a session in that directory |
 | `PagerCwd` | `Ctrl+L` on Welcome | move the pager, create nothing |
+
+The dashboard's `Ctrl+Shift+N` (`DashboardNewAgentInDirectory`) is the
+`NewSession` case reached from the dashboard surface: it creates one agent
+elsewhere and leaves the dashboard's own dispatch cwd alone. That is the whole
+difference from `Ctrl+L`, and it is why the answer routes to
+`DashboardCreateAgentInDirectory` rather than `DashboardChangeLocation` — the
+picker's `purpose` decides which, inside `handle_location_picker_input`.
 
 `AppView::location_picker` hosts the non-dashboard purposes (routed before the
 view dispatch, painted after the view body so it overlays whatever is in
@@ -223,6 +230,32 @@ resolve relative paths — `/cd` stays the explicit way to move it.
 The Welcome screen's menu rows come from `views::welcome::welcome_menu_items`,
 shared by the renderer and the input handler. That is what keeps an inserted
 row from being painted with one meaning and dispatched with another.
+
+### Dashboard CRUD
+
+The dashboard is the session list, so it owns the session's own lifecycle
+verbs: rename (`Ctrl+R`), stop/close (`Ctrl+X`), delete (`Ctrl+Shift+D`), and
+new-in-a-directory (`Ctrl+Shift+N`). Rename and new already existed; the other
+two are the 0.1.21 additions.
+
+**Stop and delete are different actions and must stay that way.** `Ctrl+X`
+closes the agent view and leaves the transcript on disk (resumable via
+`/resume`); `Ctrl+Shift+D` destroys it through `alnair/session/delete`. They
+carry separate confirm slots (`stop_confirm` / `delete_confirm`) precisely so a
+user who armed "close" cannot confirm a delete: sharing one slot would make the
+destructive chord read like the reversible one. Both use the same
+`STOP_CONFIRM_WINDOW`, and any key that is neither the stop nor the delete chord
+disarms both — a confirmation bound to a row that the cursor has left is a
+confirmation for the wrong row.
+
+Delete refuses the last session. `dispatch_sessions_confirm_close` refuses it
+too (there would be nothing left to render), and deleting the only transcript
+would leave the pager on Welcome with the agent still holding a handle to a
+session that no longer exists.
+
+The delete path closes the agent view FIRST, then emits `Effect::DeleteSession`,
+because the agent-side handler shuts down any live actor for the id. Doing it
+the other way round leaves a row pointing at a transcript that is gone.
 
 Tab chords are context-gated for the same reason `Ctrl+.` is: without the kitty
 keyboard protocol `Ctrl+Tab` arrives as a plain CR, which is `FocusPrompt` /

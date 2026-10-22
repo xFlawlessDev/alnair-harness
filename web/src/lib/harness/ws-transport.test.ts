@@ -207,6 +207,29 @@ describe('ws-transport: handshake', () => {
 		expect(request.params).toMatchObject({ sessionId: 's1', cwd: '/repo/app' });
 	});
 
+	it('closes the replay window when session/load answers', async () => {
+		// The store opens the gate before the request; only the transport sees
+		// the response, so only it can close the gate. Without this the gate
+		// stays in `replay` for the session's whole life: every later frame
+		// applies unconditionally and the watermark never arms, so a reconnect
+		// replays the transcript on top of one that already holds it.
+		const { transport, frames } = makeTransport();
+		const connected = transport.connect();
+		await settle();
+		const socket = FakeSocket.instances[0];
+		answer(socket, 'initialize', {});
+		await connected;
+
+		const opened = transport.openSession('s1', '/repo/app');
+		await settle();
+		answer(socket, 'session/load', { models: { availableModels: [] } });
+		await opened;
+
+		const marker = frames.find((entry) => entry.frame.method === 'session/load:result');
+		expect(marker, 'the load response must close the replay gate').toBeDefined();
+		expect(marker!.sessionId).toBe('s1');
+	});
+
 	it('switches the model with the underscore method name', async () => {
 		// `session/setModel` is answered "Method not found"; ACP spells it
 		// `session/set_model`, and the effort rides in `_meta`.

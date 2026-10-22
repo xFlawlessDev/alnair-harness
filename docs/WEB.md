@@ -192,19 +192,75 @@ produces on demand (a parked questionnaire, an exhausted retry).
   drives a real agent, so `HarnessStore` starts in `phase: 'connecting'` with
   every scripted value cleared and the page paints a skeleton. Seeding the
   fixtures "until data arrives" shows a conversation the user never had.
+- **`_meta["alnair/tool"]` is the only reliable tool identity.** Every one of
+  Alnair's own tools reaches the wire with ACP `kind: "other"`, and the title is
+  model-authored. The canonical envelope — `{ name, kind, label, read_only,
+  input }` — is what distinguishes a subagent spawn (`kind: "task"`) from a
+  questionnaire (`kind: "ask_user"`) from an ordinary call. Reading only `kind`
+  renders both as "other Tool: …", which is exactly what happened before
+  `toolMetaOf` existed. The envelope is merged across updates by the agent, so a
+  later update that omits `_meta` keeps the earlier identity.
+- **A subagent spawn has no tool row.** `subagent_spawned` / `_progress` /
+  `_finished` build the card; the tool call that triggered it would duplicate it
+  with a worse row. The reducer projects zero parts for `kind: "task"` and
+  REMOVES any row a preceding identity-less announcement created — the
+  announcement arrives before the identity is stamped, so a naive append leaves
+  a stale "other Tool: spawn_subagent" beside the card.
+- **A questionnaire is a card, not a tool row.** `kind: "ask_user"` projects a
+  `question` part keyed `ask-<toolCallId>`, the same id `questionFromRequest`
+  uses, so the live reverse request refines the replay-built card instead of
+  adding a second one. Both `interaction_resolved` and the call's own completion
+  mark it resolved.
+- **The context meter streams; its breakdown does not.** Every persisted frame
+  carries `_meta.totalTokens` — the same figure the TUI's context bar reads — so
+  the ring and the percentage move live (`applyContextUsed`). The itemized rows
+  (system prompt, tool definitions, turn and tool-call counters) exist only in
+  `alnair/session/info`, so the panel re-reads it on open. `Overhead` absorbs
+  the difference in between, which is honest: the agent does not itemize it.
+- **`openSession` sets the active id before it attaches.** `receive` drops
+  frames for any session that is not active, so a caller that attached without
+  switching (a fresh `createSession`, the survivor after a delete) would open a
+  replay window and throw the whole replay away — an empty transcript for a
+  session that has history.
+- **The checkout row is three reads.** `alnair/git/info` names the root and
+  branch, `alnair/git/branches` fills the picker, `alnair/git/worktree/list`
+  fills the checkout menu. All three resolve from the session's own cwd, so a
+  session already inside a worktree sees that worktree's repo. Outside a repo
+  every one of them errors and the row disappears rather than claiming a branch.
+- **A remote-tracking ref cannot be checked out directly.** `checkoutBranch`
+  strips the remote prefix and creates a local branch (`create: true`), which is
+  what the TUI's own branch picker does.
+- **Session CRUD is optimistic and rolls back.** Rename and delete apply to the
+  store first (the sidebar is what the user is looking at) and restore the
+  previous state when the agent refuses — a session still on disk must stay in
+  the list. Delete also moves the view off the row before the request goes out,
+  because `alnair/session/delete` shuts down any live actor for the id.
+- **The turn-status row is derived, not pushed.** The browser has no tracker;
+  `activity.ts` reads the last meaningful part of the open turn. An open turn
+  with no parts yet is `Thinking` — exactly the case that used to render as an
+  empty pane for the first seconds of a turn. `busy` is
+  `localBusy || openTurnId !== undefined`, so a turn the TUI is driving shows
+  its status here too.
+- **Terminal output is normalized at the render boundary.** The agent strips
+  ANSI before sending a command's output, but MCP tools and older transcripts
+  reach the same renderer, so `terminal-output.ts` strips escapes and collapses
+  `\r` rewrites. `\r` alone moves the cursor; only an erase sequence clears a
+  line, which is why a `\r`-terminated line keeps its text.
 
 ## Verifying it against a live leader
 
-Three scripts, each answering a different question:
+Five scripts, each answering a different question:
 
 | Script | Question |
 |---|---|
 | `node scripts/web-verify.mjs http://127.0.0.1:2420` | Does every wire call the UI makes actually work? 14 assertions over the roster, load, models, context, commands, subagents and both file RPCs. |
-| `node scripts/web-browser-test.mjs http://127.0.0.1:2420` | Does the page render and work? Drives headless Chrome/Edge over CDP: skeleton → UI, sessions, model menu, context meter, slash menu, `@` listing and search, a real prompt round-trip, and reply ordering. Writes `target/web-ui.png`. |
+| `node scripts/web-browser-test.mjs http://127.0.0.1:2420` | Does the page render and work? Drives headless Chrome/Edge over CDP: skeleton → UI, session CRUD menu, the checkout row, sessions, model menu, context meter, slash menu, `@` listing and search, tool-call rendering, a real prompt round-trip, the turn-status row and reply ordering. Writes `target/web-ui.png`. |
+| `node scripts/web-tool-render-check.mjs http://127.0.0.1:2420 <sessionId>` | How was each tool call actually drawn? Dumps every trace row, the terminal panels' text, and counts of question and subagent cards. This is the check that catches a tool falling through to the generic "other Tool: …" row. Writes `target/web-tools.png`. |
+| `node scripts/web-session-probe.mjs http://127.0.0.1:2420 <sessionId>` | What did `session/load` replay? Prints the load keys and frame counts, and writes `target/replay-frames.json`, which `web/src/lib/harness/replay-dump.test.ts` folds through the reducer. An empty transcript has two causes — the wire sent nothing, or the reducer dropped it — and only the dump tells them apart. |
 | `node scripts/web-probe.mjs http://127.0.0.1:2420` | What does the wire actually say? Dumps raw shapes, including the flat-vs-nested ext envelope side by side. |
 
-No Playwright or Puppeteer: the browser test drives an installed Chrome/Edge
-through Node's built-in `WebSocket`, so it adds no dependency.
+No Playwright or Puppeteer: the browser tests drive an installed Chrome/Edge
+through Node's built-in `WebSocket`, so they add no dependency.
 
 ## Not provided, by design
 

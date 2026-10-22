@@ -49,6 +49,7 @@ import type {
 	PermissionPart,
 	PermissionRequest,
 	QuestionAnswer,
+	QuestionChoice,
 	QuestionPart,
 	QuestionPrompt,
 	QuestionRequest,
@@ -85,6 +86,35 @@ export interface ToolState {
 	backgrounded?: { taskId: string; outputFile?: string; description?: string };
 	/** Set when a permission request gates this call. */
 	pendingPermission?: { options: PermissionPart['options'] };
+	/**
+	 * The update's `_meta`, kept because it carries the canonical tool identity
+	 * (`alnair/tool`: name, kind, label). That is the only reliable way to tell
+	 * a subagent spawn from an ordinary tool call: the ACP `kind` is `other`
+	 * for every Alnair tool, and the title is model-authored.
+	 */
+	meta?: Record<string, unknown>;
+}
+
+/** The `_meta["alnair/tool"]` envelope, as `CanonicalToolMeta` serializes it. */
+export interface CanonicalToolMeta {
+	version?: number;
+	/** The harness-specific model-facing name, e.g. `spawn_subagent`. */
+	name?: string;
+	/** The semantic kind, e.g. `task`, `ask_user`, `execute`. */
+	kind?: string;
+	namespace?: string;
+	/** Cross-harness display label, e.g. `Subagent`, `Ask User`. */
+	label?: string;
+	read_only?: boolean;
+	input?: Record<string, unknown>;
+}
+
+/** Read the canonical identity the agent stamped onto a tool call, if any. */
+export function toolMetaOf(
+	meta: Record<string, unknown> | undefined
+): CanonicalToolMeta | undefined {
+	const value = meta?.['alnair/tool'];
+	return value && typeof value === 'object' ? (value as CanonicalToolMeta) : undefined;
 }
 
 export interface SubagentState {
@@ -250,6 +280,36 @@ function appendUserChunk(acc: Acc, chunk: string, at: number): Acc {
 /** Append a part to the open turn, creating one if the agent sent updates first. */
 function pushPart(acc: Acc, part: TurnPart, at: number): Acc {
 	if (acc.openTurnId === undefined) {
+		// An ambient part — a notice, an error — is system chatter, not the
+		// agent working. Opening a turn for it would leave a turn marked
+		// `streaming` that no `turn_completed` will ever close, and the UI
+		// would show a spinner and a stop button for a session that is idle.
+		// That is exactly what a replay ending in `session_recap` produced.
+		//
+		// It joins the previous turn when there is one (a recap belongs after
+		// the turn it recaps), and otherwise becomes a standalone `system`
+		// turn that never streams.
+		if (isAmbient(part)) {
+			// Attach to the nearest assistant/system turn, never to a user
+			// prompt: a recap under a prompt the user just sent would read as
+			// the agent's reply.
+			const host = [...acc.turns].reverse().find((turn) => turn.role !== 'user');
+			if (host) {
+				const turns = acc.turns.map((turn) =>
+					turn.id === host.id ? { ...turn, parts: [...turn.parts, part] } : turn
+				);
+				return { ...acc, turns };
+			}
+			const turn: Turn = {
+				id: newId(),
+				role: 'system',
+				status: 'complete',
+				at: new Date(at).toISOString(),
+				parts: [part]
+			};
+			return { ...acc, turns: [...acc.turns, turn] };
+		}
+
 		const turn: Turn = {
 			id: newId(),
 			role: 'assistant',
@@ -266,6 +326,16 @@ function pushPart(acc: Acc, part: TurnPart, at: number): Acc {
 }
 
 /**
+ * Whether a part describes the SYSTEM rather than the agent's work.
+ *
+ * A notice or an error can arrive with no turn open — a recap, a retry banner,
+ * a compaction line. Those must not be mistaken for the start of a turn.
+ */
+function isAmbient(part: TurnPart): boolean {
+	return part.kind === 'notice' || part.kind === 'error';
+}
+
+/**
  * Upsert a part keyed by its id. Streaming chunks and tool updates both land
  * here, so a row that already exists is refined rather than duplicated.
  */
@@ -275,6 +345,23 @@ function upsertPart(acc: Acc, id: string, part: TurnPart, at: number): Acc {
 		return patchPart(acc, turn.id, id, () => part);
 	}
 	return pushPart(acc, part, at);
+}
+
+/**
+ * Remove every part a tool call projected.
+ *
+ * A call can start as one kind of row and become another: a subagent spawn is
+ * announced before its identity is stamped, and once it is, the tool row must
+ * give way to the subagent card rather than sit beside it. Multi-diff calls
+ * project several parts, all sharing the call id as a prefix.
+ */
+function dropToolParts(acc: Acc, toolCallId: string): Acc {
+	const owned = (id: string) => id === toolCallId || id.startsWith(`${toolCallId}-`);
+	const turns = acc.turns.map((turn) => {
+		const parts = turn.parts.filter((part) => !owned(part.id));
+		return parts.length === turn.parts.length ? turn : { ...turn, parts };
+	});
+	return { ...acc, turns };
 }
 
 /* -------------------------------------------------------------- text parts */
@@ -373,8 +460,13 @@ const languageOf = (path: string): string => {
 	return dot === -1 ? 'text' : path.slice(dot + 1);
 };
 
-const numbered = (value: string, start = 1): NumberedLine[] =>
-	value.split('\n').map((line, index) => ({ n: start + index, text: line }));
+const numbered = (value: string, start = 1): NumberedLine[] => {
+	// A file that ends in a newline is not a file with a blank last line: the
+	// terminal newline terminates the previous line. Splitting naively would
+	// paint a phantom numbered row at the end of every file the agent writes.
+	const text = value.endsWith('\n') ? value.slice(0, -1) : value;
+	return text.split('\n').map((line, index) => ({ n: start + index, text: line }));
+};
 
 interface ImageMeta {
 	width?: number;
@@ -410,11 +502,33 @@ function imagePart(
  * Turn a finished tool call into the row that fits it. The agent's `kind` picks
  * the family; the content picks the variant. Nothing here invents a path or a
  * line count — a read that returned an error stays a plain tool row.
+ *
+ * Two families are identified by the canonical `_meta["alnair/tool"]` identity
+ * rather than by the ACP kind, because Alnair stamps every one of its own tools
+ * as `other`: a subagent spawn and a questionnaire are both `other` on the wire
+ * and only their identity says what they are.
  */
 export function toolToParts(tool: ToolState, now: number): TurnPart[] {
 	const status = statusFromTool(tool.status);
 	const durationMs = durationOf(tool, now);
 	const content = tool.content as ({ type: string } & Record<string, unknown>)[];
+	const identity = toolMetaOf(tool.meta);
+
+	// A subagent spawn has its own card, folded from `subagent_spawned` /
+	// `_progress` / `_finished`. The tool call itself would duplicate it with a
+	// worse row, so it is dropped — the same rule the TUI applies in
+	// `is_task_tool`. The spawn event is persisted alongside the call, so a
+	// replay keeps the card.
+	if (identity?.kind === 'task' || identity?.kind === 'agent_swarm') {
+		return [];
+	}
+
+	// A questionnaire is a card, not a tool row. The id matches the one
+	// `questionFromRequest` uses, so a live reverse request refines this card
+	// instead of adding a second one.
+	if (identity?.kind === 'ask_user') {
+		return [questionPartFromTool(tool, status)];
+	}
 
 	// A backgrounded execute is a task, not a finished call.
 	if (tool.backgrounded) {
@@ -546,6 +660,7 @@ export function toolToParts(tool: ToolState, now: number): TurnPart[] {
 			command,
 			cwd: (tool.rawInput as { cwd?: string })?.cwd,
 			output: textBlock?.text ?? '',
+			exitCode: exitCodeOf(tool.rawOutput),
 			status,
 			durationMs
 		};
@@ -558,6 +673,22 @@ export function toolToParts(tool: ToolState, now: number): TurnPart[] {
 }
 
 /**
+ * The exit code an execute call reported.
+ *
+ * `BashOutput` carries `exit_code` (snake_case, because it is a Rust struct
+ * serialized without a rename). A backgrounded or still-running task has none,
+ * which is why this returns `undefined` rather than 0: an absent code means
+ * "not known", and painting `exit 0` on a running command would claim success
+ * before it finished.
+ */
+function exitCodeOf(rawOutput: unknown): number | undefined {
+	if (!rawOutput || typeof rawOutput !== 'object') return undefined;
+	const record = rawOutput as { exit_code?: unknown; exitCode?: unknown };
+	const value = record.exit_code ?? record.exitCode;
+	return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
+}
+
+/**
  * The fallback row. `name` is the tool the model called when the agent named it
  * in `_meta`; otherwise the title is all there is, and the row shows just that.
  */
@@ -567,17 +698,76 @@ function genericToolPart(
 	durationMs: number,
 	output?: string
 ): ToolPart {
-	const meta = tool as ToolState & { _meta?: { toolName?: string } };
+	// The model-facing name lives in the canonical identity; `kind` is the ACP
+	// fallback (`other` for every Alnair tool), so it is the last resort.
+	const identity = toolMetaOf(tool.meta);
 	const rawInput = tool.rawInput === undefined ? undefined : JSON.stringify(tool.rawInput, null, 2);
 	return {
 		kind: 'tool',
 		id: tool.toolCallId,
-		name: meta._meta?.toolName ?? tool.kind,
+		name: identity?.name ?? tool.kind,
 		summary: tool.title,
 		input: rawInput && rawInput.length <= 400 ? rawInput : undefined,
 		output,
 		status,
 		durationMs
+	};
+}
+
+/**
+ * Build the questionnaire card from an `ask_user_question` tool call.
+ *
+ * The live path gets a richer card from the reverse request (`questionFromRequest`),
+ * which also carries the plan-mode flag. This one exists for replay, where the
+ * reverse request was never persisted and the tool call is all that is left —
+ * and so a card that was answered still renders as answered instead of
+ * vanishing from the transcript.
+ *
+ * The id matches `questionFromRequest`'s, so whichever arrives second refines
+ * the same card rather than adding a duplicate.
+ */
+function questionPartFromTool(tool: ToolState, status: PartStatus): QuestionPart {
+	const raw = (tool.rawInput ?? {}) as { questions?: unknown; variant?: unknown };
+	const list = Array.isArray(raw.questions) ? raw.questions : [];
+
+	const questions: QuestionPrompt[] = list
+		.map((entry): QuestionPrompt | undefined => {
+			if (!entry || typeof entry !== 'object') return undefined;
+			const record = entry as Record<string, unknown>;
+			const question = typeof record.question === 'string' ? record.question : '';
+			if (!question) return undefined;
+			const options = Array.isArray(record.options) ? record.options : [];
+			return {
+				question,
+				multiSelect: record.multiSelect === true || record.multi_select === true,
+				choices: options
+					.map((option): QuestionChoice | undefined => {
+						if (!option || typeof option !== 'object') return undefined;
+						const choice = option as Record<string, unknown>;
+						const label = typeof choice.label === 'string' ? choice.label : '';
+						if (!label) return undefined;
+						return {
+							label,
+							description: typeof choice.description === 'string' ? choice.description : '',
+							preview: typeof choice.preview === 'string' ? choice.preview : undefined
+						};
+					})
+					.filter((choice): choice is QuestionChoice => choice !== undefined)
+			};
+		})
+		.filter((question): question is QuestionPrompt => question !== undefined);
+
+	return {
+		kind: 'question',
+		id: `ask-${tool.toolCallId}`,
+		toolCallId: tool.toolCallId,
+		questions,
+		mode: 'default',
+		// The call is only done once the agent has the answers; a pending or
+		// failed call means the user never answered, which is still "resolved"
+		// for rendering purposes — the card must not claim the agent is waiting
+		// on a call that will never be answered.
+		resolved: status !== 'running' && status !== 'pending'
 	};
 }
 
@@ -648,11 +838,15 @@ export function reduceAcpUpdate(input: Acc, update: SessionUpdate, ctx: ReduceCo
 				locations: call.locations ?? [],
 				startedAt: existing?.startedAt ?? now,
 				backgrounded: existing?.backgrounded,
-				pendingPermission: existing?.pendingPermission
+				pendingPermission: existing?.pendingPermission,
+				meta: call._meta ?? existing?.meta
 			};
 			const next = { ...acc, tools: { ...acc.tools, [call.toolCallId]: tool } };
 			// Show the row immediately; it is refined when the call finishes.
-			return upsertPart(next, call.toolCallId, toolToParts(tool, now)[0], now);
+			// A subagent spawn has no row of its own (the subagent card covers
+			// it), so an empty projection must not create a turn.
+			const parts = toolToParts(tool, now);
+			return parts.reduce((current, part) => upsertPart(current, part.id, part, now), next);
 		}
 
 		case 'tool_call_update': {
@@ -671,17 +865,17 @@ export function reduceAcpUpdate(input: Acc, update: SessionUpdate, ctx: ReduceCo
 				rawInput: fields.rawInput ?? existing.rawInput,
 				rawOutput: fields.rawOutput ?? existing.rawOutput,
 				locations: fields.locations ?? existing.locations,
+				// `_meta` is merged by the agent across updates, but a later
+				// update may omit it entirely; keep what the first one carried.
+				meta: (fields as { _meta?: Record<string, unknown> })._meta ?? existing.meta,
 				endedAt: settled ? (existing.endedAt ?? now) : existing.endedAt
 			};
 			const next = { ...acc, tools: { ...acc.tools, [fields.toolCallId]: tool } };
 			const parts = toolToParts(tool, now);
-			return parts.reduce(
-				(current, part, index) =>
-					index === 0
-						? upsertPart(current, fields.toolCallId, part, now)
-						: pushPart(current, part, now),
-				next
-			);
+			// A part that no longer applies (a subagent call, which the card
+			// covers) must not leave its old row behind.
+			const current = parts.length === 0 ? dropToolParts(next, fields.toolCallId) : next;
+			return parts.reduce((acc, part) => upsertPart(acc, part.id, part, now), current);
 		}
 
 		case 'plan': {
@@ -829,10 +1023,12 @@ export function reduceExtUpdate(acc: Acc, update: ExtSessionUpdate, ctx: ReduceC
 					description: event.description
 				}
 			};
-			return {
-				...acc,
-				tools: { ...acc.tools, [event.tool_call_id]: next }
-			};
+			// Re-project the row: a backgrounded execute is a running task, and
+			// the row must say so (its `status` becomes `running` and it carries
+			// the task id) rather than staying a completed call.
+			const withTool = { ...acc, tools: { ...acc.tools, [event.tool_call_id]: next } };
+			const parts = toolToParts(next, now);
+			return parts.reduce((current, part) => upsertPart(current, part.id, part, now), withTool);
 		}
 
 		case 'task_completed': {
@@ -1021,7 +1217,10 @@ export function reduceExtUpdate(acc: Acc, update: ExtSessionUpdate, ctx: ReduceC
 			const { [event.tool_call_id]: _resolved, ...permissions } = acc.permissions;
 			const { [event.tool_call_id]: _parked, ...parked } = acc.parked;
 			const next = { ...acc, permissions, parked };
-			return resolveCardById(next, `perm-${event.tool_call_id}`);
+			// Both card kinds are keyed by the tool call; resolve whichever one
+			// this call produced.
+			const withPermission = resolveCardById(next, `perm-${event.tool_call_id}`);
+			return resolveCardById(withPermission, `ask-${event.tool_call_id}`);
 		}
 
 		case 'turn_completed': {
@@ -1132,7 +1331,11 @@ export function questionFromRequest(acc: Acc, request: AskUserQuestionRequest, n
 		resolved: false,
 		questions: projected.questions
 	};
-	return pushPart(acc, part, now);
+	// The same tool call may already have projected a card from its `rawInput`
+	// (replay, or the `tool_call` frame that preceded this request). Upserting
+	// keeps one card and lets this richer version — which knows the mode and
+	// the agent's own option text — replace it.
+	return upsertPart(acc, part.id, part, now);
 }
 
 /**

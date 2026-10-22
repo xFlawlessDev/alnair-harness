@@ -18,15 +18,26 @@
 
 import type { AskUserQuestionResponse, SubagentLiveSnapshot } from './types/ext.js';
 import type { IncomingFrame, PlanOutcome, Transport } from './session-store.svelte.js';
-import type { ContextUsage, FileEntry, ModelOption, Session, SubagentSummary } from './types.js';
+import type {
+	BranchEntry,
+	ContextUsage,
+	FileEntry,
+	GitContext,
+	ModelOption,
+	Session,
+	SubagentSummary,
+	WorktreeEntry
+} from './types.js';
 import {
 	accessFromSession,
+	branchesFromWire,
 	contextFromInfo,
 	entriesFromNodes,
 	lastSegment,
 	modelsFromState,
 	sessionsFromRoster,
 	unwrapExt,
+	worktreesFromWire,
 	type FsNode,
 	type RosterRow
 } from './wire.js';
@@ -137,6 +148,16 @@ export class WebSocketTransport implements Transport {
 			mcpServers: []
 		})) as { models?: unknown; _meta?: Record<string, unknown> } | undefined;
 
+		// Close the replay window. The store opened it before the request went
+		// out, so every frame until now applied unconditionally; without this
+		// the gate would stay in `replay` for the session's whole life and the
+		// watermark would never arm — a reconnect would then replay the whole
+		// transcript on top of one that already holds it.
+		//
+		// The leader forwards buffered live frames AFTER this response, so they
+		// are compared against the watermark the replay just established.
+		this.frameSink?.(sessionId, { method: 'session/load:result', params: {} });
+
 		const { models, current } = modelsFromState(result?.models);
 		const meta = result?._meta ?? {};
 		return {
@@ -228,6 +249,131 @@ export class WebSocketTransport implements Transport {
 		const raw = await this.ext('alnair/subagent/list_running', { sessionId });
 		const payload = unwrapExt<{ subagents?: SubagentLiveSnapshot[] }>(raw);
 		return (payload?.subagents ?? []).map(fromLive);
+	}
+
+	// --- Transport: workspace administration --------------------------------
+
+	/**
+	 * Rename a session.
+	 *
+	 * `alnair/session/rename` writes the manual title to the session's summary
+	 * and broadcasts `session_summary_generated`, so the TUI's list updates too.
+	 * The title is rejected when blank (`Summary.title_is_manual` binds to a real
+	 * title), which is why the caller trims before sending.
+	 */
+	async renameSession(sessionId: string, title: string, cwd?: string): Promise<void> {
+		await this.ext('alnair/session/rename', {
+			sessionId,
+			title,
+			...(cwd ? { cwd } : {})
+		});
+	}
+
+	/**
+	 * Delete a session's history.
+	 *
+	 * This removes the transcript from disk and evicts it from the search index;
+	 * a live actor for the id is shut down first, so deleting the session you
+	 * are looking at is legal. The caller must then pick another session.
+	 */
+	async deleteSession(sessionId: string, cwd?: string): Promise<void> {
+		await this.ext('alnair/session/delete', {
+			sessionId,
+			...(cwd ? { cwd } : {})
+		});
+	}
+
+	/**
+	 * The repository behind a session.
+	 *
+	 * `alnair/git/info` resolves the git root from the session's cwd, so the
+	 * caller does not have to know whether it is a worktree. A session outside a
+	 * repo answers with an error, which the store treats as "no git context".
+	 */
+	async gitInfo(sessionId: string): Promise<GitContext | undefined> {
+		const raw = await this.ext('alnair/git/info', { sessionId });
+		const payload = unwrapExt<{
+			root?: unknown;
+			currentBranch?: unknown;
+			current_branch?: unknown;
+			defaultBranch?: unknown;
+			default_branch?: unknown;
+			remotes?: unknown;
+		}>(raw);
+		if (!payload || typeof payload.root !== 'string' || !payload.root) return undefined;
+
+		const branch =
+			typeof payload.currentBranch === 'string'
+				? payload.currentBranch
+				: typeof payload.current_branch === 'string'
+					? payload.current_branch
+					: undefined;
+		const defaultBranch =
+			typeof payload.defaultBranch === 'string'
+				? payload.defaultBranch
+				: typeof payload.default_branch === 'string'
+					? payload.default_branch
+					: undefined;
+		const remotes = Array.isArray(payload.remotes)
+			? payload.remotes.filter((value): value is string => typeof value === 'string')
+			: [];
+
+		return { root: payload.root, branch, defaultBranch, remotes };
+	}
+
+	/** Every branch in the session's repo, local and remote-tracking. */
+	async gitBranches(sessionId: string): Promise<BranchEntry[]> {
+		const raw = await this.ext('alnair/git/branches', { sessionId });
+		return branchesFromWire(raw).branches;
+	}
+
+	/**
+	 * Check out a branch.
+	 *
+	 * `create: true` makes a new branch at the current HEAD; checking out a
+	 * remote-tracking ref needs the same flag with the remote prefix stripped,
+	 * which is the caller's decision (it knows what the user picked).
+	 */
+	async gitCheckout(sessionId: string, branch: string, create = false): Promise<void> {
+		await this.ext('alnair/git/checkout', { sessionId, branch, create });
+	}
+
+	/**
+	 * The worktrees registered for a repo.
+	 *
+	 * `alnair/git/worktree/list` takes the REPO root, not a session id — unlike
+	 * the other `alnair/git/*` methods, which resolve the root from the session.
+	 * The caller reads it from `alnair/git/info`.
+	 */
+	async gitWorktrees(repo?: string): Promise<WorktreeEntry[]> {
+		if (!repo) return [];
+		const raw = await this.ext('alnair/git/worktree/list', { repo });
+		return worktreesFromWire(raw);
+	}
+
+	/**
+	 * Create a worktree and return its path.
+	 *
+	 * The agent answers `{ status: 'creating', worktreePath }` and copies ignored
+	 * files in the background, so the path is usable immediately. The caller
+	 * then starts a session there — this method does not.
+	 */
+	async gitCreateWorktree(request: {
+		sessionId: string;
+		sourcePath: string;
+		gitRef?: string;
+		label?: string;
+	}): Promise<string> {
+		const raw = await this.ext('alnair/git/worktree/create', {
+			sessionId: request.sessionId,
+			sourcePath: request.sourcePath,
+			...(request.gitRef ? { gitRef: request.gitRef } : {}),
+			...(request.label ? { label: request.label } : {})
+		});
+		const payload = unwrapExt<{ worktreePath?: unknown; status?: unknown }>(raw);
+		const path = typeof payload?.worktreePath === 'string' ? payload.worktreePath : '';
+		if (!path) throw new Error('the agent did not return a worktree path');
+		return path;
 	}
 
 	// --- Transport: turns ----------------------------------------------------

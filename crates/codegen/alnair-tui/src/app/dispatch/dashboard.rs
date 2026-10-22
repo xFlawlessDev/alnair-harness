@@ -665,8 +665,66 @@ pub(super) fn dispatch_dashboard_open_location_picker(app: &mut AppView) -> Vec<
     vec![]
 }
 
-/// Apply a location-picker / `/cd` selection. Resolves + validates the
-/// path, and on success updates `app.cwd` + the process cwd (so newly
+/// Start one agent in a directory chosen from the location picker, without
+/// re-targeting the dashboard.
+///
+/// This is the difference from [`dispatch_dashboard_change_location`]: that one
+/// moves the dashboard (and the process cwd) so every later dispatch lands in
+/// the new place. Here the user asked for one agent elsewhere — a global tab
+/// strip spans repositories, and silently re-rooting the dashboard would change
+/// where unrelated later actions resolve relative paths.
+///
+/// Validation mirrors the `/cd` path so a typo keeps the modal open with the
+/// same inline error instead of creating nothing.
+pub(super) fn dispatch_dashboard_create_agent_in_directory(
+    app: &mut AppView,
+    input: String,
+) -> Vec<Effect> {
+    if !matches!(app.active_view, ActiveView::AgentDashboard) {
+        app.show_toast("Open the dashboard (/dashboard) to dispatch elsewhere");
+        return vec![];
+    }
+    let path = match crate::views::location_picker::resolve_location_input(&input, &app.cwd)
+        .filter(|p| p.is_dir())
+    {
+        Some(p) => p,
+        None => {
+            if let Some(lp) = app
+                .dashboard
+                .as_mut()
+                .and_then(|d| d.location_picker.as_mut())
+            {
+                lp.state.error = Some(format!("Not a directory: {}", input.trim()));
+            } else if let Some(d) = app.dashboard.as_mut() {
+                d.set_error_toast(&format!("Not a directory: {}", input.trim()));
+            }
+            return vec![];
+        }
+    };
+
+    if let Some(d) = app.dashboard.as_mut() {
+        d.location_picker = None;
+    }
+
+    // The dashboard's staged worktree toggle only makes sense when the target
+    // directory is itself a repo — a worktree of a non-repo cannot exist.
+    let worktree = app.dashboard.as_ref().is_some_and(|d| d.dispatch_worktree)
+        && path.ancestors().any(|p| p.join(".git").exists());
+
+    if worktree {
+        let label = path
+            .file_name()
+            .map(|name| name.to_string_lossy().to_string())
+            .unwrap_or_default();
+        return dispatch_new_worktree_session(app, None, Some(label), None, None, None, None);
+    }
+
+    // `dispatch_new_session_in_dir` creates + attaches and keeps the dashboard's
+    // own cwd untouched, which is exactly the contract this action promises.
+    super::tabs::dispatch_new_session_in_dir(app, path)
+}
+
+/// Apply a location-picker / `/cd` selection. Resolves + validates the/// path, and on success updates `app.cwd` + the process cwd (so newly
 /// dispatched dashboard sessions spawn there) and closes the modal. On
 /// failure the modal stays open with an inline error and the cwd is
 /// unchanged.
@@ -1768,6 +1826,143 @@ pub(super) fn dispatch_dashboard_toggle_grouping(app: &mut AppView) -> Vec<Effec
         d.toggle_grouping();
     }
     dispatch_dashboard_persist(app)
+}
+
+/// Delete the selected session's stored history, after a second press.
+///
+/// This is the destructive sibling of [`dispatch_dashboard_stop`]: stop closes
+/// the agent and leaves the transcript on disk (resumable via `/resume`),
+/// delete removes it. The two confirm slots are separate so a user who armed
+/// "close" cannot accidentally confirm a delete.
+///
+/// The row is removed from the dashboard and its agent closed first, because
+/// the delete request shuts down any live actor for the id on the agent side —
+/// leaving the row pointing at a session whose transcript is gone would paint a
+/// session that can never load.
+pub(super) fn dispatch_dashboard_delete(app: &mut AppView) -> Vec<Effect> {
+    use crate::views::dashboard::DashboardRowId;
+    use std::time::Instant;
+
+    let Some(sel) = app.dashboard.as_ref().and_then(|d| d.selected.clone()) else {
+        return vec![];
+    };
+
+    let DashboardRowId::TopLevel(id) = sel else {
+        // Subagent rows belong to their parent's transcript (deleting one in
+        // isolation would leave the parent's history referring to a session
+        // that no longer exists) and roster rows are hosted elsewhere.
+        if let Some(d) = app.dashboard.as_mut() {
+            d.set_error_toast("Only top-level sessions can be deleted");
+        }
+        return vec![];
+    };
+
+    let now = Instant::now();
+    let already_confirming = app
+        .dashboard
+        .as_ref()
+        .and_then(|d| d.delete_confirm.as_ref())
+        .is_some_and(|(prev, t)| {
+            *prev == DashboardRowId::TopLevel(id)
+                && t.elapsed() < crate::views::dashboard::state::STOP_CONFIRM_WINDOW
+        });
+
+    if !already_confirming {
+        // First press: arm. Do NOT cancel a running turn — the delete request
+        // shuts the actor down itself, and cancelling first would make the
+        // user wait through a cancel round trip before the destructive action
+        // they just asked for.
+        if let Some(d) = app.dashboard.as_mut() {
+            d.delete_confirm = Some((DashboardRowId::TopLevel(id), now));
+        }
+        return vec![];
+    }
+
+    let Some(agent) = app.agents.get(&id) else {
+        if let Some(d) = app.dashboard.as_mut() {
+            d.delete_confirm = None;
+            d.set_error_toast("Session no longer exists");
+        }
+        return vec![];
+    };
+    let Some(session_id) = agent.session.session_id.clone() else {
+        if let Some(d) = app.dashboard.as_mut() {
+            d.delete_confirm = None;
+            d.set_error_toast("Session has no id yet — try again in a moment");
+        }
+        return vec![];
+    };
+    let cwd = agent.session.cwd.display().to_string();
+
+    // Pick the cursor's next home BEFORE the row vanishes, so the selection
+    // lands on the neighbour rather than going stale.
+    let neighbor = dashboard_neighbor_row(app, &DashboardRowId::TopLevel(id));
+    if let Some(d) = app.dashboard.as_mut() {
+        d.delete_confirm = None;
+    }
+
+    // Close the agent view first. `dispatch_sessions_confirm_close` refuses to
+    // close the LAST session (there would be nothing left to render), which is
+    // exactly the case where deleting must also be refused — deleting the only
+    // session would leave the pager on a Welcome screen with the agent still
+    // holding a handle to a transcript that no longer exists.
+    if app.agents.len() == 1 {
+        if let Some(d) = app.dashboard.as_mut() {
+            d.set_error_toast("Cannot delete the only session");
+        }
+        return vec![];
+    }
+
+    let mut effects = dispatch_sessions_confirm_close(app, id);
+    if !app.agents.contains_key(&id) {
+        if let Some(d) = app.dashboard.as_mut() {
+            match neighbor {
+                Some(n) => d.focus_row(n),
+                None => d.focus_new_agent_button(),
+            }
+        }
+        app.show_toast("Deleting session\u{2026}");
+        effects.push(Effect::DeleteSession {
+            source: "local".to_string(),
+            session_id: session_id.0.to_string(),
+            cwd,
+        });
+    }
+    effects
+}
+
+/// Ask for a directory, then start an agent there.
+///
+/// The picker is opened with [`crate::views::location_picker::LocationPickerPurpose::NewSession`],
+/// so the answer creates a session without re-targeting the dashboard's own
+/// dispatch cwd. That is the whole difference from Ctrl+L: `/cd` moves the
+/// dashboard, this creates one agent elsewhere and leaves the cursor's world
+/// unchanged.
+pub(super) fn dispatch_dashboard_new_agent_in_directory(app: &mut AppView) -> Vec<Effect> {
+    use crate::views::location_picker::LocationPickerPurpose;
+
+    if !matches!(app.active_view, ActiveView::AgentDashboard) {
+        app.show_toast("Open the dashboard (/dashboard) to dispatch elsewhere");
+        return vec![];
+    }
+    // Idempotent — re-triggering while open keeps the current query.
+    if app
+        .dashboard
+        .as_ref()
+        .is_some_and(|d| d.location_picker.is_some())
+    {
+        return vec![];
+    }
+
+    let modal = crate::views::location_picker::open_location_picker(
+        app.cwd.clone(),
+        LocationPickerPurpose::NewSession,
+        false,
+    );
+    if let Some(d) = app.dashboard.as_mut() {
+        d.location_picker = Some(modal);
+    }
+    vec![]
 }
 
 pub(super) fn dispatch_dashboard_select(app: &mut AppView, next: bool) {

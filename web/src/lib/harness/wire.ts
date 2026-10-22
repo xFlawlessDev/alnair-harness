@@ -158,6 +158,15 @@ export function sessionFromRoster(row: RosterRow): Session | undefined {
 		// `sessions/changed` delta may not, and reading absence as "not yolo"
 		// would let an unrelated tick clear an always-approve session.
 		yolo: typeof row.yolo === 'boolean' ? row.yolo : undefined,
+		// `isWorktree` says the session's cwd is a linked worktree. The checkout
+		// row reads it to name the checkout honestly; a thin delta may omit it,
+		// which stays `undefined` rather than claiming "not a worktree".
+		worktree:
+			typeof row.isWorktree === 'boolean'
+				? row.isWorktree
+				: typeof row.is_worktree === 'boolean'
+					? row.is_worktree
+					: undefined,
 		status: statusFromActivity(row.activity)
 	};
 }
@@ -352,6 +361,138 @@ function contextWindowFromMeta(meta: Record<string, unknown>): number {
 		if (typeof value === 'number' && value > 0) return value;
 	}
 	return 0;
+}
+
+/**
+ * The accumulated token count a session update carries.
+ *
+ * Every persisted frame is stamped with `_meta.totalTokens` — the TUI reads it
+ * from the same place (`acp/meta.rs`) to keep its context bar live. That makes
+ * the meter realtime without polling `alnair/session/info`: the itemized
+ * breakdown still comes from the snapshot, but the figure the meter shows moves
+ * with the stream.
+ */
+export function totalTokensOf(meta: unknown): number | undefined {
+	if (!meta || typeof meta !== 'object') return undefined;
+	const value = (meta as { totalTokens?: unknown }).totalTokens;
+	return typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : undefined;
+}
+
+/** The reasoning effort a model switch reported, if any. */
+export function reasoningEffortOf(update: unknown): string | undefined {
+	if (!update || typeof update !== 'object') return undefined;
+	const record = update as { reasoning_effort?: unknown; reasoningEffort?: unknown };
+	const value = record.reasoning_effort ?? record.reasoningEffort;
+	return typeof value === 'string' && value ? value : undefined;
+}
+
+/**
+ * One branch from `alnair/git/branches`.
+ *
+ * `GitBranchListData` is camelCase: `{ currentBranch, repoRoot, branches }`,
+ * each entry `{ name, current, remote }`.
+ */
+export interface GitBranch {
+	name: string;
+	current: boolean;
+	remote: boolean;
+}
+
+export interface GitBranchesPayload {
+	currentBranch?: string;
+	repoRoot?: string;
+	branches: GitBranch[];
+}
+
+export function branchesFromWire(raw: unknown): GitBranchesPayload {
+	const payload = unwrapExt<{
+		currentBranch?: unknown;
+		current_branch?: unknown;
+		repoRoot?: unknown;
+		repo_root?: unknown;
+		branches?: unknown;
+	}>(raw);
+	if (!payload || typeof payload !== 'object') return { branches: [] };
+
+	const list = Array.isArray(payload.branches) ? payload.branches : [];
+	const branches = list
+		.map((entry): GitBranch | undefined => {
+			if (!entry || typeof entry !== 'object') return undefined;
+			const row = entry as Record<string, unknown>;
+			const name = typeof row.name === 'string' ? row.name : '';
+			if (!name) return undefined;
+			return { name, current: row.current === true, remote: row.remote === true };
+		})
+		.filter((branch): branch is GitBranch => branch !== undefined);
+
+	return {
+		currentBranch:
+			typeof payload.currentBranch === 'string'
+				? payload.currentBranch
+				: typeof payload.current_branch === 'string'
+					? payload.current_branch
+					: undefined,
+		repoRoot:
+			typeof payload.repoRoot === 'string'
+				? payload.repoRoot
+				: typeof payload.repo_root === 'string'
+					? payload.repo_root
+					: undefined,
+		branches
+	};
+}
+
+/**
+ * One worktree from `alnair/git/worktree/list`.
+ *
+ * The DB row is `WorktreeRecord`-shaped; only the fields the picker needs are
+ * read, and a row missing its path is dropped rather than rendered as a blank
+ * line.
+ */
+export interface WorktreeEntry {
+	path: string;
+	branch?: string;
+	label?: string;
+	/** `true` for the worktree the session's cwd lives in. */
+	current: boolean;
+}
+
+export function worktreesFromWire(raw: unknown): WorktreeEntry[] {
+	const payload = unwrapExt<{ worktrees?: unknown; entries?: unknown }>(raw);
+	const list = Array.isArray(payload?.worktrees)
+		? payload.worktrees
+		: Array.isArray(payload?.entries)
+			? payload.entries
+			: Array.isArray(raw)
+				? raw
+				: [];
+
+	return list
+		.map((entry): WorktreeEntry | undefined => {
+			if (!entry || typeof entry !== 'object') return undefined;
+			const row = entry as Record<string, unknown>;
+			const path =
+				typeof row.path === 'string'
+					? row.path
+					: typeof row.worktreePath === 'string'
+						? row.worktreePath
+						: typeof row.worktree_path === 'string'
+							? row.worktree_path
+							: '';
+			if (!path) return undefined;
+			return {
+				path,
+				branch:
+					typeof row.branch === 'string'
+						? row.branch
+						: typeof row.gitRef === 'string'
+							? row.gitRef
+							: undefined,
+				label: typeof row.label === 'string' ? row.label : undefined,
+				current: row.current === true || row.isCurrent === true
+			};
+		})
+		.filter((entry): entry is WorktreeEntry => entry !== undefined);
 }
 
 /** The permission mode the runtime is actually in.

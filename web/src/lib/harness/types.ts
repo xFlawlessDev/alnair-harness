@@ -298,6 +298,8 @@ export interface Session {
 	gitRootDir?: string;
 	/** `yolo` on the roster: the session runs tools without asking. */
 	yolo?: boolean;
+	/** `isWorktree` on the roster: the cwd is a linked worktree. */
+	worktree?: boolean;
 	/** Derived: a live turn, a parked request, or neither. */
 	status: SessionStatus;
 }
@@ -452,6 +454,39 @@ export interface ComposerContext {
 	/** Branch, checkout, or worktree — the source of the code being edited. */
 	checkout: 'branch' | 'worktree' | 'detached';
 	access: AccessMode;
+	/** The repo root, when the session's git context reports one. */
+	gitRoot?: string;
+	/** `true` when the session's cwd is a worktree rather than the repo itself. */
+	isWorktree?: boolean;
+}
+
+/**
+ * One branch the repository has, from `alnair/git/branches`.
+ *
+ * `remote` marks a remote-tracking ref (`origin/main`); checking one out
+ * creates a local branch, which is why the picker groups them apart.
+ */
+export interface BranchEntry {
+	name: string;
+	current: boolean;
+	remote: boolean;
+}
+
+/** One git worktree, from `alnair/git/worktree/list`. */
+export interface WorktreeEntry {
+	path: string;
+	branch?: string;
+	label?: string;
+	/** The worktree the session's cwd lives in. */
+	current: boolean;
+}
+
+/** The repository a session works in, as the git extension reports it. */
+export interface GitContext {
+	root: string;
+	branch?: string;
+	defaultBranch?: string;
+	remotes: string[];
 }
 
 export interface WorkspaceInfo {

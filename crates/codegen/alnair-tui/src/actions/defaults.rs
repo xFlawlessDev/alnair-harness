@@ -914,6 +914,42 @@ pub fn default_actions(mouse_reporting_toggle_enabled: bool) -> Vec<ActionDef> {
             ),
         },
         ActionDef {
+            id: ActionId::DashboardDelete,
+            label: "delete",
+            description: "Delete session history",
+            // Ctrl+Shift+D. Ctrl+D is the Quit alias, and Ctrl+X is stop;
+            // deleting is the destructive sibling of closing, so it needs a
+            // chord the user cannot hit while reaching for either.
+            default_key: key!('D', CONTROL),
+            alt_keys: vec![],
+            category: Category::Dashboard,
+            context: When::DashboardFocused,
+            hint_priority: None,
+            hint_key_display: None,
+            requires_confirmation: true,
+            long_help: Some(
+                "Permanently deletes the selected session's stored conversation, after a second press to confirm.\nUnlike stop (Ctrl+X), which only closes the agent and keeps the transcript resumable, this removes it from disk.\nUse it to clear sessions you will never resume.",
+            ),
+        },
+        ActionDef {
+            id: ActionId::DashboardNewAgentInDirectory,
+            label: "new in dir",
+            description: "New agent in another directory",
+            // Ctrl+Shift+N. Ctrl+N is the plain new-session chord on the
+            // agent surfaces; the shifted form is its "somewhere else"
+            // sibling and never collides with it.
+            default_key: key!('N', CONTROL),
+            alt_keys: vec![],
+            category: Category::Dashboard,
+            context: When::DashboardFocused,
+            hint_priority: None,
+            hint_key_display: None,
+            requires_confirmation: false,
+            long_help: Some(
+                "Asks for a directory, then starts a new agent there without moving the dashboard.\nCtrl+L also changes directory, but it re-targets every later dashboard action too; this creates one agent elsewhere and leaves the dashboard where it was.\nThe directory must exist.",
+            ),
+        },
+        ActionDef {
             id: ActionId::DashboardCycleMode,
             label: "mode",
             description: "Cycle dispatch mode",

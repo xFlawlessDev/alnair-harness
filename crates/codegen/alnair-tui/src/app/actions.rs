@@ -779,6 +779,19 @@ pub enum Action {
     /// Stop / kill the selected row (top-level: cancel turn → close;
     /// subagent: kill). Double-press protected for top-level rows.
     DashboardStop,
+    /// Delete the selected session's stored history (`Ctrl+Shift+D`).
+    ///
+    /// Distinct from [`Self::DashboardStop`], which only closes the agent and
+    /// leaves the transcript on disk. This one destroys it, so it carries its
+    /// own two-press confirmation.
+    DashboardDelete,
+    /// Ask for a directory, then start an agent there.
+    ///
+    /// `/new` and the `[+ New Agent]` button create in the dashboard's current
+    /// cwd; this is the way to create somewhere else without moving the
+    /// dashboard (`Ctrl+L` does that, but changes where every later action
+    /// resolves relative paths).
+    DashboardNewAgentInDirectory,
     /// Cycle the dispatch input's mode for the next spawned agent
     /// (Normal → Plan → Always-Approve → Normal). Bound to Shift+Tab.
     DashboardCycleMode,
@@ -872,6 +885,15 @@ pub enum Action {
     /// `app.cwd`, validates the target is a directory, and on success
     /// updates `app.cwd` + the process cwd (via `Effect::SetWorkingDir`).
     DashboardChangeLocation {
+        input: String,
+    },
+    /// Start one agent in `input`, leaving the dashboard's own cwd alone.
+    ///
+    /// The location picker's `NewSession` purpose lands here. Distinct from
+    /// [`Self::DashboardChangeLocation`] because that one moves the dashboard:
+    /// with a global tab strip spanning repositories, re-rooting the dashboard
+    /// silently changes where every later relative action resolves.
+    DashboardCreateAgentInDirectory {
         input: String,
     },
     /// Confirm the dashboard worktree-label dialog: create the next

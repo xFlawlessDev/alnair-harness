@@ -126,6 +126,10 @@ pub enum ActionId {
     DashboardToggleAutoApprove,
     DashboardOpenLocationPicker,
     DashboardToggleWorktree,
+    /// Delete the selected session's stored history (two-press confirm).
+    DashboardDelete,
+    /// Start a new agent in a directory the location picker asks for.
+    DashboardNewAgentInDirectory,
 
     // Session tabs. All `When::Always`: the strip is visible on every surface.
     TabNext,

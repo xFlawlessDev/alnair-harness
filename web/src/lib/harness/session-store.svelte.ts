@@ -48,8 +48,10 @@ import type { SessionUpdate } from './types/acp.js';
 import type {
 	AccessMode,
 	AvailableCommand,
+	BranchEntry,
 	ContextUsage,
 	FileEntry,
+	GitContext,
 	GraphState,
 	ModelOption,
 	PermissionRequest,
@@ -62,12 +64,13 @@ import type {
 	TodoItem,
 	Turn,
 	WorkspaceGroup,
-	WorkspaceInfo
+	WorkspaceInfo,
+	WorktreeEntry
 } from './types.js';
 import { groupByWorkspace } from './workspaces.js';
 import { sortSubagents } from './subagents.js';
 import { admit, beginReplay, endReplay, eventIdOf, liveGate, type GateState } from './dedup.js';
-import { applyRosterDelta, relativeTo } from './wire.js';
+import { applyRosterDelta, lastSegment, relativeTo, totalTokensOf } from './wire.js';
 
 /** A frame the agent sent, plus the prompt it answers (if any). */
 export interface IncomingFrame {
@@ -129,6 +132,33 @@ export interface Transport {
 	}): Promise<FileEntry[]>;
 	/** Subagents running under a session right now. */
 	listSubagents?(sessionId: string): Promise<SubagentSummary[]>;
+
+	// --- workspace administration -------------------------------------------
+	//
+	// Session CRUD and git live on the same socket as everything else, so they
+	// belong here rather than in a second adapter: the store owns the session
+	// list, and a rename that the sidebar did not apply would be a lie.
+
+	/** `alnair/session/rename`: set the session's manual title. */
+	renameSession?(sessionId: string, title: string, cwd?: string): Promise<void>;
+	/** `alnair/session/delete`: remove the transcript and evict the actor. */
+	deleteSession?(sessionId: string, cwd?: string): Promise<void>;
+	/** `alnair/git/info`: the repo behind a session. */
+	gitInfo?(sessionId: string): Promise<GitContext | undefined>;
+	/** `alnair/git/branches`: every branch, local and remote-tracking. */
+	gitBranches?(sessionId: string): Promise<BranchEntry[]>;
+	/** `alnair/git/checkout`: switch branch, optionally creating it. */
+	gitCheckout?(sessionId: string, branch: string, create?: boolean): Promise<void>;
+	/** `alnair/git/worktree/list`: the repo's registered worktrees. */
+	gitWorktrees?(repo: string): Promise<WorktreeEntry[]>;
+	/** `alnair/git/worktree/create`: returns the new worktree's path. */
+	gitCreateWorktree?(request: {
+		sessionId: string;
+		sourcePath: string;
+		gitRef?: string;
+		label?: string;
+	}): Promise<string>;
+
 	/** A stored transcript, as `alnair/session/updates` returns it. */
 	sessionUpdates?(request: {
 		sessionId: string;
@@ -263,6 +293,40 @@ export interface SessionStore {
 	 * Empty when the transport cannot search files.
 	 */
 	searchFiles(query: string, dirs?: boolean): Promise<FileEntry[]>;
+
+	// --- workspace administration -------------------------------------------
+
+	/** The repository the active session works in, when it has one. */
+	readonly git: GitContext | undefined;
+	/** Every branch in that repo; empty until the picker asks for them. */
+	readonly branches: BranchEntry[];
+	/** The repo's registered worktrees; empty outside a repo. */
+	readonly worktrees: WorktreeEntry[];
+	/**
+	 * Rename the active session.
+	 *
+	 * The title is trimmed and rejected when blank: the agent refuses a
+	 * whitespace-only manual title, and a rename that silently did nothing would
+	 * leave the sidebar disagreeing with disk.
+	 */
+	renameSession(id: string, title: string): Promise<void>;
+	/** Delete a session's history and move the view off it. */
+	deleteSession(id: string): Promise<void>;
+	/** Start a session in `cwd` and make it the active one. */
+	createSession(cwd: string): Promise<void>;
+	/** Reload the git context, branches and worktrees for the active session. */
+	refreshGit(): Promise<void>;
+	/**
+	 * Re-read the exact context snapshot (`alnair/session/info`).
+	 *
+	 * The ring's figure already streams with the conversation; this refreshes
+	 * the itemized breakdown, which only the snapshot carries.
+	 */
+	refreshContext(): Promise<void>;
+	/** Check out a branch; `create` makes it at HEAD. */
+	checkoutBranch(name: string, create?: boolean): Promise<void>;
+	/** Create a worktree and start a session in it. */
+	createWorktree(label: string, gitRef?: string): Promise<void>;
 }
 
 const STREAM_TICK_MS = 24;
@@ -364,7 +428,20 @@ export class HarnessStore implements SessionStore {
 	 * read through `alnair/session/updates`, not a separate agent view.
 	 */
 	subagentTurns = $state<Turn[]>([]);
-	busy = $state(false);
+
+	/**
+	 * Whether a turn is in flight.
+	 *
+	 * Two sources, and the transcript wins: a turn the TUI is driving shows up
+	 * here as an open turn, and this tab must render its status even though it
+	 * never called `send()`. The local flag covers the gap between the send and
+	 * the first frame, when the agent has not acknowledged anything yet.
+	 */
+	private localBusy = $state(false);
+
+	get busy(): boolean {
+		return this.localBusy || this.acc.openTurnId !== undefined;
+	}
 
 	/**
 	 * Whether this store drives a real agent.
@@ -412,6 +489,9 @@ export class HarnessStore implements SessionStore {
 			this.access = 'ask';
 			this.context = emptyContextUsage();
 			this.planArtifact = undefined;
+			this.git = undefined;
+			this.branches = [];
+			this.worktrees = [];
 		}
 
 		// A real transport pushes frames for whichever session they belong to,
@@ -434,7 +514,7 @@ export class HarnessStore implements SessionStore {
 	 * may have persisted frames this view never saw.
 	 */
 	private reloadAfterReconnect() {
-		this.busy = false;
+		this.localBusy = false;
 		this.questionRequest = undefined;
 		this.planArtifact = undefined;
 		const sessionId = this.activeSessionId;
@@ -442,16 +522,23 @@ export class HarnessStore implements SessionStore {
 	}
 
 	/**
-	 * Attach to a session.
+	 * Attach to a session, making it the one in front.
 	 *
 	 * Resets the accumulator and opens the replay window BEFORE the request
 	 * goes out, so no frame can arrive against a stale watermark. The load
 	 * response then fills in what only it knows: the model catalog, the
 	 * session's current model, its mode, and the exact context totals.
+	 *
+	 * The active id is set FIRST, and that ordering is load-bearing: `receive`
+	 * drops frames for any session that is not the active one, so a caller that
+	 * attached without switching (a fresh `createSession`, the survivor after a
+	 * delete) would otherwise open a replay window and then throw the entire
+	 * replay away — an empty transcript for a session that has history.
 	 */
 	async openSession(sessionId: string) {
 		if (!this.transport.openSession) return;
 
+		this.activeSessionId = sessionId;
 		const session = this.sessions.find((candidate) => candidate.id === sessionId);
 		this.beginSessionLoad(sessionId);
 		const result = await this.transport.openSession(sessionId, session?.cwd);
@@ -487,6 +574,11 @@ export class HarnessStore implements SessionStore {
 		// `subagent_spawned` frames.
 		const running = await this.transport.listSubagents?.(sessionId);
 		if (running) this.subagents = sortSubagents(running);
+
+		// The checkout row reads this: a session's branch, and whether its cwd
+		// is a worktree, are properties of the directory rather than of the
+		// transcript, so they are fetched on attach and after every checkout.
+		await this.refreshGit();
 
 		if (this.phase === 'connecting') this.phase = 'ready';
 	}
@@ -600,7 +692,7 @@ export class HarnessStore implements SessionStore {
 		if (!this.sessions.some((session) => session.id === id)) return;
 		if (id === this.activeSessionId) return;
 		this.transport.stop();
-		this.busy = false;
+		this.localBusy = false;
 		this.activeSessionId = id;
 
 		const session = this.sessions.find((s) => s.id === id);
@@ -616,6 +708,12 @@ export class HarnessStore implements SessionStore {
 		// re-read by `openSession`, so clearing here only drops the old rows.
 		this.subagents = [];
 		this.subagentTurns = [];
+		// The git context belongs to the previous session's directory; clearing
+		// it now means the checkout row disappears rather than briefly naming
+		// another repo's branch. `openSession` re-reads it for this one.
+		this.git = undefined;
+		this.branches = [];
+		this.worktrees = [];
 
 		// Attach for real: `session/load` subscribes this client and replays the
 		// transcript. Without it the stream for this session never arrives.
@@ -697,7 +795,7 @@ export class HarnessStore implements SessionStore {
 		const sessionId = this.activeSessionId;
 		const now = Date.now();
 		this.write({ ...this.acc, ...openUserTurn(this.acc, prompt, now, this.model, this.effort) });
-		this.busy = true;
+		this.localBusy = true;
 		this.markSession(sessionId, { updatedAt: new Date(now).toISOString() });
 
 		this.transport.send(prompt, (frame) => this.receive(sessionId, frame));
@@ -711,13 +809,13 @@ export class HarnessStore implements SessionStore {
 		this.transport.cancelTurn?.();
 		const acc = closeTurn(this.acc, 'cancelled', undefined, Date.now());
 		this.write(acc);
-		this.busy = false;
+		this.localBusy = false;
 	}
 
 	clear() {
 		this.transport.stop();
 		this.write(emptyAcc());
-		this.busy = false;
+		this.localBusy = false;
 	}
 
 	/**
@@ -762,6 +860,213 @@ export class HarnessStore implements SessionStore {
 		} catch {
 			return [];
 		}
+	}
+
+	// --- workspace administration -------------------------------------------
+
+	/**
+	 * The active session's repository.
+	 *
+	 * Held as store state rather than re-read by every component: the checkout
+	 * row, the branch picker and the worktree list all answer from it, and they
+	 * must agree. `undefined` means "not a git repo", which the UI renders by
+	 * hiding the row rather than by pretending the checkout is a branch.
+	 */
+	git = $state<GitContext | undefined>(undefined);
+	branches = $state<BranchEntry[]>([]);
+	worktrees = $state<WorktreeEntry[]>([]);
+
+	/**
+	 * Rename a session.
+	 *
+	 * Applied optimistically: the sidebar is the surface the user is looking at,
+	 * and waiting for a round trip to redraw one string reads as a dropped
+	 * keystroke. A rejection puts the old title back.
+	 */
+	async renameSession(id: string, title: string): Promise<void> {
+		const next = title.trim();
+		if (!next) return;
+		const session = this.sessions.find((candidate) => candidate.id === id);
+		if (!session) return;
+
+		const previous = session.title;
+		this.markSession(id, { title: next });
+		if (!this.transport.renameSession) return;
+
+		try {
+			await this.transport.renameSession(id, next, session.cwd);
+		} catch {
+			this.markSession(id, { title: previous });
+		}
+	}
+
+	/**
+	 * Delete a session.
+	 *
+	 * The view moves off it first: deleting the transcript out from under the
+	 * open pane would leave the reducer folding frames for a session that no
+	 * longer exists. The row is dropped optimistically for the same reason the
+	 * rename is — but restored if the agent refuses, because a session that is
+	 * still on disk must stay in the list.
+	 */
+	async deleteSession(id: string): Promise<void> {
+		const session = this.sessions.find((candidate) => candidate.id === id);
+		if (!session) return;
+
+		const remaining = this.sessions.filter((candidate) => candidate.id !== id);
+		this.sessions = remaining;
+
+		if (id === this.activeSessionId) {
+			const next = remaining[0];
+			if (next) await this.openSession(next.id);
+			else {
+				this.activeSessionId = '';
+				this.accs = {};
+			}
+		}
+
+		if (!this.transport.deleteSession) return;
+		try {
+			await this.transport.deleteSession(id, session.cwd);
+		} catch {
+			// Refused: put the row back exactly where it was.
+			this.sessions = [...this.sessions, session].sort(
+				(a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime()
+			);
+		}
+	}
+
+	/**
+	 * Start a session in `cwd` and attach to it.
+	 *
+	 * The agent creates the session; the roster broadcast is what usually adds
+	 * the row, but the new id is known here, so the row is inserted directly and
+	 * the later delta refines it. Attaching immediately is what makes the new
+	 * session usable: without a `session/load` the stream never arrives.
+	 */
+	async createSession(cwd: string): Promise<void> {
+		if (!this.transport.newSession) return;
+		const sessionId = await this.transport.newSession(cwd);
+		const now = new Date().toISOString();
+		const created: Session = {
+			id: sessionId,
+			title: lastSegment(cwd) || 'New session',
+			cwd,
+			source: 'local',
+			numMessages: 0,
+			createdAt: now,
+			updatedAt: now,
+			workspace: lastSegment(cwd) || cwd,
+			status: 'idle'
+		};
+		if (!this.sessions.some((session) => session.id === sessionId)) {
+			this.sessions = [created, ...this.sessions];
+		}
+		await this.openSession(sessionId);
+	}
+
+	/**
+	 * Reload the git context for the active session.
+	 *
+	 * Three reads, one failure mode: a session outside a repo answers every one
+	 * of them with an error, and the checkout row disappears. Branches and
+	 * worktrees are fetched here rather than lazily because both menus open
+	 * instantly and an empty menu would read as "no branches exist".
+	 */
+	async refreshGit(): Promise<void> {
+		const sessionId = this.activeSessionId;
+		if (!sessionId || !this.transport.gitInfo) {
+			this.git = undefined;
+			this.branches = [];
+			this.worktrees = [];
+			return;
+		}
+
+		try {
+			this.git = await this.transport.gitInfo(sessionId);
+		} catch {
+			this.git = undefined;
+		}
+		if (!this.git) {
+			this.branches = [];
+			this.worktrees = [];
+			return;
+		}
+
+		const [branches, worktrees] = await Promise.all([
+			this.transport.gitBranches?.(sessionId).catch(() => [] as BranchEntry[]) ?? [],
+			this.transport.gitWorktrees?.(this.git.root).catch(() => [] as WorktreeEntry[]) ?? []
+		]);
+		this.branches = branches;
+		this.worktrees = worktrees;
+	}
+
+	/**
+	 * Re-read the exact context snapshot.
+	 *
+	 * Called when the meter opens, so the itemized rows describe the session
+	 * now rather than when the tab attached. A failed read keeps the previous
+	 * snapshot: the streamed `used` figure is still correct, and blanking the
+	 * panel would be worse than showing a slightly old breakdown.
+	 */
+	async refreshContext(): Promise<void> {
+		const sessionId = this.activeSessionId;
+		if (!sessionId || !this.transport.sessionContext) return;
+		try {
+			const context = await this.transport.sessionContext(sessionId);
+			if (context) this.context = context;
+		} catch {
+			// Keep the last known snapshot.
+		}
+	}
+
+	/**
+	 * Check out a branch.
+	 *
+	 * A remote-tracking ref cannot be checked out directly; git wants a local
+	 * branch tracking it. Stripping the remote prefix and creating the branch is
+	 * what the TUI's own branch picker does, and doing it here keeps the rule in
+	 * one place instead of in each menu.
+	 */
+	async checkoutBranch(name: string, create = false): Promise<void> {
+		const sessionId = this.activeSessionId;
+		if (!sessionId || !this.transport.gitCheckout) return;
+
+		const entry = this.branches.find((branch) => branch.name === name);
+		const local = entry?.remote ? name.split('/').slice(1).join('/') : name;
+		const shouldCreate = create || entry?.remote === true;
+
+		await this.transport.gitCheckout(sessionId, local, shouldCreate);
+		// The checkout changes the branch AND the file listing the `@` menu
+		// shows; refreshing both keeps the composer honest.
+		await this.refreshGit();
+		const session = this.sessions.find((candidate) => candidate.id === sessionId);
+		if (session) this.markSession(sessionId, { branch: local });
+	}
+
+	/**
+	 * Create a worktree and start a session in it.
+	 *
+	 * The worktree is created from the active session's cwd, so a session
+	 * already inside a worktree branches from that worktree — which is what the
+	 * TUI's dashboard does. The new session is a normal one; nothing about it
+	 * records that it lives in a worktree except its cwd, and that is enough
+	 * because `alnair/git/info` resolves the root from the cwd.
+	 */
+	async createWorktree(label: string, gitRef?: string): Promise<void> {
+		const sessionId = this.activeSessionId;
+		if (!sessionId || !this.transport.gitCreateWorktree) return;
+		const sourcePath = this.activeSession.cwd;
+		if (!sourcePath) return;
+
+		const path = await this.transport.gitCreateWorktree({
+			sessionId,
+			sourcePath,
+			gitRef,
+			label: label.trim() || undefined
+		});
+		await this.createSession(path);
+		await this.refreshGit();
 	}
 
 	answerPermission(optionId: string) {
@@ -862,7 +1167,7 @@ export class HarnessStore implements SessionStore {
 						? 'refused'
 						: 'complete';
 			this.write(closeTurn(this.acc, status, undefined, Date.now()));
-			this.busy = false;
+			this.localBusy = false;
 			return;
 		}
 
@@ -895,6 +1200,13 @@ export class HarnessStore implements SessionStore {
 		const verdict = admit(gate, eventIdOf(frame.params));
 		if (!verdict.apply) return;
 		this.gates = { ...this.gates, [sessionId]: verdict.state };
+
+		// The context meter follows the stream, not the attach snapshot: every
+		// persisted frame carries `_meta.totalTokens`, which is the same figure
+		// the TUI's context bar reads. Applied only for frames that survived the
+		// dedup gate, so a stale replay cannot pull the count backwards.
+		const tokens = totalTokensOf(frame.params._meta);
+		if (tokens !== undefined) this.applyContextUsed(tokens);
 
 		const ctx = { now: Date.now(), sessionId, modelId: this.model, effort: this.effort };
 		const acc = this.isExtFrame(frame.method)
@@ -932,9 +1244,16 @@ export class HarnessStore implements SessionStore {
 				const event = update as unknown as {
 					model_id?: string;
 					reasoning_effort?: string;
+					context_window?: number;
 				};
 				if (event.model_id) this.model = event.model_id;
 				if (event.reasoning_effort) this.effort = event.reasoning_effort;
+				// A model switch changes the window; the snapshot still holds the
+				// old one until the next `session/info`. The update carries the
+				// resolved figure, so the meter can move immediately.
+				if (typeof event.context_window === 'number' && event.context_window > 0) {
+					this.context = { ...this.context, limit: event.context_window };
+				}
 				return;
 			}
 			case 'subagent_spawned':
@@ -974,6 +1293,34 @@ export class HarnessStore implements SessionStore {
 			default:
 				return;
 		}
+	}
+
+	/**
+	 * Update the meter's used figure from a live frame.
+	 *
+	 * Mirrors the TUI's `AgentView::apply_context_used`: only `used` moves, and
+	 * the derived figures (`percent`, `freeTokens`) are recomputed against the
+	 * window already known. The itemized breakdown stays at its last snapshot
+	 * value on purpose — the wire does not re-send it per frame, and the panel
+	 * has an `Overhead` row that absorbs the difference, so growth shows up
+	 * honestly instead of being spread across categories that did not change.
+	 *
+	 * A zero window (no snapshot yet) is not guessed at: the figure is recorded
+	 * and the meter still renders `—` until `session/info` says how big the
+	 * window is.
+	 */
+	private applyContextUsed(used: number) {
+		const limit = this.context.limit;
+		if (limit <= 0) {
+			this.context = { ...this.context, used };
+			return;
+		}
+		this.context = {
+			...this.context,
+			used,
+			percent: Math.min(100, Math.round((used / limit) * 100)),
+			freeTokens: Math.max(0, limit - used)
+		};
 	}
 
 	private write(acc: Acc) {

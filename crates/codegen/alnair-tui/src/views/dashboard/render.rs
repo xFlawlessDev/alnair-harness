@@ -2863,6 +2863,28 @@ fn render_footer(
         return;
     }
 
+    // The delete confirm is its own slot and its own wording: `stop` closes an
+    // agent and keeps the transcript, `delete` destroys it. Sharing one line
+    // would make the destructive chord read like the reversible one.
+    let delete_confirm_live = state
+        .delete_confirm
+        .as_ref()
+        .is_some_and(|(_, t)| t.elapsed() < super::state::STOP_CONFIRM_WINDOW);
+    if delete_confirm_live {
+        let delete_key = registry
+            .find(crate::actions::ActionId::DashboardDelete)
+            .map(|d| d.default_key)
+            .unwrap_or_else(|| key!('D', CONTROL));
+        let pending = PendingHint {
+            shortcut: delete_key,
+            label: "DELETE this session's history",
+        };
+        ShortcutsBar::new(&[])
+            .with_pending(Some(pending))
+            .render(inner, buf);
+        return;
+    }
+
     // An in-flight rename owns the keyboard (`handle_key` routes to
     // `handle_rename_key` before anything else), so the footer shows
     // exactly its two actions instead of the dispatch + nav matrix.
@@ -2973,6 +2995,15 @@ fn render_footer(
             // Pinned so the stop chip always survives compact
             // truncation while an agent row is selected.
             hints.push(HintItem::new(stop, stop_label).pinned());
+        }
+        // The delete chord is destructive, so it is deliberately NOT pinned:
+        // it appears only while there is room, and never displaces `open`.
+        if stoppable {
+            let delete = key_for(
+                crate::actions::ActionId::DashboardDelete,
+                key!('D', CONTROL),
+            );
+            hints.push(HintItem::new(delete, "delete"));
         }
         ShortcutsBar::new(&hints)
             .compact(4, Some(HintItem::new(help, "shortcuts")))

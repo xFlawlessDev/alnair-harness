@@ -13,8 +13,9 @@ use super::ctx::{
 use super::dashboard::{
     dispatch_dashboard_attach, dispatch_dashboard_begin_rename, dispatch_dashboard_change_location,
     dispatch_dashboard_commit_rename, dispatch_dashboard_confirm_worktree,
-    dispatch_dashboard_create_new_agent_with_detail, dispatch_dashboard_dispatch,
-    dispatch_dashboard_dispatch_slash, dispatch_dashboard_open_location_picker,
+    dispatch_dashboard_create_agent_in_directory, dispatch_dashboard_create_new_agent_with_detail,
+    dispatch_dashboard_delete, dispatch_dashboard_dispatch, dispatch_dashboard_dispatch_slash,
+    dispatch_dashboard_new_agent_in_directory, dispatch_dashboard_open_location_picker,
     dispatch_dashboard_open_shortcuts_help, dispatch_dashboard_overlay_cycle,
     dispatch_dashboard_overlay_exit, dispatch_dashboard_overlay_stop,
     dispatch_dashboard_peek_cycle_mode, dispatch_dashboard_peek_reply,
@@ -1197,6 +1198,11 @@ pub(crate) fn dispatch(action: Action, app: &mut AppView) -> Vec<Effect> {
             vec![]
         }
         Action::DashboardChangeLocation { input } => dispatch_dashboard_change_location(app, input),
+        Action::DashboardCreateAgentInDirectory { input } => {
+            dispatch_dashboard_create_agent_in_directory(app, input)
+        }
+        Action::DashboardDelete => dispatch_dashboard_delete(app),
+        Action::DashboardNewAgentInDirectory => dispatch_dashboard_new_agent_in_directory(app),
         Action::DashboardConfirmWorktree { label } => {
             dispatch_dashboard_confirm_worktree(app, label)
         }
