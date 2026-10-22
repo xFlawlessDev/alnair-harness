@@ -302,12 +302,44 @@ describe('ws-transport: frames', () => {
 			}
 		});
 		expect(frames).toHaveLength(1);
-		// The method passes through verbatim: the reducer picks the extension
-		// decoder by this exact name.
-		expect(frames[0].frame.method).toBe('_alnair/session/update');
+		// The `_` is the gateway's extension marker, not part of the name, so the
+		// transport strips it once. Every consumer then matches on `alnair/…`,
+		// which is also what makes the wrapped reverse-request form readable.
+		expect(frames[0].frame.method).toBe('alnair/session/update');
 		expect((frames[0].frame.params.update as Record<string, unknown>).sessionUpdate).toBe(
 			'graph_updated'
 		);
+	});
+
+	it('unwraps a gateway-wrapped reverse request', async () => {
+		// This is the shape `ask_user_question` actually arrives in:
+		//   { method: "_alnair/ask_user_question",
+		//     params: { method: "alnair/ask_user_question", params: { … } } }
+		// Reading `params.sessionId` off the wrapper finds nothing, so the frame
+		// used to be dropped and the questionnaire never rendered.
+		const { socket, frames } = await connectedTransport();
+		socket.deliver({
+			jsonrpc: '2.0',
+			id: 77,
+			method: '_alnair/ask_user_question',
+			params: {
+				method: 'alnair/ask_user_question',
+				params: {
+					sessionId: 's1',
+					toolCallId: 'tc-ask',
+					mode: 'default',
+					questions: [{ question: 'Which option?', options: [] }]
+				}
+			}
+		});
+
+		expect(frames).toHaveLength(1);
+		expect(frames[0].frame.method).toBe('alnair/ask_user_question');
+		expect(frames[0].frame.params.sessionId).toBe('s1');
+		expect(frames[0].frame.params.toolCallId).toBe('tc-ask');
+		// The inner payload, not the wrapper: `questions` must be reachable at
+		// the top of `params`.
+		expect(Array.isArray(frames[0].frame.params.questions)).toBe(true);
 	});
 
 	it('routes alnair/session_notification to the extension decoder', async () => {

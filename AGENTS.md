@@ -430,6 +430,14 @@ connection overwrites, so only the newest client sees live deltas.
   `{ sessionId, update, _meta }` at the top of `params`, exactly like
   `session/update`; the `_` is only the gateway's marker. The store chooses its
   decoder by method NAME, so the transport must pass it through verbatim.
+- **But a BLOCKING ext reverse request is WRAPPED.** `ask_user_question` and
+  `exit_plan_mode` arrive as `{ method: "_alnair/<name>",
+  params: { method: "alnair/<name>", params: { … } } }` — the real payload sits
+  one level down. Reading `params.sessionId` off the wrapper finds nothing, so
+  the frame is dropped and a questionnaire parks the agent forever while the
+  page shows nothing. `normalizeFrame` (in `wire.ts`) is the ONE unwrapper: it
+  strips the `_` marker and descends into the wrapper when it sees one. Applied
+  at the transport boundary, never per call site.
 - **`session/set_model`, not `session/setModel`.** The camelCase spelling is
   "Method not found"; the effort rides in `_meta.reasoningEffort`.
   `session/load` also needs the session's own `cwd` (the agent resolves the
@@ -450,6 +458,39 @@ connection overwrites, so only the newest client sees live deltas.
 - **Attaching is subscribing.** `session/load` is what puts a client in
   `session_subscribers`; a UI that only switches its local index never receives
   that session's stream.
+- **Subagent rows are DERIVED, never stored.** The header's list is
+  `mergeSubagents(transcript.subagents, liveSubagents[sessionId])`: the
+  transcript half is durable (a `subagent_spawned` frame is persisted, so a
+  reload still knows every subagent the session started) and the live half adds
+  the counters only `alnair/subagent/list_running` reports. Assigning one stored
+  list is what made a running subagent invisible until its next frame, and made
+  a session switch look like the fix. Both halves are keyed by session id, so
+  `selectSession` clears nothing.
+- **`rawOutput.output` is a byte array, and it is the copy with the colour.**
+  `BashOutput` serializes `Vec<u8>`; `output_for_prompt` is the ANSI-stripped,
+  `exit: N`-prefixed copy the MODEL saw. Prefer the bytes: the terminal panel
+  renders their escapes through Shiki's `ansi` grammar, and the panel prints the
+  exit code in its own footer, so the prompt copy both lost the colour and
+  printed the status twice.
+- **ANSI is a WHOLE-BLOCK language.** Its escapes are stateful, so a colour
+  opened on one line applies to the next. Tokenizing per line reset the state
+  machine at every newline and painted a multi-line green header block as one
+  green line and the rest default-coloured. `useHighlightedCode(…, streaming =
+  false)` is how a caller says its text is replaced rather than appended.
+- **Highlighting is Shiki, already wired.** `web/src/lib/highlighter.ts` owns
+  theme selection (`github-light`/`github-dark` via `--shiki-*` variables), lazy
+  grammar loading and the streaming grammar state; markdown blocks, file reads,
+  diffs and terminal output all go through it. Do not add a second tokenizer
+  (`svelte-highlight`, highlight.js) for the same rendering — add a missing
+  language to the `languages` map instead.
+- **"Add a workspace" is the native picker plus a session.** A browser cannot
+  read an absolute path out of a directory handle (`showDirectoryPicker` yields
+  a leaf name), so `POST /api/pick-directory` runs the OS dialog in the server
+  process (`alnair-web/src/picker.rs`, one dialog at a time, bounded, gated by
+  the SAME cookie + `Origin` check as `/ws`). The chosen directory becomes a
+  workspace only by starting a session there — a sidebar-only entry would vanish
+  on reload. "Remove workspace" HIDES the group (`workspaceView`); deleting
+  transcripts is the separate, dialog-confirmed session delete.
 - **Client-side dedup is mandatory.** The leader dedups only WITHIN one load.
   Across loads the client must drop frames at or below its `eventId` watermark
   (`web/src/lib/harness/dedup.ts`), and a `session/load` opens a replay window

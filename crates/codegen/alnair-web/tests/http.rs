@@ -36,6 +36,32 @@ async fn start() -> (SocketAddr, CancellationToken) {
 /// `Content-Length` rather than waiting for EOF: a keep-alive server is not
 /// obliged to close the socket, and blocking on it would hang the test.
 async fn get(addr: SocketAddr, path: &str, extra_headers: &str) -> (u16, String, String) {
+    request(addr, "GET", path, extra_headers, "").await
+}
+
+/// A raw HTTP/1.1 POST with no body.
+///
+/// `Content-Length: 0` is required: axum's extractors wait for a declared body,
+/// so omitting it leaves the handler hanging rather than running it.
+async fn post(addr: SocketAddr, path: &str, extra_headers: &str) -> (u16, String, String) {
+    request(
+        addr,
+        "POST",
+        path,
+        &format!("Content-Length: 0\r\n{extra_headers}"),
+        "",
+    )
+    .await
+}
+
+/// One raw HTTP/1.1 exchange, returning (status, response head, body).
+async fn request(
+    addr: SocketAddr,
+    method: &str,
+    path: &str,
+    extra_headers: &str,
+    body: &str,
+) -> (u16, String, String) {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
     let mut stream = tokio::net::TcpStream::connect(addr).await.unwrap();
@@ -43,7 +69,7 @@ async fn get(addr: SocketAddr, path: &str, extra_headers: &str) -> (u16, String,
     // `Connection: Upgrade`, and sending both makes axum's upgrade extractor
     // reject the request with 400 before the auth check can run. The reader is
     // `Content-Length`-driven, so keep-alive is fine.
-    let request = format!("GET {path} HTTP/1.1\r\nHost: {addr}\r\n{extra_headers}\r\n");
+    let request = format!("{method} {path} HTTP/1.1\r\nHost: {addr}\r\n{extra_headers}\r\n{body}");
     stream.write_all(request.as_bytes()).await.unwrap();
 
     let mut raw = Vec::new();
@@ -256,6 +282,42 @@ async fn websocket_upgrade_from_a_foreign_origin_is_rejected() {
 			 Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nCookie: {cookie}\r\n\
 			 Origin: http://evil.example\r\n"
         ),
+    )
+    .await;
+    cancel.cancel();
+
+    assert_eq!(status, 403);
+    assert!(body.contains("origin"), "body should explain: {body}");
+}
+
+/// The folder picker opens a modal window on the user's desktop, so the gate is
+/// the same one `/ws` uses — and for a stronger reason: a dialog is a visible,
+/// disruptive action even though it mutates nothing.
+///
+/// A refusal must land BEFORE any chooser is spawned, which is why these two
+/// tests are safe to run on a machine with no desktop session.
+#[tokio::test]
+async fn pick_directory_without_a_cookie_is_rejected() {
+    let (addr, cancel) = start().await;
+    let (status, _, body) = post(addr, "/api/pick-directory", "Origin: http://127.0.0.1\r\n").await;
+    cancel.cancel();
+
+    assert_eq!(status, 403);
+    assert!(body.contains("cookie"), "body should explain: {body}");
+}
+
+#[tokio::test]
+async fn pick_directory_from_a_foreign_origin_is_rejected() {
+    let (addr, cancel) = start().await;
+
+    // A valid cookie, so only the Origin check can fail.
+    let (_, head, _) = get(addr, "/", "").await;
+    let cookie = cookie_of(&head).expect("cookie");
+
+    let (status, _, body) = post(
+        addr,
+        "/api/pick-directory",
+        &format!("Cookie: {cookie}\r\nOrigin: http://evil.example\r\n"),
     )
     .await;
     cancel.cancel();

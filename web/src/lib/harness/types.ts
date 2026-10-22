@@ -527,6 +527,14 @@ export interface SubagentSummary {
 	contextUsagePct: number;
 	toolsUsed: string[];
 	errorCount: number;
+	/**
+	 * The model the child runs, from `subagent_spawned`.
+	 *
+	 * Absent on the live snapshot (`list_running` does not carry it), so a row
+	 * built from the transcript keeps it and one built from a live read does
+	 * not. Nothing renders it as a required field.
+	 */
+	model?: string;
 	/** Present once the subagent finished. */
 	output?: string;
 	failureError?: string;

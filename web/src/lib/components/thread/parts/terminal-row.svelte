@@ -1,8 +1,10 @@
 <script lang="ts">
 	import TerminalIcon from '@lucide/svelte/icons/terminal';
+	import * as CodeBlock from '#lib/components/ui/code-block/index.js';
 	import * as Trace from '#lib/components/ui/trace/index.js';
 	import { formatDuration } from '#lib/harness/format.js';
-	import { commandSummary, terminalLines } from '#lib/harness/terminal-output.js';
+	import { commandSummary, hasAnsi, terminalLines } from '#lib/harness/terminal-output.js';
+	import { useHighlightedCode } from '#lib/hooks/use-highlighted-code.svelte.js';
 	import type { TerminalPart } from '#lib/harness/types.js';
 	import { traceStatus } from './status.js';
 
@@ -14,6 +16,13 @@
 	 * `$` prompt, the command, its output, and the exit status — once opened.
 	 * The panel is open while the command runs or after it failed, because
 	 * those are the two states a reader wants to see without asking.
+	 *
+	 * Colour comes from the output itself. A shell writes ANSI escapes (`ls`
+	 * marks directories, `git` colours diffs, a compiler reddens an error), and
+	 * the transcript keeps them, so the panel tokenizes with Shiki's `ansi`
+	 * grammar — the same highlighter the markdown code blocks already use.
+	 * Output without escapes skips that path entirely: it would produce one
+	 * default-coloured token per line and cost a grammar pass for nothing.
 	 */
 	let { part }: { part: TerminalPart } = $props();
 
@@ -31,10 +40,21 @@
 	});
 
 	const summary = $derived(commandSummary(part.command));
-	const lines = $derived(terminalLines(part.output));
-	/** The last few lines while running; the whole thing once it settles. */
-	const shown = $derived(running && lines.length > 12 ? lines.slice(-12) : lines);
+	/** Kept escaped, because the highlighter reads the escapes as colour. */
+	const lines = $derived(terminalLines(part.output, true));
+	/** The tail while running, the whole capture once it settles. */
+	const shown = $derived(running && lines.length > 14 ? lines.slice(-14) : lines);
 	const hidden = $derived(lines.length - shown.length);
+	const colored = $derived(shown.some(hasAnsi));
+
+	// `streaming = false`: a command's output arrives in bursts and is
+	// re-rendered as a whole, so the incremental path's prefix assumption does
+	// not hold. ANSI is a whole-block language anyway.
+	const highlighted = useHighlightedCode(
+		() => shown.join('\n'),
+		() => (colored ? 'ansi' : 'text'),
+		false
+	);
 
 	const exitLabel = $derived(
 		part.exitCode === undefined
@@ -43,6 +63,15 @@
 				? 'exit 0'
 				: `exit ${part.exitCode}`
 	);
+
+	/** A running command's output pane follows its tail, like a real terminal. */
+	let body: HTMLDivElement | null = $state(null);
+	$effect(() => {
+		// Reading the line count subscribes the effect to new output.
+		const lineCount = shown.length;
+		if (!running || !body || lineCount === 0) return;
+		body.scrollTop = body.scrollHeight;
+	});
 </script>
 
 {#snippet line()}
@@ -104,27 +133,43 @@
 					{#if running}
 						<span class="shrink-0 text-running">running</span>
 					{/if}
+					{#if lines.length > 0}
+						<span class="tabular shrink-0 text-ink-tertiary/60">{lines.length} lines</span>
+					{/if}
 				</div>
 
-				<div class="max-h-80 overflow-auto px-3 py-2.5 font-mono text-[11.5px] leading-[1.55]">
-					<!-- The prompt line: `$` then the command as typed, wrapping. -->
+				<!--
+					`whitespace-pre` and no wrapping: a terminal does not reflow a
+					long line, it scrolls sideways. Wrapping would also break column
+					alignment in `git log --graph` and in tables.
+				-->
+				<div
+					bind:this={body}
+					class="max-h-80 scrollbar-thin overflow-auto px-3 py-2.5 font-mono text-[11.5px] leading-[1.5]"
+					data-slot="terminal-body"
+				>
+					<!-- The prompt line: `$` then the command as typed. -->
 					<div class="flex gap-1.5">
 						<span class="shrink-0 text-success select-none">$</span>
-						<span class="min-w-0 break-all whitespace-pre-wrap text-ink">{part.command}</span>
+						<span class="min-w-0 whitespace-pre text-ink">{part.command}</span>
 					</div>
 
 					{#if hidden > 0}
-						<p class="mt-1.5 text-ink-tertiary">
+						<p class="mt-1.5 text-ink-tertiary/70">
 							… {hidden} earlier line{hidden === 1 ? '' : 's'} hidden
 						</p>
 					{/if}
 
 					{#if shown.length > 0}
-						<div class="mt-1.5 flex flex-col">
-							{#each shown as row, index (index)}
-								<span class="break-all whitespace-pre-wrap text-ink-secondary"
-									>{row || '\u00a0'}</span
-								>
+						<!--
+							One span per line, with the highlighter's tokens inside.
+							`CodeBlock.Line` is the same renderer the markdown blocks
+							use, so a colour here and a colour there come from the same
+							theme and cannot drift.
+						-->
+						<div class="mt-1 flex flex-col">
+							{#each highlighted.current as line, index (index)}
+								<CodeBlock.Line code={line} class="-mx-0 px-0" />
 							{/each}
 						</div>
 					{:else if !running}

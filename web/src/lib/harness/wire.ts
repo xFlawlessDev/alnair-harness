@@ -58,6 +58,56 @@ export function unwrapExt<T>(raw: unknown): T | undefined {
 	return raw as T;
 }
 
+/**
+ * Normalize one inbound frame to a plain `{ method, params }`.
+ *
+ * The gateway produces two wire forms for the same logical message, and the
+ * difference is invisible until a handler looks for a field and finds nothing:
+ *
+ * - **direct** — `{ "method": "alnair/foo", "params": { … } }`
+ * - **wrapped** — `{ "method": "_alnair/foo",
+ *    "params": { "method": "alnair/foo", "params": { … } } }`
+ *
+ * Ext *notifications* mostly arrive direct (`_alnair/session/update` carries a
+ * flat `sessionId`/`update`), while ext *reverse requests* — the blocking ones
+ * a client must answer, `ask_user_question` and `exit_plan_mode` — arrive
+ * wrapped. Reading the wrapper as if it were the payload yields no
+ * `sessionId`, so the frame is dropped before it can reach a component, and
+ * the questionnaire never renders.
+ *
+ * The leading `_` is the gateway's extension marker, not part of the name, so
+ * it is stripped: every consumer matches on `alnair/…`. That also fixes a
+ * silent drop — `_alnair/session_notification` did not match the extension
+ * rail, so `model_changed`, `pending_interaction` and `interaction_resolved`
+ * sent that way were decoded as ACP updates and discarded.
+ */
+export function normalizeFrame(
+	method: string,
+	params: Record<string, unknown>
+): { method: string; params: Record<string, unknown> } {
+	const inner = params.params;
+	if (typeof params.method === 'string' && inner !== null && typeof inner === 'object') {
+		return {
+			method: (params.method as string).replace(/^_/, ''),
+			params: inner as Record<string, unknown>
+		};
+	}
+	return { method: method.replace(/^_/, ''), params };
+}
+
+/**
+ * Whether a (normalized) method rides the extension rail.
+ *
+ * Two methods carry an Alnair extension payload: `alnair/session/update` (the
+ * persisted/replay form) and `alnair/session_notification` (the live one-shot
+ * form). Everything else is an ACP update. Callers normalize the `_` prefix
+ * first, so both spellings collapse here instead of at every call site.
+ */
+export function isExtMethod(method: string): boolean {
+	const name = method.replace(/^_/, '');
+	return name === 'alnair/session/update' || name === 'alnair/session_notification';
+}
+
 /** A roster row, as `alnair/sessions/list` sends it. */
 export interface RosterRow {
 	session_id?: unknown;

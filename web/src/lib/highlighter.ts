@@ -100,6 +100,18 @@ export async function loadHighlighter(language: string) {
 	}
 
 	return {
+		/**
+		 * Whether this language must be tokenized as ONE block.
+		 *
+		 * ANSI is the only one: its escapes are stateful, so a colour opened on
+		 * one line still applies to the next. Tokenizing per line reset that
+		 * state at every newline and painted multi-line output in the default
+		 * colour — `git log`'s green headers became three green words and then
+		 * plain text. A real grammar has no such cross-line state, which is why
+		 * everything else stays incremental (streaming depends on it).
+		 */
+		wholeBlock: lang === 'ansi',
+
 		// Returns the tokens of each line, and the grammar state after the last
 		// line. Pass that state back to continue where the code left off.
 		highlight(code: string, state?: GrammarState) {
@@ -111,10 +123,8 @@ export async function loadHighlighter(language: string) {
 					grammarState: state
 				}).tokens;
 
-			// ANSI has no grammar state, so each line is tokenized on its own and
-			// gets the same colors whether it arrives in one piece or streams.
-			const tokens =
-				lang === 'ansi' ? code.split('\n').flatMap((line) => tokenize(line)) : tokenize(code);
+			// One call, so the ANSI state machine sees the newlines it needs.
+			const tokens = tokenize(code);
 
 			return {
 				lines: tokens.map((line) => toHighlightedLine(line)),

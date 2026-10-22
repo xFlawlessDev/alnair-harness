@@ -69,11 +69,18 @@
 				<SessionSidebar
 					groups={store.groups}
 					activeId={store.activeSessionId}
+					hidden={store.hiddenWorkspaces}
 					onselect={(id) => store.selectSession(id)}
 					onrename={(id, title) => attempt('Rename failed', () => store.renameSession(id, title))}
 					ondelete={(id) => attempt('Delete failed', () => store.deleteSession(id))}
 					oncreate={(cwd) =>
 						attempt('Could not create the session', () => store.createSession(cwd))}
+					onaddworkspace={() =>
+						attempt('Could not add the workspace', async () => {
+							await store.addWorkspace();
+						})}
+					onremoveworkspace={(name) => store.removeWorkspace(name)}
+					onrestoreworkspace={(name) => store.restoreWorkspace(name)}
 					onerror={(message) => (actionError = message)}
 					onsettings={() => (settingsOpen = true)}
 				/>

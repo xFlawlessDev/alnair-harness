@@ -64,6 +64,8 @@ import type {
 	TurnPart,
 	TurnStatus
 } from './types.js';
+import { isExtMethod } from './wire.js';
+import { outputText } from './terminal-output.js';
 
 /* ------------------------------------------------------------- accumulator */
 
@@ -164,6 +166,17 @@ export interface Acc {
 	 * window, which is exactly when the agent has started answering.
 	 */
 	openUserChunkId?: string;
+	/**
+	 * The `_meta.promptIndex` the open user bubble was started with.
+	 *
+	 * A prompt index is the server's own turn key, and it is the durable way to
+	 * tell two prompts apart: a cancelled prompt and the retry the user typed
+	 * afterwards carry the same text but different indices. Without this, a
+	 * transcript whose only separator is `turn_completed` (an extension frame)
+	 * joins both into one bubble — the "hi test sub agenthi test sub agent"
+	 * that appeared after reloading a stopped turn.
+	 */
+	openUserChunkPromptIndex?: number;
 	tools: Record<string, ToolState>;
 	subagents: Record<string, SubagentState>;
 	todos: TodoItem[];
@@ -232,10 +245,19 @@ function patchPart(
  * Consecutive chunks join one bubble; the window closes on the next non-user
  * update (see `openUserChunkId`). This is the replay path only — a live send
  * paints its own turn and swallows the echo.
+ *
+ * A chunk carrying a `promptIndex` that differs from the open bubble's starts a
+ * NEW bubble even when the window is still open. That is the durable turn
+ * boundary, and it is what keeps a cancelled prompt and the retry that follows
+ * it from being concatenated: `turn_completed` is an extension frame, so it
+ * never closed this window, and the two prompts share their text.
  */
-function appendUserChunk(acc: Acc, chunk: string, at: number): Acc {
+function appendUserChunk(acc: Acc, chunk: string, at: number, promptIndex?: number): Acc {
 	const openId = acc.openUserChunkId;
-	if (openId !== undefined) {
+	const samePrompt =
+		openId !== undefined &&
+		(promptIndex === undefined || acc.openUserChunkPromptIndex === promptIndex);
+	if (openId !== undefined && samePrompt) {
 		const turns = acc.turns.map((turn) =>
 			turn.id === openId
 				? {
@@ -273,6 +295,7 @@ function appendUserChunk(acc: Acc, chunk: string, at: number): Acc {
 		...acc,
 		turns: [...turns, turn],
 		openUserChunkId: turn.id,
+		openUserChunkPromptIndex: promptIndex,
 		openTurnId: undefined
 	};
 }
@@ -372,6 +395,20 @@ function textOf(block: ContentBlock | unknown): string | undefined {
 	if (value.type === 'text') return value.text;
 	if (value.type === 'resource' && value.resource?.text) return value.resource.text;
 	return undefined;
+}
+
+/**
+ * The server's turn key for a user chunk, when it carries one.
+ *
+ * `_meta.promptIndex` is stamped by the shell on every prompt echo (see
+ * `turn.rs`: it is the same counter rewind and fork truncate on), so it is the
+ * authoritative boundary between two prompts. It is absent on older frames and
+ * on phantoms, which is why the window still falls back to its positional rule.
+ */
+function promptIndexOf(update: SessionUpdate): number | undefined {
+	const meta = (update as { _meta?: Record<string, unknown> })._meta;
+	const value = meta?.promptIndex ?? meta?.prompt_index;
+	return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
 }
 
 function appendText(acc: Acc, kind: 'text' | 'reasoning', chunk: string, at: number): Acc {
@@ -532,7 +569,7 @@ export function toolToParts(tool: ToolState, now: number): TurnPart[] {
 
 	// A backgrounded execute is a task, not a finished call.
 	if (tool.backgrounded) {
-		const output = content
+		const blockText = content
 			.filter((item) => item.type === 'content')
 			.map((item) => textOf((item as unknown as { content: ContentBlock }).content) ?? '')
 			.join('');
@@ -541,7 +578,9 @@ export function toolToParts(tool: ToolState, now: number): TurnPart[] {
 			id: tool.toolCallId,
 			command: String((tool.rawInput as { command?: string })?.command ?? tool.title),
 			cwd: (tool.rawInput as { cwd?: string })?.cwd,
-			output,
+			// The same byte-array shape as a finished call, and the same fix:
+			// a backgrounded task's `rawOutput` is where its output lives.
+			output: outputText(tool.rawOutput) || blockText,
 			status: 'running',
 			durationMs,
 			backgrounded: true,
@@ -659,7 +698,10 @@ export function toolToParts(tool: ToolState, now: number): TurnPart[] {
 			id: tool.toolCallId,
 			command,
 			cwd: (tool.rawInput as { cwd?: string })?.cwd,
-			output: textBlock?.text ?? '',
+			// `rawOutput` is the authority for a finished command: `content`
+			// carries the same text, but the byte form is the complete stream
+			// (a large output is truncated in `content` and complete here).
+			output: outputText(tool.rawOutput) || textBlock?.text || '',
 			exitCode: exitCodeOf(tool.rawOutput),
 			status,
 			durationMs
@@ -798,7 +840,7 @@ export function reduceAcpUpdate(input: Acc, update: SessionUpdate, ctx: ReduceCo
 	// rule in one place instead of repeating it in every arm below.
 	const acc: Acc =
 		input.openUserChunkId !== undefined && update.sessionUpdate !== 'user_message_chunk'
-			? { ...input, openUserChunkId: undefined }
+			? { ...input, openUserChunkId: undefined, openUserChunkPromptIndex: undefined }
 			: input;
 
 	switch (update.sessionUpdate) {
@@ -811,7 +853,7 @@ export function reduceAcpUpdate(input: Acc, update: SessionUpdate, ctx: ReduceCo
 				return { ...acc, streamedUserText: acc.streamedUserText + chunk };
 			}
 			// Replay has no optimistic turn, so these chunks ARE the user turn.
-			return appendUserChunk(acc, chunk, now);
+			return appendUserChunk(acc, chunk, now, promptIndexOf(update));
 		}
 
 		case 'agent_message_chunk': {
@@ -928,9 +970,19 @@ export function planToTodos(entries: PlanEntry[]): TodoItem[] {
 	}));
 }
 
-/** Fold one Alnair `_alnair/session/update` payload. */
-export function reduceExtUpdate(acc: Acc, update: ExtSessionUpdate, ctx: ReduceContext): Acc {
+/** Fold one Alnair `alnair/session/update` payload. */
+export function reduceExtUpdate(input: Acc, update: ExtSessionUpdate, ctx: ReduceContext): Acc {
 	const { now } = ctx;
+
+	// The user-chunk window closes here too. An extension frame is what usually
+	// follows a prompt when the turn ends without an assistant reply — a
+	// `turn_completed` after a cancel, a `retry_state` — and leaving the window
+	// open joined the NEXT prompt's echo onto the previous bubble, so a stopped
+	// turn reloaded as "hi test sub agenthi test sub agent".
+	const acc: Acc =
+		input.openUserChunkId !== undefined
+			? { ...input, openUserChunkId: undefined, openUserChunkPromptIndex: undefined }
+			: input;
 
 	switch (update.sessionUpdate) {
 		case 'retry_state': {
@@ -1476,6 +1528,10 @@ export function closeTurn(
 		turns,
 		openTurnId: undefined,
 		streamedUserText: '',
+		// A turn boundary is also a prompt boundary: the next echo must start
+		// its own bubble rather than extending this prompt's.
+		openUserChunkId: undefined,
+		openUserChunkPromptIndex: undefined,
 		// The turn is over, so the next prompt's echo must build its own turn
 		// again if this accumulator is ever replayed.
 		optimisticUserTurn: undefined
@@ -1522,6 +1578,10 @@ export function openUserTurn(
 		// The prompt is on screen; the agent's echo of it must not add a second
 		// bubble. Cleared when the turn closes.
 		optimisticUserTurn: true,
+		// A new prompt also ends the previous prompt's chunk window, or its
+		// echo would be appended to the bubble above this one.
+		openUserChunkId: undefined,
+		openUserChunkPromptIndex: undefined,
 		modelId,
 		effort
 	};
@@ -1539,7 +1599,7 @@ export function replay(
 		if (!params?.update) continue;
 		const now = envelope.timestamp ? new Date(envelope.timestamp).getTime() : Date.now();
 		const ctx: ReduceContext = { now, sessionId };
-		if (envelope.method === '_alnair/session/update') {
+		if (isExtMethod(envelope.method)) {
 			acc = reduceExtUpdate(acc, params.update as ExtSessionUpdate, ctx);
 		} else {
 			acc = reduceAcpUpdate(acc, params.update as SessionUpdate, ctx);

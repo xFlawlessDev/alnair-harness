@@ -141,7 +141,10 @@ describe('store: delete', () => {
 		});
 		const store = await boot(transport);
 
-		await store.deleteSession('s-2');
+		// The refusal is re-thrown, not swallowed: the caller shows it. Swallowing
+		// it made "delete does nothing" invisible — the row vanished, the delete
+		// never happened, and only a reload revealed the session was still there.
+		await expect(store.deleteSession('s-2')).rejects.toThrow('permission denied');
 
 		expect(store.sessions.map((session) => session.id)).toContain('s-2');
 	});
@@ -271,5 +274,168 @@ describe('store: git', () => {
 		// previous session's branch while the new one loads.
 		expect(store.git).toBeUndefined();
 		expect(store.branches).toEqual([]);
+	});
+});
+
+/**
+ * Workspace administration.
+ *
+ * "Add a workspace" is the native folder picker plus a session, because a
+ * directory the backend has never opened is not a workspace it can list.
+ * "Remove a workspace" is hiding — it must never touch a transcript.
+ */
+describe('store: workspaces', () => {
+	it('adds a workspace by asking the machine, then starting a session there', async () => {
+		const pickDirectory = vi.fn(async () => '/picked/repo');
+		const transport = stubTransport({ pickDirectory });
+		const store = await boot(transport);
+
+		const path = await store.addWorkspace();
+
+		expect(path).toBe('/picked/repo');
+		expect(pickDirectory).toHaveBeenCalledOnce();
+		// The session is what makes the directory a workspace the roster lists.
+		expect(transport.newSession).toHaveBeenCalledWith('/picked/repo');
+		expect(store.activeSession.cwd).toBe('/picked/repo');
+	});
+
+	it('does nothing when the dialog is cancelled', async () => {
+		// `undefined` is the cancel answer; the current workspace stays put.
+		const transport = stubTransport({ pickDirectory: vi.fn(async () => undefined) });
+		const store = await boot(transport);
+		const before = store.activeSessionId;
+
+		const path = await store.addWorkspace();
+
+		expect(path).toBeUndefined();
+		expect(transport.newSession).not.toHaveBeenCalled();
+		expect(store.activeSessionId).toBe(before);
+	});
+
+	it('surfaces a picker failure instead of silently doing nothing', async () => {
+		const transport = stubTransport({
+			pickDirectory: vi.fn(async () => {
+				throw new Error('no native folder picker is available on this machine');
+			})
+		});
+		const store = await boot(transport);
+
+		await expect(store.addWorkspace()).rejects.toThrow('no native folder picker');
+	});
+
+	it('hides a workspace without dropping its sessions', async () => {
+		const transport = stubTransport();
+		const store = await boot(transport);
+		const before = store.sessions.length;
+
+		store.removeWorkspace('repo');
+
+		expect(store.groups.map((group) => group.name)).not.toContain('repo');
+		// Hiding is a view preference: the rows and their transcripts stay.
+		expect(store.sessions).toHaveLength(before);
+		expect(store.hiddenWorkspaces).toEqual(['repo']);
+		expect(transport.deleteSession).not.toHaveBeenCalled();
+	});
+
+	it('brings a hidden workspace back', async () => {
+		const transport = stubTransport();
+		const store = await boot(transport);
+
+		store.removeWorkspace('repo');
+		store.restoreWorkspace('repo');
+
+		expect(store.groups.map((group) => group.name)).toContain('repo');
+		expect(store.hiddenWorkspaces).toEqual([]);
+	});
+
+	it('ignores a repeated hide, so the menu does not grow duplicates', async () => {
+		const transport = stubTransport();
+		const store = await boot(transport);
+
+		store.removeWorkspace('repo');
+		store.removeWorkspace('repo');
+
+		expect(store.hiddenWorkspaces).toEqual(['repo']);
+	});
+});
+
+/**
+ * The header's subagent list must survive a session switch.
+ *
+ * It is derived from the transcript plus the live snapshots, both keyed by
+ * session id. A stored list that `selectSession` cleared is what made a
+ * running subagent appear only after switching away and back.
+ */
+describe('store: subagents', () => {
+	const childTranscript = (sessionId: string) => [
+		{
+			method: '_alnair/session/update',
+			params: {
+				sessionId,
+				update: {
+					sessionUpdate: 'subagent_spawned',
+					subagent_id: 'sub-a',
+					parent_session_id: sessionId,
+					child_session_id: 'child-a',
+					subagent_type: 'explore',
+					description: 'Audit the palette'
+				}
+			}
+		}
+	];
+
+	it('lists a subagent from the transcript, with no live read at all', async () => {
+		const transport = stubTransport({
+			listSubagents: vi.fn(async () => []),
+			sessionUpdates: vi.fn(async () => [])
+		});
+		const store = await boot(transport);
+
+		// Feed the spawn frame the way a replay would.
+		store['receive']('s-1', {
+			method: 'alnair/session/update',
+			params: childTranscript('s-1')[0].params
+		});
+
+		expect(store.subagents.map((subagent) => subagent.id)).toEqual(['sub-a']);
+	});
+
+	it('keeps a running subagent visible after switching away and back', async () => {
+		// The reader's report: a running subagent showed only after switching
+		// sessions. The live read is per session and merged on every attach, so
+		// coming back finds it again without waiting for a frame.
+		const running = [
+			{
+				id: 'sub-a',
+				agent: 'explore',
+				description: 'Audit the palette',
+				childSessionId: 'child-a',
+				status: 'running' as const,
+				startedAt: 1_000,
+				durationMs: 500,
+				turnCount: 1,
+				toolCallCount: 2,
+				tokensUsed: 3_000,
+				contextWindowTokens: 0,
+				contextUsagePct: 0,
+				toolsUsed: [],
+				errorCount: 0
+			}
+		];
+		const transport = stubTransport({
+			// Only the first session has one running.
+			listSubagents: vi.fn(async (sessionId: string) => (sessionId === 's-1' ? running : []))
+		});
+		const store = await boot(transport);
+		expect(store.subagents.map((subagent) => subagent.id)).toEqual(['sub-a']);
+
+		store.selectSession('s-2');
+		expect(store.subagents).toEqual([]);
+
+		store.selectSession('s-1');
+		// `selectSession` attaches asynchronously; the live read repopulates it.
+		await vi.waitFor(() =>
+			expect(store.subagents.map((subagent) => subagent.id)).toEqual(['sub-a'])
+		);
 	});
 });

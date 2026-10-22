@@ -15,8 +15,15 @@ import type { GrammarState } from 'shiki/core';
  * 	<CodeBlock.Line code={line} />
  * {/each}
  * ```
+ *
+ * `streaming` is the one knob. When the value only ever grows (a reply being
+ * written), the incremental path tokenizes just the new lines, starting from
+ * the grammar state of the last one. A caller whose text is REPLACED rather
+ * than appended — a command's output arriving in bursts, a re-rendered
+ * transcript — passes `false` and gets a single pass over the whole value,
+ * which is both simpler and immune to a prefix that no longer matches.
  */
-export function useHighlightedCode(value: () => string, language: () => string) {
+export function useHighlightedCode(value: () => string, language: () => string, streaming = true) {
 	let loaded = $state.raw<{
 		language: string;
 		highlighter: Highlighter | null;
@@ -59,6 +66,13 @@ export function useHighlightedCode(value: () => string, language: () => string) 
 			return code.split('\n');
 		}
 
+		// A whole-block language (ANSI) is never spliced: its escapes are
+		// stateful, so tokenizing a slice would restart the state machine.
+		if (!streaming || highlighter.wholeBlock) {
+			done = { highlighter: null, text: '', lines: [] };
+			return highlighter.highlight(code).lines;
+		}
+
 		let next = done;
 
 		if (next.highlighter !== highlighter || !code.startsWith(next.text)) {
@@ -77,7 +91,6 @@ export function useHighlightedCode(value: () => string, language: () => string) 
 				state: result.state
 			};
 		}
-
 		done = next;
 
 		// The last line is still being written, so it is tokenized every time.

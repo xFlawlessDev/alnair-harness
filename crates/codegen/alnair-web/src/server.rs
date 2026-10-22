@@ -10,13 +10,14 @@ use axum::{
     extract::{ConnectInfo, State, WebSocketUpgrade},
     http::{HeaderMap, HeaderValue, StatusCode, header},
     response::{IntoResponse, Response},
-    routing::get,
+    routing::{get, post},
 };
 use tracing::{info, warn};
 
 use crate::assets;
 use crate::auth::{Gate, RejectReason};
 use crate::bridge;
+use crate::picker;
 
 /// Everything the handlers share.
 #[derive(Clone)]
@@ -68,6 +69,7 @@ pub async fn spawn_web_server(
     let app = Router::new()
         .route("/ws", get(ws_handler))
         .route("/api/session", get(session_info))
+        .route("/api/pick-directory", post(pick_directory))
         .route("/healthz", get(healthz))
         .fallback(get(static_handler))
         .with_state(state);
@@ -133,6 +135,42 @@ fn open_browser(bound: SocketAddr) {
     let url = format!("http://{bound}/");
     if let Err(e) = webbrowser::open(&url) {
         warn!(error = %e, "web: could not open the browser; open the URL manually");
+    }
+}
+
+/// Ask the user for a workspace directory with the OS's own dialog.
+///
+/// The browser cannot answer this: a directory handle exposes only a leaf
+/// name, never an absolute path, and a session needs one. So the dialog runs
+/// here, on the machine serving the page.
+///
+/// Gated exactly like `/ws`. The cookie alone would be enough for a browser
+/// (it is `SameSite=Strict`), but the `Origin` check is what stops a
+/// DNS-rebinding page from popping a modal dialog on the user's desktop — and
+/// a dialog is a visible, disruptive action even though it changes nothing.
+async fn pick_directory(State(state): State<AppState>, headers: HeaderMap) -> Response {
+    // `check` reads both headers; a missing cookie or a foreign Origin is a
+    // 403 with the same wording the socket upgrade uses.
+    if let Err(reason) = state.gate.check(&headers) {
+        return reject(reason);
+    }
+
+    match picker::pick_directory().await {
+        Ok(Some(path)) => {
+            info!("web: workspace directory picked");
+            axum::Json(serde_json::json!({ "path": path })).into_response()
+        }
+        // A cancelled dialog is not an error: the caller simply keeps its
+        // current workspace and shows nothing.
+        Ok(None) => axum::Json(serde_json::json!({ "cancelled": true })).into_response(),
+        Err(error) => {
+            warn!(reason = error.message(), "web: folder picker unavailable");
+            (
+                StatusCode::SERVICE_UNAVAILABLE,
+                axum::Json(serde_json::json!({ "error": error.message() })),
+            )
+                .into_response()
+        }
     }
 }
 

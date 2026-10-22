@@ -1,13 +1,15 @@
 import type { SubagentLiveSnapshot, SubagentSnapshot } from './types/ext.js';
 import type { SubagentSummary } from './types.js';
+import type { SubagentState } from './reducer.js';
 
 /**
  * Project the wire's subagent snapshots onto the view model.
  *
- * Two sources, one shape: `list_running` returns only live subagents, while
- * `get` returns one in any state and adds the fields that only make sense once
- * it finished. The dialog reads the second, the header reads the first, and
- * both end up here.
+ * Three sources, one shape: `list_running` returns only live subagents, `get`
+ * returns one in any state, and the transcript carries the spawn/progress/
+ * finish frames that describe every subagent the session ever started. The
+ * dialog reads the second, the header the first and third, and all of them end
+ * up here.
  */
 
 const STATUSES = new Set<SubagentSummary['status']>([
@@ -57,6 +59,61 @@ export function fromSnapshot(snapshot: SubagentSnapshot): SubagentSummary {
 		worktreePath: snapshot.worktreePath,
 		resumedFrom: snapshot.resumedFrom
 	};
+}
+
+/**
+ * Project a transcript subagent onto the same shape.
+ *
+ * This is the durable source: `subagent_spawned` is persisted, so a session
+ * reopened hours later still knows which subagents it started. `list_running`
+ * answers only the live subset, which is why the header cannot read it alone —
+ * a finished subagent would vanish the moment the page reattached.
+ */
+export function fromTranscript(state: SubagentState): SubagentSummary {
+	return {
+		id: state.id,
+		agent: state.agent,
+		description: state.description,
+		childSessionId: state.childSessionId,
+		status:
+			state.status === 'running' ? 'running' : state.status === 'error' ? 'failed' : 'completed',
+		startedAt: state.startedAt,
+		durationMs: (state.endedAt ?? Date.now()) - state.startedAt,
+		turnCount: state.turnCount,
+		toolCallCount: state.toolCallCount,
+		tokensUsed: state.tokensUsed,
+		contextWindowTokens: 0,
+		contextUsagePct: 0,
+		toolsUsed: state.toolsUsed,
+		errorCount: state.error ? 1 : 0,
+		output: state.result,
+		failureError: state.error,
+		model: state.model
+	};
+}
+
+/**
+ * Merge the two views of a session's subagents.
+ *
+ * The transcript is the base — it is the only source that survives a reload —
+ * and a live snapshot refines a row it already knows, adding the counters the
+ * spawn frame did not carry. A live snapshot with no transcript row is kept:
+ * it belongs to a subagent that started before this tab attached, and the
+ * replay may not have reached its spawn frame yet.
+ */
+export function mergeSubagents(
+	fromTranscript: SubagentSummary[],
+	live: SubagentSummary[]
+): SubagentSummary[] {
+	const byId = new Map(fromTranscript.map((subagent) => [subagent.id, subagent]));
+	for (const subagent of live) {
+		const known = byId.get(subagent.id);
+		// A finished transcript row outranks a stale live one: `list_running`
+		// can answer a snapshot taken before the finish landed.
+		if (known && known.status !== 'running' && subagent.status === 'running') continue;
+		byId.set(subagent.id, known ? { ...known, ...subagent } : subagent);
+	}
+	return sortSubagents([...byId.values()]);
 }
 
 /**

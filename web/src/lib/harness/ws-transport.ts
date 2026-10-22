@@ -35,6 +35,7 @@ import {
 	entriesFromNodes,
 	lastSegment,
 	modelsFromState,
+	normalizeFrame,
 	sessionsFromRoster,
 	unwrapExt,
 	worktreesFromWire,
@@ -352,6 +353,47 @@ export class WebSocketTransport implements Transport {
 	}
 
 	/**
+	 * Ask the machine for a directory, with its own dialog.
+	 *
+	 * This is the ONE request that is not JSON-RPC: a browser cannot learn an
+	 * absolute path from a directory handle, so the dialog runs in the server
+	 * process and answers over plain HTTP. `POST` because the call has a side
+	 * effect on the desktop (it opens a window).
+	 *
+	 * `undefined` means the user cancelled; the caller keeps its current
+	 * workspace and says nothing.
+	 */
+	async pickDirectory(): Promise<string | undefined> {
+		const response = await fetch('/api/pick-directory', {
+			method: 'POST',
+			// The gate reads `Origin`; a fetch from this page carries it, but
+			// being explicit keeps a proxied dev server honest.
+			headers: { Accept: 'application/json' },
+			credentials: 'same-origin'
+		});
+
+		if (!response.ok) {
+			// A 403 is the gate refusing; anything else is the dialog failing.
+			// Neither is a reason to take the page down, so it becomes a
+			// message the caller can show.
+			const detail = await response
+				.json()
+				.then((body: { error?: unknown }) =>
+					typeof body.error === 'string' ? body.error : undefined
+				)
+				.catch(() => undefined);
+			throw new Error(detail ?? `the folder picker failed (${response.status})`);
+		}
+
+		const body = (await response.json()) as { path?: unknown; cancelled?: unknown };
+		if (body.cancelled === true) return undefined;
+		if (typeof body.path !== 'string' || !body.path) {
+			throw new Error('the folder picker returned no path');
+		}
+		return body.path;
+	}
+
+	/**
 	 * Create a worktree and return its path.
 	 *
 	 * The agent answers `{ status: 'creating', worktreePath }` and copies ignored
@@ -625,29 +667,46 @@ export class WebSocketTransport implements Transport {
 		// A model switch made elsewhere (the TUI, another tab) rides this rail
 		// rather than `session/update`. It is an extension update, so the store
 		// routes it to the extension decoder by method name.
-		if (message.method === 'alnair/session_notification') {
-			const sessionId = String(params.sessionId ?? '');
-			if (!sessionId || !params.update) return;
-			this.frameSink?.(sessionId, { method: message.method, params });
+		if (
+			message.method === 'alnair/session_notification' ||
+			message.method === '_alnair/session_notification'
+		) {
+			const frame = normalizeFrame(message.method, params);
+			const sessionId = String(frame.params.sessionId ?? '');
+			if (!sessionId || !frame.params.update) return;
+			this.frameSink?.(sessionId, frame);
 			return;
 		}
 
 		if (!message.method) return;
 
-		const sessionId = String(params.sessionId ?? params.session_id ?? '');
+		const frame = normalizeFrame(message.method, params);
+		const sessionId = String(frame.params.sessionId ?? frame.params.session_id ?? '');
 		if (!sessionId) return;
 
 		// `update` is required for the reducer; anything else is a notification
 		// the store has no arm for, and passing it on would be a no-op with
 		// extra steps.
-		if (!params.update) return;
-		this.frameSink?.(sessionId, { method: message.method, params });
+		if (!frame.params.update) return;
+		this.frameSink?.(sessionId, frame);
 	}
 
+	/**
+	 * Fold a blocking reverse request into the store.
+	 *
+	 * These arrive wrapped (`{ method: "_alnair/ask_user_question",
+	 * params: { method: "alnair/ask_user_question", params: { … } } }`), unlike
+	 * the notifications above. Reading the wrapper directly finds no
+	 * `sessionId` and drops the frame, which is exactly how a questionnaire
+	 * could park the agent forever while the browser showed nothing. The
+	 * shared normalizer is the one place that knows the difference.
+	 */
 	private onReverseRequest(message: Rpc) {
-		const method = message.method ?? '';
-		const params = (message.params ?? {}) as Record<string, unknown>;
-		const sessionId = String(params.sessionId ?? '');
+		const { method, params } = normalizeFrame(
+			message.method ?? '',
+			(message.params ?? {}) as Record<string, unknown>
+		);
+		const sessionId = String(params.sessionId ?? params.session_id ?? '');
 		// A permission request nests the call under `toolCall`; the ext methods
 		// (`ask_user_question`, `exit_plan_mode`) carry `toolCallId` directly.
 		const toolCall = params.toolCall as Record<string, unknown> | undefined;
@@ -655,6 +714,8 @@ export class WebSocketTransport implements Transport {
 			params.toolCallId ?? params.tool_call_id ?? toolCall?.toolCallId ?? toolCall?.id ?? ''
 		);
 
+		// The answer is addressed back to the JSON-RPC id, which the store does
+		// not know; remembering the pairing here is what makes `respond` work.
 		if (toolCallId) this.parked.set(toolCallId, Number(message.id));
 		if (!sessionId) return;
 		this.frameSink?.(sessionId, { method, params });

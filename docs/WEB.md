@@ -241,23 +241,46 @@ produces on demand (a parked questionnaire, an exhausted retry).
   empty pane for the first seconds of a turn. `busy` is
   `localBusy || openTurnId !== undefined`, so a turn the TUI is driving shows
   its status here too.
-- **Terminal output is normalized at the render boundary.** The agent strips
-  ANSI before sending a command's output, but MCP tools and older transcripts
-  reach the same renderer, so `terminal-output.ts` strips escapes and collapses
-  `\r` rewrites. `\r` alone moves the cursor; only an erase sequence clears a
-  line, which is why a `\r`-terminated line keeps its text.
+- **Terminal output is normalized at the render boundary, and its colour is
+  real.** `terminal-output.ts` collapses `\r` rewrites and, by default, strips
+  escapes. `\r` alone moves the cursor; only an erase sequence clears a line,
+  which is why a `\r`-terminated line keeps its text. The terminal panel asks
+  for `terminalLines(output, true)` and renders the escapes through Shiki's
+  `ansi` grammar, so `ls` marks directories, `git` colours a diff and a compiler
+  reddens an error, exactly as they did in the shell.
+
+  Two rules make that work. `outputText` prefers `rawOutput.output` (the byte
+  array) over `output_for_prompt`, because the latter is ANSI-stripped AND
+  carries an `exit: N` header the panel renders in its own footer - taking it
+  lost every colour and printed the status twice. And ANSI is a **whole-block**
+  language: its escapes are stateful, so a colour opened on one line applies to
+  the next. Tokenizing per line reset that state at every newline and painted a
+  multi-line green header block as one green line and the rest default-coloured.
+  `useHighlightedCode(..., streaming = false)` is how a caller says its text is
+  replaced rather than appended.
+- **Highlighting is Shiki, not a second tokenizer.** `highlighter.ts` already
+  owns theme selection (`github-light`/`github-dark` through `--shiki-*`
+  variables), lazy grammar loading and the streaming grammar state; markdown
+  code blocks, file reads and diffs all go through it. Adding `svelte-highlight`
+  would mean a second highlighter, a second theme map and a second set of token
+  shapes for the same rendering. When a language is missing, add it to the
+  `languages` map there.
 
 ## Verifying it against a live leader
 
-Five scripts, each answering a different question:
+Nine scripts, each answering a different question:
 
 | Script | Question |
 |---|---|
 | `node scripts/web-verify.mjs http://127.0.0.1:2420` | Does every wire call the UI makes actually work? 14 assertions over the roster, load, models, context, commands, subagents and both file RPCs. |
 | `node scripts/web-browser-test.mjs http://127.0.0.1:2420` | Does the page render and work? Drives headless Chrome/Edge over CDP: skeleton → UI, session CRUD menu, the checkout row, sessions, model menu, context meter, slash menu, `@` listing and search, tool-call rendering, a real prompt round-trip, the turn-status row and reply ordering. Writes `target/web-ui.png`. |
 | `node scripts/web-tool-render-check.mjs http://127.0.0.1:2420 <sessionId>` | How was each tool call actually drawn? Dumps every trace row, the terminal panels' text, and counts of question and subagent cards. This is the check that catches a tool falling through to the generic "other Tool: …" row. Writes `target/web-tools.png`. |
+| `node scripts/web-terminal-color-probe.mjs http://127.0.0.1:2420 <sessionId>` | Does a command's output keep its colour? Expands every trace row and reports, per panel, how many spans carry a Shiki colour and which computed colours appear. A capture with ANSI must show more than one. Writes `target/web-terminal-color.png`. |
 | `node scripts/web-session-probe.mjs http://127.0.0.1:2420 <sessionId>` | What did `session/load` replay? Prints the load keys and frame counts, and writes `target/replay-frames.json`, which `web/src/lib/harness/replay-dump.test.ts` folds through the reducer. An empty transcript has two causes — the wire sent nothing, or the reducer dropped it — and only the dump tells them apart. |
 | `node scripts/web-probe.mjs http://127.0.0.1:2420` | What does the wire actually say? Dumps raw shapes, including the flat-vs-nested ext envelope side by side. |
+| `node scripts/web-admin-probe.mjs http://127.0.0.1:2420` | Do rename and delete actually reach disk? Creates a throwaway session, renames it, deletes it, and checks the directory and the roster. |
+| `node scripts/web-delete-probe.mjs http://127.0.0.1:2420` | Does the sidebar's delete click work end to end? Drives the real menu, records the frames the page SENT, and reloads to prove the row does not come back. |
+| `node scripts/web-delete-menu-probe.mjs http://127.0.0.1:2420` | Does the action menu stay open across a confirmation click? This is what caught the two-click delete arm that could never be completed. |
 
 No Playwright or Puppeteer: the browser tests drive an installed Chrome/Edge
 through Node's built-in `WebSocket`, so they add no dependency.

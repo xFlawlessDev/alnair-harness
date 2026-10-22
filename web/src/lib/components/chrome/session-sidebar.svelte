@@ -6,12 +6,14 @@
 	import PlusIcon from '@lucide/svelte/icons/plus';
 	import PencilIcon from '@lucide/svelte/icons/pencil';
 	import TrashIcon from '@lucide/svelte/icons/trash';
-	import FolderPlusIcon from '@lucide/svelte/icons/folder-plus';
+	import EyeOffIcon from '@lucide/svelte/icons/eye-off';
+	import EyeIcon from '@lucide/svelte/icons/eye';
 	import MoreHorizontalIcon from '@lucide/svelte/icons/more-horizontal';
 	import CheckIcon from '@lucide/svelte/icons/check';
 	import XIcon from '@lucide/svelte/icons/x';
 	import { tick } from 'svelte';
 	import { Button } from '#lib/components/ui/button/index.js';
+	import * as Dialog from '#lib/components/ui/dialog/index.js';
 	import * as DropdownMenu from '#lib/components/ui/dropdown-menu/index.js';
 	import * as Tooltip from '#lib/components/ui/tooltip/index.js';
 	import { formatRelative } from '#lib/harness/format.js';
@@ -21,32 +23,47 @@
 
 	/**
 	 * The session list, nested the way the backend models it: one row per
-	 * workspace, its conversations underneath. `alnair/sessions/list` returns
-	 * flat rows that name their repo; the grouping happens in the store, so
-	 * this component only renders what it is given.
+	 * workspace, its conversations underneath.
 	 *
-	 * The row actions are the session's own CRUD — rename, delete — plus the
-	 * two ways to get a new one: in the current workspace, or in a directory
-	 * the reader picks. They live behind the row's menu rather than as always-
-	 * visible buttons so the list stays a list; the one exception is the
-	 * workspace header's `+`, which is the fast path.
+	 * Three things are deliberately separate here, because conflating them is
+	 * what made the old sidebar confusing:
+	 *
+	 * - **Adding a workspace** is the header's `+`. It asks the machine for a
+	 *   directory with the OS's own dialog and starts a session there — that is
+	 *   what makes the directory a workspace the backend knows about.
+	 * - **Removing a workspace** hides the group. Nothing on disk is touched,
+	 *   and it can be brought back, so it needs no confirmation.
+	 * - **Deleting a session** destroys a transcript, so it goes through a
+	 *   dialog. The previous two-click arm inside the dropdown could never be
+	 *   completed: the menu closes on the first click, so the second one had
+	 *   nowhere to land and delete silently did nothing.
 	 */
 	let {
 		groups,
 		activeId,
+		hidden,
 		onselect,
 		onrename,
 		ondelete,
 		oncreate,
+		onaddworkspace,
+		onremoveworkspace,
+		onrestoreworkspace,
 		onerror,
 		onsettings
 	}: {
 		groups: WorkspaceGroup[];
 		activeId: string;
+		/** Workspaces the reader put away; offered back in the footer. */
+		hidden: string[];
 		onselect: (id: string) => void;
 		onrename: (id: string, title: string) => void | Promise<void>;
 		ondelete: (id: string) => void | Promise<void>;
 		oncreate: (cwd: string) => void | Promise<void>;
+		/** Open the native folder picker and start a session there. */
+		onaddworkspace: () => void | Promise<void>;
+		onremoveworkspace: (name: string) => void;
+		onrestoreworkspace: (name: string) => void;
 		/** Report a refusal the caller could not apply (a blank title, …). */
 		onerror: (message: string) => void;
 		onsettings: () => void;
@@ -75,11 +92,20 @@
 	let draft = $state('');
 	let renameInput: HTMLInputElement | null = $state(null);
 
-	/** The id armed for deletion; a second click on the same row confirms. */
-	let armed = $state<string | undefined>(undefined);
+	/**
+	 * The session armed for deletion, shown in the confirmation dialog.
+	 *
+	 * A dialog rather than an armed menu item: the dropdown closes as soon as
+	 * an item is chosen, so a "click again" state inside it is unreachable with
+	 * a mouse. The dialog also has room to say what will actually happen.
+	 */
+	let pendingDelete = $state<Session | undefined>(undefined);
+	let deleteOpen = $state(false);
+	let deleting = $state(false);
+	/** Why the last attempt failed, kept beside the button that failed. */
+	let deleteError = $state<string | undefined>(undefined);
 
 	function startRename(session: Session) {
-		armed = undefined;
 		renaming = session.id;
 		draft = session.title;
 		void tick().then(() => {
@@ -105,20 +131,28 @@
 		draft = '';
 	}
 
-	/**
-	 * Delete, with one confirmation step.
-	 *
-	 * Deleting a session destroys a transcript on disk, so a single misplaced
-	 * click must not do it. The arm expires when the menu closes or another row
-	 * is touched, which is what makes it a confirmation rather than a mode.
-	 */
 	function requestDelete(session: Session) {
-		if (armed === session.id) {
-			armed = undefined;
-			void ondelete(session.id);
-			return;
+		pendingDelete = session;
+		deleteError = undefined;
+		deleteOpen = true;
+	}
+
+	async function confirmDelete() {
+		const session = pendingDelete;
+		if (!session || deleting) return;
+		deleting = true;
+		deleteError = undefined;
+		try {
+			await ondelete(session.id);
+			deleteOpen = false;
+			pendingDelete = undefined;
+		} catch (error) {
+			// Keep the dialog open with the reason: the row is already back in
+			// the list, so closing here would look like a silent no-op.
+			deleteError = error instanceof Error ? error.message : 'the agent refused';
+		} finally {
+			deleting = false;
 		}
-		armed = session.id;
 	}
 
 	/** The directory a new session in this group should use. */
@@ -133,6 +167,19 @@
 			return;
 		}
 		void oncreate(cwd);
+	}
+
+	/** An in-flight native dialog, so the button can say so. */
+	let adding = $state(false);
+
+	async function addWorkspace() {
+		if (adding) return;
+		adding = true;
+		try {
+			await onaddworkspace();
+		} finally {
+			adding = false;
+		}
 	}
 </script>
 
@@ -158,20 +205,22 @@
 							<button
 								{...props}
 								type="button"
-								class="flex size-4 items-center justify-center rounded text-ink-tertiary transition-colors hover:bg-paper-card hover:text-ink"
-								aria-label="New session in this workspace"
-								onclick={() => {
-									const group = groups.find((candidate) =>
-										candidate.sessions.some((session) => session.id === activeId)
-									);
-									if (group) createIn(group);
-								}}
+								class="flex size-5 items-center justify-center rounded text-ink-tertiary transition-colors hover:bg-paper-card hover:text-ink disabled:opacity-50"
+								aria-label="Add workspace directory"
+								disabled={adding}
+								onclick={() => void addWorkspace()}
 							>
-								<PlusIcon class="size-3" />
+								{#if adding}
+									<span
+										class="size-2.5 animate-spin rounded-full border border-ink-tertiary border-t-transparent"
+									></span>
+								{:else}
+									<PlusIcon class="size-3.5" />
+								{/if}
 							</button>
 						{/snippet}
 					</Tooltip.Trigger>
-					<Tooltip.Content><p>New session here</p></Tooltip.Content>
+					<Tooltip.Content><p>Add workspace directory…</p></Tooltip.Content>
 				</Tooltip.Root>
 			</div>
 		</div>
@@ -185,6 +234,7 @@
 			{#each groups as group (group.name)}
 				{@const open = isOpen(group)}
 				{@const holdsActive = group.sessions.some((session) => session.id === activeId)}
+				{@const empty = group.sessions.length === 0}
 				<section class="mb-1.5 first:mt-1">
 					<div
 						class={[
@@ -215,9 +265,17 @@
 						{#if group.active}
 							<StatusDot status="running" pulse class="shrink-0" />
 						{/if}
-						<span class="tabular shrink-0 font-mono text-[10px] text-ink-tertiary/70">
-							{group.sessions.length}
-						</span>
+						{#if empty}
+							<!--
+								A directory the reader just added has no session yet. Saying
+								so is honest; a bare `0` would read as a broken workspace.
+							-->
+							<span class="shrink-0 font-mono text-[9px] text-ink-tertiary/60">empty</span>
+						{:else}
+							<span class="tabular shrink-0 font-mono text-[10px] text-ink-tertiary/70">
+								{group.sessions.length}
+							</span>
+						{/if}
 						<DropdownMenu.Root>
 							<DropdownMenu.Trigger>
 								{#snippet child({ props })}
@@ -231,26 +289,29 @@
 									</button>
 								{/snippet}
 							</DropdownMenu.Trigger>
-							<DropdownMenu.Content align="start" class="w-56">
+							<DropdownMenu.Content align="start" class="w-60">
 								<DropdownMenu.Label class="truncate font-mono text-[10.5px]">
 									{group.path ?? group.name}
 								</DropdownMenu.Label>
 								<DropdownMenu.Separator />
-								<DropdownMenu.Item onclick={() => createIn(group)}>
-									<PlusIcon class="size-3.5" />
-									New session here
-								</DropdownMenu.Item>
 								<DropdownMenu.Item
 									disabled={!group.path}
 									onclick={() => {
 										if (!group.path) return;
-										void oncreate(group.path);
+										createIn(group);
 									}}
 								>
-									<FolderPlusIcon class="size-3.5" />
+									<PlusIcon class="size-3.5" />
+									New session here
+								</DropdownMenu.Item>
+								<DropdownMenu.Separator />
+								<DropdownMenu.Item onclick={() => onremoveworkspace(group.name)}>
+									<EyeOffIcon class="size-3.5" />
 									<span class="flex min-w-0 flex-col">
-										<span>New session in another directory…</span>
-										<span class="text-[10.5px] text-ink-tertiary"> ask the agent for a path </span>
+										<span>Remove workspace</span>
+										<span class="text-[10.5px] text-ink-tertiary">
+											hides the group; sessions stay on disk
+										</span>
 									</span>
 								</DropdownMenu.Item>
 							</DropdownMenu.Content>
@@ -311,10 +372,7 @@
 											<button
 												type="button"
 												class="flex min-w-0 flex-1 flex-col gap-0.5 px-2 py-1.5 text-left"
-												onclick={() => {
-													armed = undefined;
-													onselect(session.id);
-												}}
+												onclick={() => onselect(session.id)}
 												aria-current={active ? 'true' : undefined}
 												data-session-id={session.id}
 											>
@@ -384,11 +442,11 @@
 														Rename
 													</DropdownMenu.Item>
 													<DropdownMenu.Item
-														class="text-error data-[highlighted]:bg-error/10 data-[highlighted]:text-error"
+														variant="destructive"
 														onclick={() => requestDelete(session)}
 													>
 														<TrashIcon class="size-3.5" />
-														{armed === session.id ? 'Click again to delete' : 'Delete session…'}
+														Delete session…
 													</DropdownMenu.Item>
 													<DropdownMenu.Separator />
 													<DropdownMenu.Item
@@ -412,7 +470,8 @@
 
 			{#if groups.length === 0}
 				<p class="px-3 py-6 text-center text-[11.5px] leading-relaxed text-ink-tertiary">
-					No sessions yet. Start one from the composer, or pick a directory.
+					No workspaces yet. Use <span class="font-mono">+</span> above to pick a directory, or start
+					one from the composer.
 				</p>
 			{/if}
 		</div>
@@ -423,22 +482,115 @@
 			<span class="tabular font-mono">{groups.length}</span>
 			workspaces · <span class="tabular font-mono">{total}</span> sessions
 		</p>
-		<Tooltip.Root>
-			<Tooltip.Trigger>
-				{#snippet child({ props })}
-					<Button
-						{...props}
-						variant="ghost"
-						size="icon-sm"
-						class="shrink-0 text-ink-tertiary hover:text-ink"
-						aria-label="Settings"
-						onclick={onsettings}
-					>
-						<SettingsIcon />
-					</Button>
-				{/snippet}
-			</Tooltip.Trigger>
-			<Tooltip.Content><p>Settings</p></Tooltip.Content>
-		</Tooltip.Root>
+		<div class="flex shrink-0 items-center">
+			{#if hidden.length > 0}
+				<DropdownMenu.Root>
+					<DropdownMenu.Trigger>
+						{#snippet child({ props })}
+							<button
+								{...props}
+								type="button"
+								class="flex h-6 items-center gap-1 rounded px-1.5 text-[10px] text-ink-tertiary transition-colors hover:bg-paper-card hover:text-ink"
+								aria-label={`Hidden workspaces: ${hidden.length}`}
+							>
+								<EyeOffIcon class="size-3" />
+								<span class="tabular font-mono">{hidden.length}</span>
+							</button>
+						{/snippet}
+					</DropdownMenu.Trigger>
+					<DropdownMenu.Content align="end" side="top" class="w-56">
+						<DropdownMenu.Label>Hidden workspaces</DropdownMenu.Label>
+						{#each hidden as name (name)}
+							<DropdownMenu.Item onclick={() => onrestoreworkspace(name)}>
+								<EyeIcon class="size-3.5" />
+								<span class="min-w-0 flex-1 truncate">{name}</span>
+								<span class="shrink-0 text-[10px] text-ink-tertiary">restore</span>
+							</DropdownMenu.Item>
+						{/each}
+					</DropdownMenu.Content>
+				</DropdownMenu.Root>
+			{/if}
+			<Tooltip.Root>
+				<Tooltip.Trigger>
+					{#snippet child({ props })}
+						<Button
+							{...props}
+							variant="ghost"
+							size="icon-sm"
+							class="shrink-0 text-ink-tertiary hover:text-ink"
+							aria-label="Settings"
+							onclick={onsettings}
+						>
+							<SettingsIcon />
+						</Button>
+					{/snippet}
+				</Tooltip.Trigger>
+				<Tooltip.Content><p>Settings</p></Tooltip.Content>
+			</Tooltip.Root>
+		</div>
 	</div>
 </aside>
+
+<!--
+	Deleting a session removes a transcript from disk. The dialog is the only
+	confirmation step, and it says exactly what is lost — an armed menu item
+	could not: the dropdown closes on the first click, so the second one never
+	landed and the action silently did nothing.
+-->
+<Dialog.Root bind:open={deleteOpen}>
+	<Dialog.Content class="max-w-md">
+		<div class="flex flex-col gap-4 p-5">
+			<div class="flex items-start gap-2.5">
+				<TrashIcon class="mt-0.5 size-4 shrink-0 text-error" />
+				<div class="min-w-0">
+					<Dialog.Title class="text-[13.5px] font-medium">Delete this session?</Dialog.Title>
+					<Dialog.Description class="mt-1 text-[11.5px] leading-relaxed text-ink-tertiary">
+						<span class="text-ink-secondary">{pendingDelete?.title ?? 'This session'}</span>
+						and its whole transcript will be removed from disk. This cannot be undone.
+					</Dialog.Description>
+				</div>
+			</div>
+
+			{#if pendingDelete?.cwd}
+				<p
+					class="truncate rounded-md bg-paper px-2.5 py-1.5 font-mono text-[10.5px] text-ink-tertiary"
+				>
+					{pendingDelete.cwd}
+				</p>
+			{/if}
+
+			{#if deleteError}
+				<p
+					class="rounded-md border border-error/40 bg-error/5 px-2.5 py-1.5 text-[11.5px] text-error"
+				>
+					{deleteError}
+				</p>
+			{/if}
+
+			<div class="flex justify-end gap-2">
+				<Button
+					type="button"
+					variant="outline"
+					size="sm"
+					disabled={deleting}
+					onclick={() => {
+						deleteOpen = false;
+						pendingDelete = undefined;
+						deleteError = undefined;
+					}}
+				>
+					Cancel
+				</Button>
+				<Button
+					type="button"
+					variant="destructive"
+					size="sm"
+					disabled={deleting}
+					onclick={() => void confirmDelete()}
+				>
+					{deleting ? 'Deleting…' : 'Delete session'}
+				</Button>
+			</div>
+		</div>
+	</Dialog.Content>
+</Dialog.Root>

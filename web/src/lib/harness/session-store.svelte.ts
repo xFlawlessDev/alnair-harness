@@ -67,10 +67,10 @@ import type {
 	WorkspaceInfo,
 	WorktreeEntry
 } from './types.js';
-import { groupByWorkspace } from './workspaces.js';
-import { sortSubagents } from './subagents.js';
+import { fromTranscript, mergeSubagents, sortSubagents } from './subagents.js';
+import { workspaceView, type WorkspaceView } from './workspace-view.js';
 import { admit, beginReplay, endReplay, eventIdOf, liveGate, type GateState } from './dedup.js';
-import { applyRosterDelta, lastSegment, relativeTo, totalTokensOf } from './wire.js';
+import { applyRosterDelta, isExtMethod, lastSegment, relativeTo, totalTokensOf } from './wire.js';
 
 /** A frame the agent sent, plus the prompt it answers (if any). */
 export interface IncomingFrame {
@@ -158,6 +158,15 @@ export interface Transport {
 		gitRef?: string;
 		label?: string;
 	}): Promise<string>;
+
+	/**
+	 * Ask the machine for a directory, with its own native dialog.
+	 *
+	 * Not JSON-RPC: a browser cannot read an absolute path out of a directory
+	 * handle, so the dialog runs in the server process (`POST
+	 * /api/pick-directory`). `undefined` means the user cancelled.
+	 */
+	pickDirectory?(): Promise<string | undefined>;
 
 	/** A stored transcript, as `alnair/session/updates` returns it. */
 	sessionUpdates?(request: {
@@ -314,6 +323,29 @@ export interface SessionStore {
 	deleteSession(id: string): Promise<void>;
 	/** Start a session in `cwd` and make it the active one. */
 	createSession(cwd: string): Promise<void>;
+	/**
+	 * Add a workspace directory: ask the machine, then start a session there.
+	 *
+	 * Folded into one method rather than two because the two halves are one
+	 * action. A directory with no session is not a workspace the backend knows
+	 * about, so "add a workspace" IS "start a session in this directory" —
+	 * anything else would be a list entry that disappears on reload.
+	 *
+	 * Resolves to the chosen path, or `undefined` when the user cancelled.
+	 */
+	addWorkspace(): Promise<string | undefined>;
+	/**
+	 * Put a workspace away.
+	 *
+	 * Hides the group; nothing on disk is touched, and its sessions are still
+	 * reachable by opening one directly. Removing the SESSIONS is the delete
+	 * action, deliberately a different one.
+	 */
+	removeWorkspace(name: string): void;
+	/** Bring a hidden workspace back. */
+	restoreWorkspace(name: string): void;
+	/** Workspaces the reader put away, so the UI can offer them back. */
+	readonly hiddenWorkspaces: string[];
 	/** Reload the git context, branches and worktrees for the active session. */
 	refreshGit(): Promise<void>;
 	/**
@@ -421,7 +453,29 @@ export class HarnessStore implements SessionStore {
 	/** The mock starts in `auto`: the mode a fresh interactive session gets. */
 	access = $state<AccessMode>('auto');
 	settings = $state<SettingsState>({ ...DEFAULT_SETTINGS });
-	subagents = $state<SubagentSummary[]>(sortSubagents(subagents));
+	/**
+	 * Subagents this session spawned, running ones first.
+	 *
+	 * Derived, not stored: the transcript is the durable source (a
+	 * `subagent_spawned` frame is persisted, so a reload still knows every
+	 * subagent the session started), and the live snapshot from
+	 * `alnair/subagent/list_running` adds the counters only a running child
+	 * reports. Assigning a single stored list is what made the header empty
+	 * after a session switch: `selectSession` cleared it and only a later
+	 * `subagent_*` frame ever rebuilt it, so a subagent that was already
+	 * running stayed invisible until the frame happened to arrive.
+	 */
+	get subagents(): SubagentSummary[] {
+		if (!this.live) return this.mockSubagents;
+		return mergeSubagents(
+			Object.values(this.acc.subagents).map(fromTranscript),
+			this.liveSubagents[this.activeSessionId] ?? []
+		);
+	}
+
+	/** The fixture transport's scripted list; the live store never uses it. */
+	private mockSubagents = $state<SubagentSummary[]>(sortSubagents(subagents));
+
 	/**
 	 * The open subagent's transcript. A subagent is a session, so this is the
 	 * same folded view the main thread renders — the child's `updates.jsonl`
@@ -453,11 +507,45 @@ export class HarnessStore implements SessionStore {
 	 */
 	private readonly live: boolean;
 
+	/**
+	 * Live subagent snapshots per session, from `alnair/subagent/list_running`.
+	 *
+	 * Kept per session rather than for the active one alone: the header's list
+	 * is the transcript plus these, and switching away and back must not make a
+	 * running subagent disappear while the re-read is in flight.
+	 */
+	private liveSubagents = $state<Record<string, SubagentSummary[]>>({});
+
+	/**
+	 * Directories the reader added that no session lives in yet.
+	 *
+	 * Held separately from `sessions` because they are not sessions: the moment
+	 * a session is created there, the session-derived group replaces this entry
+	 * (see `workspaceView`). Persisting them would mean inventing a backend
+	 * concept for a view preference.
+	 */
+	private addedWorkspaces = $state<string[]>([]);
+
+	/** Workspaces the reader put away, by display name. */
+	private hidden = $state<string[]>([]);
+
 	get groups(): WorkspaceGroup[] {
 		// Alphabetical, with no session-derived pinning: clicking a conversation
 		// must not reorder the list under the pointer. `currentWorkspace` only
 		// marks which group is open; it does not move it.
-		return groupByWorkspace(this.sessions);
+		return this.workspaceLayout.groups;
+	}
+
+	/**
+	 * The workspace list, including directories the reader added that have no
+	 * session yet and excluding the ones they put away.
+	 */
+	get workspaceLayout(): WorkspaceView {
+		return workspaceView(this.sessions, this.addedWorkspaces, this.hiddenWorkspaces);
+	}
+
+	get hiddenWorkspaces(): string[] {
+		return this.hidden;
 	}
 
 	get currentWorkspace(): string {
@@ -481,7 +569,8 @@ export class HarnessStore implements SessionStore {
 			this.phase = 'connecting';
 			this.sessions = [];
 			this.models = [];
-			this.subagents = [];
+			this.mockSubagents = [];
+			this.liveSubagents = {};
 			this.accs = {};
 			this.activeSessionId = '';
 			this.model = '';
@@ -569,11 +658,17 @@ export class HarnessStore implements SessionStore {
 		const context = await this.transport.sessionContext?.(sessionId);
 		if (context) this.context = context;
 
-		// Subagents running in this session right now. A spawn that happened
-		// before this tab opened is only visible here; later ones arrive as
-		// `subagent_spawned` frames.
+		// Subagents running in this session right now. The header's list is the
+		// transcript merged with these: a spawn that happened before this tab
+		// opened is only visible here, and a spawn that has already finished is
+		// only visible in the transcript.
 		const running = await this.transport.listSubagents?.(sessionId);
-		if (running) this.subagents = sortSubagents(running);
+		if (running) {
+			this.liveSubagents = {
+				...this.liveSubagents,
+				[sessionId]: sortSubagents(running)
+			};
+		}
 
 		// The checkout row reads this: a session's branch, and whether its cwd
 		// is a worktree, are properties of the directory rather than of the
@@ -704,9 +799,11 @@ export class HarnessStore implements SessionStore {
 		this.planArtifact = undefined;
 		this.planToolCallId = undefined;
 		this.questionRequest = undefined;
-		// Subagents are per-session too. The new session's running set is
-		// re-read by `openSession`, so clearing here only drops the old rows.
-		this.subagents = [];
+		// Subagents are per-session, and both of their sources are already keyed
+		// that way (`acc.subagents`, `liveSubagents`), so nothing is cleared
+		// here: the header reads the new session's rows as soon as the active id
+		// moves. Clearing a shared list is what used to hide a running subagent
+		// until its next frame arrived.
 		this.subagentTurns = [];
 		// The git context belongs to the previous session's directory; clearing
 		// it now means the checkout row disappears rather than briefly naming
@@ -908,6 +1005,10 @@ export class HarnessStore implements SessionStore {
 	 * longer exists. The row is dropped optimistically for the same reason the
 	 * rename is — but restored if the agent refuses, because a session that is
 	 * still on disk must stay in the list.
+	 *
+	 * A refusal is re-thrown. Swallowing it is what made "delete does nothing"
+	 * invisible: the row disappeared, the delete never happened, and only a
+	 * reload revealed the session still existed.
 	 */
 	async deleteSession(id: string): Promise<void> {
 		const session = this.sessions.find((candidate) => candidate.id === id);
@@ -928,12 +1029,52 @@ export class HarnessStore implements SessionStore {
 		if (!this.transport.deleteSession) return;
 		try {
 			await this.transport.deleteSession(id, session.cwd);
-		} catch {
-			// Refused: put the row back exactly where it was.
+		} catch (error) {
+			// Refused: put the row back exactly where it was, and let the
+			// caller say why.
 			this.sessions = [...this.sessions, session].sort(
 				(a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime()
 			);
+			throw error;
 		}
+	}
+
+	/**
+	 * Add a workspace: ask the machine for a directory, then start a session
+	 * there.
+	 *
+	 * The two halves are one action. A workspace the backend does not know
+	 * about has no sessions, and a session is the only thing that puts a
+	 * directory in the roster — so "add a workspace" is "start a session in
+	 * this directory". The alternative (a sidebar-only entry) would vanish on
+	 * the next reload, which reads as the action having failed.
+	 *
+	 * Resolves to the chosen path, or `undefined` when the dialog was cancelled.
+	 */
+	async addWorkspace(): Promise<string | undefined> {
+		if (!this.transport.pickDirectory) return undefined;
+		const path = await this.transport.pickDirectory();
+		if (!path) return undefined;
+		await this.createSession(path);
+		return path;
+	}
+
+	/**
+	 * Put a workspace away.
+	 *
+	 * Nothing on disk is touched and the sessions stay in `sessions`, so the
+	 * group comes back intact when restored. Hiding rather than deleting is the
+	 * whole point: "remove workspace" must not be a way to lose transcripts by
+	 * accident.
+	 */
+	removeWorkspace(name: string): void {
+		if (!name || this.hidden.includes(name)) return;
+		this.hidden = [...this.hidden, name];
+	}
+
+	/** Bring a hidden workspace back into the list. */
+	restoreWorkspace(name: string): void {
+		this.hidden = this.hidden.filter((candidate) => candidate !== name);
 	}
 
 	/**
@@ -1223,12 +1364,15 @@ export class HarnessStore implements SessionStore {
 	/**
 	 * Whether a frame rides the extension rail.
 	 *
-	 * `_alnair/session/update` is the replay/persisted form; the live one-shot
-	 * rail is `alnair/session_notification`. Both carry the extension payload,
-	 * and the ACP rail is the only one that does not.
+	 * `alnair/session/update` is the replay/persisted form; the live one-shot
+	 * rail is `alnair/session_notification`. The transport normalizes the
+	 * gateway's `_` prefix away, so both arrive unprefixed and this is the only
+	 * place the distinction is drawn. Getting it wrong is silent: the extension
+	 * payload would be handed to the ACP decoder, which does not recognize
+	 * `model_changed` or `interaction_resolved` and drops them.
 	 */
 	private isExtFrame(method: string): boolean {
-		return method === '_alnair/session/update' || method === 'alnair/session_notification';
+		return isExtMethod(method);
 	}
 
 	/**
@@ -1259,35 +1403,11 @@ export class HarnessStore implements SessionStore {
 			case 'subagent_spawned':
 			case 'subagent_progress':
 			case 'subagent_finished': {
-				// The reducer folds these into the transcript card; the header's
-				// list is the same data in a different shape. Re-derive it from
-				// the accumulator so the two can never disagree.
-				this.subagents = sortSubagents(
-					Object.values(this.acc.subagents).map((state) => ({
-						id: state.id,
-						agent: state.agent,
-						description: state.description,
-						childSessionId: state.childSessionId,
-						status:
-							state.status === 'running'
-								? 'running'
-								: state.status === 'error'
-									? 'failed'
-									: 'completed',
-						startedAt: state.startedAt,
-						durationMs: (state.endedAt ?? Date.now()) - state.startedAt,
-						turnCount: state.turnCount,
-						toolCallCount: state.toolCallCount,
-						tokensUsed: state.tokensUsed,
-						contextWindowTokens: 0,
-						contextUsagePct: 0,
-						toolsUsed: state.toolsUsed,
-						errorCount: state.error ? 1 : 0,
-						output: state.result,
-						failureError: state.error,
-						model: state.model
-					}))
-				);
+				// Nothing to mirror: the reducer folds these into
+				// `acc.subagents`, and the header's list is DERIVED from that
+				// (plus the live snapshots) by the `subagents` getter. Assigning
+				// a copy here is what made the list a second source of truth —
+				// and the reason a session switch could blank it.
 				return;
 			}
 			default:

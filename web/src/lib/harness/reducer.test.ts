@@ -514,3 +514,137 @@ describe('reducer: turn ordering', () => {
 		expect(acc.turns[0].role).toBe('user');
 	});
 });
+
+/**
+ * A cancelled turn reloaded as `hi test sub agenthi test sub agent`.
+ *
+ * The transcript holds two prompts with the same text: the one that was
+ * stopped, and the retry typed afterwards. `turn_completed` — the separator
+ * between them — is an EXTENSION frame, and the user-chunk window used to close
+ * only on ACP frames. So the window stayed open across the boundary and the
+ * second prompt's echo was appended to the first bubble.
+ */
+describe('reducer: a stopped turn does not swallow the next prompt', () => {
+	const userChunk = (text: string, promptIndex?: number): SessionUpdate =>
+		({
+			sessionUpdate: 'user_message_chunk',
+			content: { type: 'text', text },
+			...(promptIndex === undefined ? {} : { _meta: { promptIndex } })
+		}) as unknown as SessionUpdate;
+
+	const turnCompleted = (stopReason: string): ExtSessionUpdate =>
+		({
+			sessionUpdate: 'turn_completed',
+			prompt_id: 'p1',
+			stop_reason: stopReason
+		}) as unknown as ExtSessionUpdate;
+
+	const agentChunk = (text: string): SessionUpdate =>
+		({
+			sessionUpdate: 'agent_message_chunk',
+			content: { type: 'text', text }
+		}) as unknown as SessionUpdate;
+
+	it('starts a new bubble when turn_completed separates two identical prompts', () => {
+		let acc = emptyAcc();
+		acc = reduceAcpUpdate(acc, userChunk('hi test sub agent', 0), { now: NOW, sessionId: SESSION });
+		acc = reduceExtUpdate(acc, turnCompleted('cancelled'), { now: NOW + 1, sessionId: SESSION });
+		acc = reduceAcpUpdate(acc, userChunk('hi test sub agent', 1), {
+			now: NOW + 2,
+			sessionId: SESSION
+		});
+
+		expect(acc.turns.map((turn) => turn.role)).toEqual(['user', 'user']);
+		expect(acc.turns.map((turn) => (turn.parts[0] as { text: string }).text)).toEqual([
+			'hi test sub agent',
+			'hi test sub agent'
+		]);
+	});
+
+	it('splits on a changed promptIndex even with no turn boundary between', () => {
+		// The durable rule: `promptIndex` is the server's own turn key, so two
+		// prompts differ by it whether or not a `turn_completed` arrived.
+		let acc = emptyAcc();
+		acc = reduceAcpUpdate(acc, userChunk('same', 0), { now: NOW, sessionId: SESSION });
+		acc = reduceAcpUpdate(acc, userChunk('same', 1), { now: NOW + 1, sessionId: SESSION });
+
+		expect(acc.turns).toHaveLength(2);
+	});
+
+	it('still joins consecutive chunks of ONE prompt', () => {
+		// The fix must not split a prompt that arrives in pieces.
+		let acc = emptyAcc();
+		acc = reduceAcpUpdate(acc, userChunk('hi ', 0), { now: NOW, sessionId: SESSION });
+		acc = reduceAcpUpdate(acc, userChunk('there', 0), { now: NOW + 1, sessionId: SESSION });
+
+		expect(acc.turns).toHaveLength(1);
+		expect((acc.turns[0].parts[0] as { text: string }).text).toBe('hi there');
+	});
+
+	it('keeps the positional rule when the frames carry no promptIndex', () => {
+		// Older transcripts have no `promptIndex`; an assistant reply between
+		// two prompts must still separate them.
+		let acc = emptyAcc();
+		acc = reduceAcpUpdate(acc, userChunk('one'), { now: NOW, sessionId: SESSION });
+		acc = reduceAcpUpdate(acc, agentChunk('reply'), { now: NOW + 1, sessionId: SESSION });
+		acc = reduceAcpUpdate(acc, userChunk('two'), { now: NOW + 2, sessionId: SESSION });
+
+		expect(acc.turns.map((turn) => turn.role)).toEqual(['user', 'assistant', 'user']);
+	});
+
+	it('closes the window on a retry_state frame', () => {
+		// A retry banner arrives between attempts; it must not leave the window
+		// open for the next prompt.
+		let acc = emptyAcc();
+		acc = reduceAcpUpdate(acc, userChunk('first'), { now: NOW, sessionId: SESSION });
+		acc = reduceExtUpdate(
+			acc,
+			{
+				sessionUpdate: 'retry_state',
+				type: 'retrying',
+				attempt: 1,
+				max_retries: 3,
+				reason: 'transient'
+			} as unknown as ExtSessionUpdate,
+			{ now: NOW + 1, sessionId: SESSION }
+		);
+		acc = reduceAcpUpdate(acc, userChunk('second'), { now: NOW + 2, sessionId: SESSION });
+
+		const users = acc.turns.filter((turn) => turn.role === 'user');
+		expect(users).toHaveLength(2);
+		expect(users.map((turn) => (turn.parts[0] as { text: string }).text)).toEqual([
+			'first',
+			'second'
+		]);
+	});
+
+	it('a replay of the stopped-then-retried transcript keeps both prompts', () => {
+		// The exact shape from a real `updates.jsonl`: prompt, retries, a
+		// cancelled `turn_completed`, then the same prompt again.
+		const envelopes = [
+			{
+				method: 'session/update',
+				params: { sessionId: SESSION, update: userChunk('hi test sub agent', 0) }
+			},
+			{
+				method: '_alnair/session/update',
+				params: { sessionId: SESSION, update: turnCompleted('cancelled') }
+			},
+			{
+				method: 'session/update',
+				params: { sessionId: SESSION, update: userChunk('hi test sub agent', 1) }
+			},
+			{ method: 'session/update', params: { sessionId: SESSION, update: agentChunk('done') } }
+		].map((envelope, index) => ({
+			...envelope,
+			timestamp: new Date(NOW + index).toISOString()
+		}));
+
+		const acc = replay(envelopes, SESSION);
+		const users = acc.turns.filter((turn) => turn.role === 'user');
+		expect(users).toHaveLength(2);
+		for (const turn of users) {
+			expect((turn.parts[0] as { text: string }).text).toBe('hi test sub agent');
+		}
+	});
+});
