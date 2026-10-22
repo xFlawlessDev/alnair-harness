@@ -119,7 +119,9 @@ a design against the 0.1.15 teardown), MCP servers on protocol 2026-07-28
   `alnair-config` (config layering, `~/.alnair` paths), `alnair-env` (endpoints),
   `alnair-tools` (tool implementations incl. codex/opencode ports — see its
   THIRD_PARTY_NOTICES.md), `alnair-workspace` (FS/VCS/exec/permissions,
-  checkpoint/worktree), `alnair-log` (local observability).
+  checkpoint/worktree), `alnair-log` (local observability),
+  `alnair-web` (`alnair web`: embeds the `web/` SPA and bridges browser
+  WebSockets to the leader — see WEB UI below).
 - `crates/common/`, `crates/build/`, `prod/mc/` — shared libs, proto build,
   proxy wire types (the latter to be redefined against Kimi in M1).
 - `web/` — the browser harness: SvelteKit + Tailwind v4 + shadcn-svelte, composed
@@ -357,8 +359,56 @@ every intermediate state.
 `Agent::replace_agents_md` cannot disturb the KV-cache prefix. Do not move it
 into the rendered prompt.
 
-## Test seams
+## Web UI (`alnair web`)
 
+The browser is a **client of the leader**, not a second agent. Each WebSocket
+gets its own `LeaderClient` (`alnair-web/src/bridge.rs`), so the leader's
+existing machinery does all the work: `session_subscribers` fan-out (a live
+turn's deltas reach TUI and browser alike), one `session_driver` per session
+(reverse requests that must not duplicate go there only), `load_live_buffer`
+plus `event_seq` dedup for a mid-turn attach, and the `interaction_requests`
+cache that replays parked modals to a newly attached client with
+first-answer-wins.
+
+Do NOT wire the browser to `agent serve` (`agent/server.rs`): that creates its
+own `MvpAgent` (separate state) and keeps a single `relay_dest` each new
+connection overwrites, so only the newest client sees live deltas.
+
+- **The bridge parses nothing** except `alnair/leader_reconnected`. It is a byte
+  pump; adding routing logic there duplicates the leader and drifts.
+- **No replay on reconnect.** `alnair/leader_reconnected` tells the browser to
+  re-handshake (`initialize` + `session/load`). The `StdioReplayState` machinery
+  in `alnair-bin` exists for third-party IDE clients that cannot re-handshake;
+  ours can, so "open the page" and "reconnect" stay one code path.
+- **Extension methods are wrapped.** `alnair/*` requests go out as
+  `_alnair/<name>` with `{ method, params }` nested inside the request params. A
+  plain `alnair/<name>` request is answered "Method not found" by a live leader.
+  ACP methods (`initialize`, `session/load`, …) are sent normally.
+- **The roster and `session/info` are camelCase**, while Alnair's extension
+  *updates* on the stream are snake_case. `web/src/lib/harness/wire.ts` accepts
+  both; do not "fix" one spelling without the other. `reasoningEfforts` is a list
+  of objects, and `activity: "dormant"` means an on-disk row, not a running turn.
+- **Attaching is subscribing.** `session/load` is what puts a client in
+  `session_subscribers`; a UI that only switches its local index never receives
+  that session's stream.
+- **Client-side dedup is mandatory.** The leader dedups only WITHIN one load.
+  Across loads the client must drop frames at or below its `eventId` watermark
+  (`web/src/lib/harness/dedup.ts`), and a `session/load` opens a replay window
+  that clears the accumulator. Unsequenced notifications always apply.
+- **Assets are embedded** (`rust-embed`) to keep the single-binary release.
+  `alnair-web/build.rs` writes a placeholder shell when `web/build/` is absent,
+  so `cargo check` never needs Node; the server reports the placeholder at
+  startup and on `/api/session`. Release builds must run
+  `npm --prefix web run build` first (docs/RELEASE.md).
+- **Auth is cookie + `Origin`, both required.** A WS upgrade skips CORS
+  preflight, so the cookie alone would let any page in the same browser drive
+  the agent. The dev origin (`:5173`) is accepted only under
+  `cfg!(debug_assertions)`.
+- **Never advertise `terminal`/`fs_*`** in the browser's
+  `ClientCapabilities`: claiming them routes tool calls to a client that cannot
+  serve them and the call hangs.
+
+## Test seams
 Cross-crate test hooks are behind the `test-support` cargo feature
 (alnair-workspace, alnair-pager-render, alnair-config, alnair-tui), enabled via
 dependents' `[dev-dependencies]`. Don't expose new test seams as plain

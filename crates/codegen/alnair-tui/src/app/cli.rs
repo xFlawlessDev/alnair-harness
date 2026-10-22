@@ -71,6 +71,13 @@ See ~/.alnair/README.md for more information.
     Export(crate::export_cmd::ExportArgs),
     /// Export or upload session trace data
     Trace(crate::trace_cmd::TraceArgs),
+    /// Serve the browser UI for the shared leader
+    ///
+    /// Opens an HTTP server on loopback that serves the embedded web client and
+    /// upgrades `/ws` into a JSON-RPC pipe to the leader. Every browser tab is
+    /// an ordinary leader client, so the TUI and the browser render the same
+    /// live session state.
+    Web(WebArgs),
     /// Check for updates or install a specific version
     Update {
         /// Check for updates without installing.
@@ -163,6 +170,23 @@ pub enum LeaderMgmtCommand {
     /// Stop all running leader processes
     Kill,
 }
+/// Arguments for `alnair web`.
+#[derive(Debug, clap::Args, Clone)]
+pub struct WebArgs {
+    /// Address for the web UI to listen on (`:0` picks a free port)
+    #[arg(long, default_value = "127.0.0.1:2420")]
+    pub bind: SocketAddr,
+    /// Target a specific leader process by PID
+    #[arg(long)]
+    pub pid: Option<u32>,
+    /// Target an explicit leader socket path
+    #[arg(long, value_name = "PATH")]
+    pub socket: Option<PathBuf>,
+    /// Open the default browser once the server is listening
+    #[arg(long)]
+    pub open: bool,
+}
+
 /// Arguments for the `agent` subcommand.
 #[derive(Debug, clap::Args, Clone)]
 pub struct AgentArgs {

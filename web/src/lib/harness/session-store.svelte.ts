@@ -18,8 +18,6 @@ import {
 	initialSubagentTranscript,
 	initialTranscript,
 	models,
-	parkedPlanQuestionRequest,
-	parkedQuestionRequest,
 	sessions,
 	subagents,
 	workspace,
@@ -66,6 +64,8 @@ import type {
 } from './types.js';
 import { groupByWorkspace } from './workspaces.js';
 import { sortSubagents } from './subagents.js';
+import { admit, beginReplay, endReplay, eventIdOf, liveGate, type GateState } from './dedup.js';
+import { applyRosterDelta } from './wire.js';
 
 /** A frame the agent sent, plus the prompt it answers (if any). */
 export interface IncomingFrame {
@@ -85,6 +85,60 @@ export interface Transport {
 	respond(toolCallId: string, optionId: string): void;
 	/** Answer a parked questionnaire. */
 	respondQuestions(toolCallId: string, response: AskUserQuestionResponse): void;
+
+	// --- the socket transport's surface -------------------------------------
+	//
+	// The fixture transport implements these as no-ops. They exist so a real
+	// transport can be swapped in without the components learning anything
+	// about ACP; the store calls them, not the UI.
+	//
+	// Every method here is optional so `FixtureTransport` (which drives a
+	// scripted transcript) stays a valid implementation.
+
+	/** Handshake: `initialize` plus the roster. Idempotent on reconnect. */
+	connect?(): Promise<void>;
+	/** Roster rows, or `undefined` when the transport cannot serve them. */
+	listSessions?(): Promise<Session[]>;
+	/**
+	 * Attach to a session: sends `session/load` and streams the replay through
+	 * `onFrame`. The store resets its accumulator first (`beginSessionLoad`).
+	 *
+	 * Returns the session's model catalog and mode, which only the load
+	 * response carries.
+	 */
+	openSession?(sessionId: string): Promise<SessionOpenResult | void>;
+	/** Create a session in `cwd` and return its id. */
+	newSession?(cwd: string): Promise<string>;
+	/** The exact context snapshot (`alnair/session/info`). */
+	sessionContext?(sessionId: string): Promise<ContextUsage | undefined>;
+	/** A stored transcript, as `alnair/session/updates` returns it. */
+	sessionUpdates?(request: {
+		sessionId: string;
+		cwd: string;
+	}): Promise<{ method: string; params?: unknown; timestamp?: string }[] | undefined>;
+	/** The current roster delta stream (`alnair/sessions/changed`). */
+	onRosterChanged?(sink: (delta: { upserted?: unknown[]; removed?: string[] }) => void): void;
+	/** Abandon the live turn server-side (`session/cancel`). */
+	cancelTurn?(): void;
+	/** `session/setModel`, with the optional per-session effort. */
+	setModel?(modelId: string, effort?: string): void;
+	/** `alnair/yolo_mode_changed`: the runtime permission mode. */
+	setAccess?(mode: AccessMode): void;
+	/** Answer a parked plan-approval request. */
+	respondPlan?(toolCallId: string, outcome: PlanOutcome): void;
+	/** Register the frame sink. Called once by the store. */
+	onFrame?(sink: (sessionId: string, frame: IncomingFrame) => void): void;
+	/** The leader relaunched and the transport re-handshook; reload state. */
+	onReconnected?(sink: () => void): void;
+}
+
+export type PlanOutcome = 'approved' | 'cancelled' | 'abandoned';
+
+/** What `session/load` reported about the session it opened. */
+export interface SessionOpenResult {
+	models: ModelOption[];
+	currentModel?: string;
+	access?: AccessMode;
 }
 
 export interface SessionStore {
@@ -144,6 +198,12 @@ export interface SessionStore {
 	chatAboutQuestion(): void;
 	/** Plan mode only: accept what is answered and end the interview. */
 	skipQuestions(): void;
+	/** Answer the parked plan approval. */
+	answerPlan(outcome: PlanOutcome): void;
+	/** Attach to a session (replay + live); resets the transcript first. */
+	openSession(sessionId: string): Promise<void>;
+	/** Handshake, roster, and attach to the first session. Called once. */
+	bootstrap(): Promise<void>;
 }
 
 const STREAM_TICK_MS = 24;
@@ -253,7 +313,82 @@ export class HarnessStore implements SessionStore {
 		[sessions[3].id]: initialQuestionTranscript(planQuestionTurn, sessions[3].id)
 	});
 
-	constructor(private transport: Transport = new FixtureTransport()) {}
+	constructor(private transport: Transport = new FixtureTransport()) {
+		// A real transport pushes frames for whichever session they belong to,
+		// so the store owns the routing (the fixture transport calls back with
+		// the session it was started for).
+		this.transport.onFrame?.((sessionId, frame) => this.receive(sessionId, frame));
+		this.transport.onReconnected?.(() => this.reloadAfterReconnect());
+		// The roster is machine-wide and arrives unsolicited; the sidebar must
+		// follow it without polling.
+		this.transport.onRosterChanged?.((delta) => {
+			this.sessions = applyRosterDelta(this.sessions, delta as never);
+		});
+	}
+
+	/**
+	 * Re-establish state after the leader relaunched.
+	 *
+	 * The bridge tells us the connection is fresh; the transcript is reloaded
+	 * from a `session/load` replay rather than patched, because the new leader
+	 * may have persisted frames this view never saw.
+	 */
+	private reloadAfterReconnect() {
+		this.busy = false;
+		this.questionRequest = undefined;
+		this.planArtifact = undefined;
+		const sessionId = this.activeSessionId;
+		void this.openSession(sessionId);
+	}
+
+	/**
+	 * Attach to a session.
+	 *
+	 * Resets the accumulator and opens the replay window BEFORE the request
+	 * goes out, so no frame can arrive against a stale watermark. The load
+	 * response then fills in what only it knows: the model catalog, the
+	 * session's current model, its mode, and the exact context totals.
+	 */
+	async openSession(sessionId: string) {
+		if (!this.transport.openSession) return;
+		this.beginSessionLoad(sessionId);
+		const result = await this.transport.openSession(sessionId);
+
+		if (result) {
+			if (result.models.length > 0) {
+				this.models = result.models;
+				if (result.currentModel) this.model = result.currentModel;
+			}
+			if (result.access) this.access = result.access;
+		}
+
+		// The stream carries only `auto_compact_*` deltas; the itemized totals
+		// come from `alnair/session/info`, once per attach.
+		const context = await this.transport.sessionContext?.(sessionId);
+		if (context) this.context = context;
+	}
+
+	/**
+	 * First load: handshake, roster, then attach to something.
+	 *
+	 * Called once by the layout. A failure leaves the store empty rather than
+	 * throwing into the component tree — the transport reconnects on its own.
+	 */
+	async bootstrap() {
+		if (!this.transport.connect) return;
+		try {
+			await this.transport.connect();
+			const sessions = await this.transport.listSessions?.();
+			if (sessions && sessions.length > 0) {
+				this.sessions = sessions;
+				this.activeSessionId = sessions[0].id;
+				await this.openSession(sessions[0].id);
+			}
+		} catch {
+			// Offline, or the leader is still starting. The socket transport
+			// retries with backoff; the UI shows its empty state until then.
+		}
+	}
 
 	private get acc(): Acc {
 		return this.accs[this.activeSessionId] ?? emptyAcc();
@@ -295,27 +430,41 @@ export class HarnessStore implements SessionStore {
 	/** The `alnair/exit_plan_mode` request the agent is waiting on, if any. */
 	private planArtifact = $state<PlanArtifact | undefined>(initialPlan);
 
+	/** The tool call id that parked `planArtifact`, needed to answer it. */
+	private planToolCallId = $state<string | undefined>(undefined);
+
+	/** Answer the parked plan: approve, send back with feedback, or abandon. */
+	answerPlan(outcome: PlanOutcome) {
+		if (!this.planArtifact) return;
+		this.transport.respondPlan?.(this.planToolCallId ?? '', outcome);
+		this.planArtifact = undefined;
+		this.planToolCallId = undefined;
+	}
+
 	get commands(): AvailableCommand[] {
 		return this.acc.commands ?? [];
 	}
 
 	selectSession(id: string) {
 		if (!this.sessions.some((session) => session.id === id)) return;
+		if (id === this.activeSessionId) return;
 		this.transport.stop();
 		this.busy = false;
 		this.activeSessionId = id;
+
 		const session = this.sessions.find((s) => s.id === id);
 		if (session?.modelId) this.model = session.modelId;
-		// Only the scripted session has a plan awaiting approval.
-		this.planArtifact = id === sessions[0].id ? initialPlan : undefined;
-		// The question sessions arrive already parked on a questionnaire, the
-		// same way a reattached viewer would learn it from the live stream.
-		this.questionRequest =
-			id === sessions[1].id
-				? questionFromPayload(parkedQuestionRequest)
-				: id === sessions[3].id
-					? questionFromPayload(parkedPlanQuestionRequest)
-					: undefined;
+
+		// Parked state belongs to the session that was open. The replay for the
+		// new one re-delivers any interaction still waiting on the agent, so
+		// clearing here cannot lose a live modal.
+		this.planArtifact = undefined;
+		this.planToolCallId = undefined;
+		this.questionRequest = undefined;
+
+		// Attach for real: `session/load` subscribes this client and replays the
+		// transcript. Without it the stream for this session never arrives.
+		void this.openSession(id);
 	}
 
 	setModel(id: string) {
@@ -325,6 +474,9 @@ export class HarnessStore implements SessionStore {
 		if (next.efforts.length > 0 && !next.efforts.includes(this.effort)) {
 			this.effort = next.efforts[Math.min(1, next.efforts.length - 1)];
 		}
+		// A real transport forwards this to `session/setModel`; the fixture has
+		// no server to tell.
+		this.transport.setModel?.(this.model, this.effort);
 	}
 
 	setEffort(effort: string) {
@@ -333,6 +485,9 @@ export class HarnessStore implements SessionStore {
 
 	setAccess(mode: AccessMode) {
 		this.access = mode;
+		// The runtime mode is a session setting, not a UI preference: the agent
+		// must know, or it keeps asking according to the old mode.
+		this.transport.setAccess?.(mode);
 	}
 
 	setSetting(key: string, value: SettingValue) {
@@ -355,7 +510,26 @@ export class HarnessStore implements SessionStore {
 	 * view here is a normal conversation, not a summary.
 	 */
 	openSubagent(subagent: SubagentSummary) {
-		this.subagentTurns = replay(initialSubagentTranscript(subagent), subagent.childSessionId).turns;
+		const childSessionId = subagent.childSessionId;
+		// The fixture transport has no child transcript to read.
+		if (!this.transport.sessionUpdates) {
+			this.subagentTurns = replay(initialSubagentTranscript(subagent), childSessionId).turns;
+			return;
+		}
+
+		// A child session stores its own `updates.jsonl`; `alnair/session/updates`
+		// reads any session by id, including one whose cwd differs from the
+		// parent's. The replay is folded by the same reducer the main thread uses,
+		// so this is a normal conversation, not a summary.
+		const parent = this.activeSession;
+		void this.transport
+			.sessionUpdates({ sessionId: childSessionId, cwd: parent.cwd })
+			.then((envelopes) => {
+				if (envelopes) this.subagentTurns = replay(envelopes, childSessionId).turns;
+			})
+			.catch(() => {
+				this.subagentTurns = [];
+			});
 	}
 
 	send(text: string) {
@@ -374,6 +548,9 @@ export class HarnessStore implements SessionStore {
 	cancel() {
 		if (!this.busy) return;
 		this.transport.stop();
+		// Tell the agent too: a viewer may be watching a turn the TUI drives,
+		// and stopping only the local stream would leave that turn running.
+		this.transport.cancelTurn?.();
 		const acc = closeTurn(this.acc, 'cancelled', undefined, Date.now());
 		this.write(acc);
 		this.busy = false;
@@ -442,8 +619,37 @@ export class HarnessStore implements SessionStore {
 		this.write(resolveCardById(this.acc, `ask-${toolCallId}`));
 	}
 
+	/** Replay/live watermark per session; see `dedup.ts` for the rule. */
+	private gates = $state<Record<string, GateState>>({});
+
+	private gateFor(sessionId: string): GateState {
+		return this.gates[sessionId] ?? liveGate();
+	}
+
+	/**
+	 * Start (or restart) a session's transcript from a `session/load` replay.
+	 *
+	 * Resets the accumulator and opens the replay window, so the frames that
+	 * follow rebuild the view instead of being deduped against a stale
+	 * watermark. A transport calls this immediately before sending the request.
+	 */
+	beginSessionLoad(sessionId: string) {
+		this.gates = { ...this.gates, [sessionId]: beginReplay() };
+		this.accs = { ...this.accs, [sessionId]: emptyAcc() };
+	}
+
 	private receive(sessionId: string, frame: IncomingFrame) {
 		if (sessionId !== this.activeSessionId) return;
+
+		// The `session/load` response closes the replay window: everything
+		// after it is compared against the watermark instead of applied blindly.
+		if (frame.method === 'session/load:result') {
+			this.gates = {
+				...this.gates,
+				[sessionId]: endReplay(this.gateFor(sessionId))
+			};
+			return;
+		}
 
 		if (frame.method === 'session/prompt:result') {
 			const stopReason = String(frame.params.stopReason ?? 'end_turn');
@@ -464,6 +670,9 @@ export class HarnessStore implements SessionStore {
 				title: 'Plan for approval',
 				markdown: String(frame.params.planContent ?? '')
 			};
+			// Kept so the approval can be addressed back to the request that
+			// parked it; the tool call id is the wire's correlation key.
+			this.planToolCallId = String(frame.params.toolCallId ?? '');
 			return;
 		}
 
@@ -476,6 +685,14 @@ export class HarnessStore implements SessionStore {
 
 		const update = frame.params.update as Record<string, unknown> | undefined;
 		if (!update) return;
+
+		// Dedup across reconnects. The leader only dedups WITHIN one load; a
+		// second `session/load` replays the whole transcript into an accumulator
+		// that may already hold part of it. Unsequenced frames always apply.
+		const gate = this.gateFor(sessionId);
+		const verdict = admit(gate, eventIdOf(frame.params));
+		if (!verdict.apply) return;
+		this.gates = { ...this.gates, [sessionId]: verdict.state };
 
 		const ctx = { now: Date.now(), sessionId, modelId: this.model, effort: this.effort };
 		const acc =

@@ -11,7 +11,21 @@ does not run — it is kept only as a reference for the GitHub-hosted layout.
 
 ## Cutting a release
 
-1. Bump `[workspace.package] version` in `Cargo.toml`; land the change on
+1. Build the web UI **before** the Rust build, or the binary embeds the
+   "not built" placeholder page served by `alnair web`:
+
+   ```sh
+   npm --prefix web ci
+   npm --prefix web run build
+   ```
+
+   `web/build/` is gitignored. Pin Node on each runner; the build needs no
+   native toolchain beyond it. Sanity-check that the assets landed before
+   packaging (`test -f web/build/_app/immutable` — a directory, not a file, on
+   some shells use `test -d`), because a placeholder build produces a working
+   binary with a useless UI.
+
+2. Bump `[workspace.package] version` in `Cargo.toml`; land the change on
    `main` with green CI.
 2. Regenerate the third-party notices (not enforced by CI — this is the
    step that keeps `THIRD-PARTY-NOTICES.md` fresh):

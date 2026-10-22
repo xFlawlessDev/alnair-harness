@@ -12,7 +12,7 @@
 	import { Button } from '#lib/components/ui/button/index.js';
 	import * as Tooltip from '#lib/components/ui/tooltip/index.js';
 	import { useSessionStore } from '#lib/harness/context.js';
-	import { commands, filesByDirectory, suggestions, workspaceFiles } from '#lib/harness/mock.js';
+	import { filesByDirectory, suggestions, workspaceFiles } from '#lib/harness/mock.js';
 	import type { SubagentSummary } from '#lib/harness/types.js';
 
 	const store = useSessionStore();
@@ -127,7 +127,7 @@
 					access: store.access
 				}}
 				busy={store.busy}
-				{commands}
+				commands={store.commands}
 				files={workspaceFiles}
 				onbrowse={(path) => filesByDirectory[path] ?? []}
 				onsend={(text) => store.send(text)}

@@ -50,6 +50,7 @@ members = [
     "crates/codegen/alnair-tools-api",
     "crates/codegen/alnair-update",
     "crates/codegen/alnair-version",
+    "crates/codegen/alnair-web",
     "crates/codegen/alnair-workspace",
     "crates/codegen/alnair-workspace-types",
     "crates/codegen/alnair-hooks-plugins-types",
@@ -194,6 +195,7 @@ resvg = { version = "0.47", default-features = false, features = ["text"] }
 ring = "0.17"
 rsa = "0.9"
 runfiles = "0.1"
+rust-embed = "8"
 rustc-hash = "2"
 schemars = "1"
 scraper = "0.23"

@@ -20,6 +20,8 @@ workspace = true
 [dependencies]
 # The pager library (all application logic + the public API main.rs drives).
 alnair-tui = { path = "../alnair-tui" }
+# The browser client bridge (`alnair web`).
+alnair-web = { path = "../alnair-web" }
 # Optional scrollback-native render mode, wired in via the fn-pointer seam.
 alnair-pager-minimal = { path = "../alnair-pager-minimal" }
 

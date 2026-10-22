@@ -177,6 +177,30 @@ async fn run_setup_command(json: bool) {
         }
     }
 }
+/// `alnair web`: serve the browser client for the shared leader.
+///
+/// The server binds before it attaches: `connect_or_spawn` runs per WebSocket,
+/// so a machine with no leader starts one on first connect rather than at
+/// startup. That keeps `alnair web` cheap to leave running and matches how the
+/// TUI behaves.
+async fn run_web_command(args: alnair_tui::app::WebArgs) -> Result<()> {
+    use alnair_web::{WebServerConfig, run_web_server};
+
+    let leader = alnair_web::server::LeaderTarget {
+        pid: args.pid,
+        socket: args.socket.clone(),
+    };
+    let config = WebServerConfig {
+        bind: args.bind,
+        leader,
+        open: args.open,
+    };
+
+    let cancel = CancellationToken::new();
+    run_web_server(config, cancel).await?;
+    Ok(())
+}
+
 async fn run_leader_mgmt(args: LeaderMgmtArgs) -> Result<()> {
     match args.command {
         LeaderMgmtCommand::Kill => kill_leaders().await,
@@ -1445,6 +1469,10 @@ async fn async_main() -> Result<()> {
             Command::Leader(leader_args) => {
                 init_tracing_simple("cli");
                 return run_leader_mgmt(leader_args).await;
+            }
+            Command::Web(web_args) => {
+                init_tracing_simple("web");
+                return run_web_command(web_args).await;
             }
             Command::Worktree(worktree_args) => {
                 init_tracing_simple("cli");
