@@ -380,10 +380,36 @@ connection overwrites, so only the newest client sees live deltas.
   re-handshake (`initialize` + `session/load`). The `StdioReplayState` machinery
   in `alnair-bin` exists for third-party IDE clients that cannot re-handshake;
   ours can, so "open the page" and "reconnect" stay one code path.
-- **Extension methods are wrapped.** `alnair/*` requests go out as
-  `_alnair/<name>` with `{ method, params }` nested inside the request params. A
-  plain `alnair/<name>` request is answered "Method not found" by a live leader.
-  ACP methods (`initialize`, `session/load`, …) are sent normally.
+- **Extension methods are `_`-prefixed with FLAT params.** `alnair/*` requests
+  go out as `_alnair/<name>` with the handler's own fields directly in `params`
+  — never nested as `{ method, params }`. The ACP decoder strips the `_` and
+  hands the whole `params` object to the handler, so nesting leaves it with no
+  fields. A plain `alnair/<name>` request is answered "Method not found". ACP
+  methods (`initialize`, `session/load`, …) are sent normally. This survived one
+  release because the roster ignores unknown fields and `session/info` with an
+  unusable id falls back to the first resident session — probe the SECOND
+  session when checking an id-scoped method.
+- **Extension responses have two shapes.** `to_ext_response` answers
+  `ExtMethodResult { result, error }`; `to_raw_response` (`session/updates`,
+  `commands/list`) writes the payload directly. `unwrapExt` discriminates on the
+  presence of `result`. Reading only the envelope silently drops transcripts.
+- **The extension rail is flat too.** `_alnair/session/update` carries
+  `{ sessionId, update, _meta }` at the top of `params`, exactly like
+  `session/update`; the `_` is only the gateway's marker. The store chooses its
+  decoder by method NAME, so the transport must pass it through verbatim.
+- **`session/set_model`, not `session/setModel`.** The camelCase spelling is
+  "Method not found"; the effort rides in `_meta.reasoningEffort`.
+  `session/load` also needs the session's own `cwd` (the agent resolves the
+  session directory from `(id, cwd)` and rejects an empty path).
+- **Only `yolo` is on the wire.** `RosterEntry.yolo` is the one permission bit
+  for an existing session; `auto` is actor-internal with no read method, and the
+  load response's mode meta is injected into `session/new` only. A missing
+  `yolo` key means UNKNOWN, not `false` — a thin `sessions/changed` delta must
+  not clear an always-approve session.
+- **No fixture state on a live page.** A transport implementing `connect` drives
+  a real agent, so the store starts in `phase: 'connecting'` with every scripted
+  value cleared and the page paints a skeleton. Seeding fixtures "until data
+  arrives" shows a conversation the user never had.
 - **The roster and `session/info` are camelCase**, while Alnair's extension
   *updates* on the stream are snake_case. `web/src/lib/harness/wire.ts` accepts
   both; do not "fix" one spelling without the other. `reasoningEfforts` is a list

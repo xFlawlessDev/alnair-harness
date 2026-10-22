@@ -3,8 +3,10 @@ import {
 	accessFromSession,
 	applyRosterDelta,
 	contextFromInfo,
+	entriesFromNodes,
 	lastSegment,
 	modelsFromState,
+	relativeTo,
 	sessionFromRoster,
 	sessionsFromRoster,
 	unwrapExt
@@ -19,8 +21,20 @@ describe('wire: unwrapExt', () => {
 		expect(unwrapExt({ result: { rows: [] }, error: 'partial' })).toEqual({ rows: [] });
 	});
 
+	it('passes a RAW payload through unchanged', () => {
+		// `alnair/session/updates` writes its payload straight into the
+		// ExtResponse, so the result IS the payload. Reading only the envelope
+		// turned every stored transcript into `undefined`.
+		const raw = { updates: [{ method: 'session/update' }], totalCount: 1 };
+		expect(unwrapExt(raw)).toEqual(raw);
+	});
+
+	it('distinguishes an envelope with a null result from a raw payload', () => {
+		expect(unwrapExt({ result: null })).toBeUndefined();
+	});
+
 	it('returns undefined for a missing or malformed envelope', () => {
-		expect(unwrapExt({ error: 'nope' })).toBeUndefined();
+		expect(unwrapExt({ error: 'nope' })).toEqual({ error: 'nope' });
 		expect(unwrapExt(null)).toBeUndefined();
 		expect(unwrapExt('text')).toBeUndefined();
 	});
@@ -257,5 +271,67 @@ describe('wire: access mode', () => {
 		expect(accessFromSession(false, true)).toBe('auto');
 		expect(accessFromSession(false, false)).toBe('ask');
 		expect(accessFromSession(undefined, undefined)).toBe('ask');
+	});
+});
+
+describe('wire: roster yolo', () => {
+	it('carries the session own yolo flag', () => {
+		const session = sessionFromRoster({ sessionId: 's1', cwd: '/r', yolo: true });
+		expect(session!.yolo).toBe(true);
+	});
+
+	it('reads a row without yolo as unknown, not false', () => {
+		const session = sessionFromRoster({ sessionId: 's1', cwd: '/r' });
+		expect(session!.yolo).toBeUndefined();
+	});
+
+	it('keeps yolo through a thin roster delta', () => {
+		const first = sessionsFromRoster([{ sessionId: 's1', cwd: '/r', yolo: true }]);
+		const next = applyRosterDelta(first, { upserted: [{ sessionId: 's1', activity: 'working' }] });
+		expect(next[0].yolo).toBe(true);
+	});
+});
+
+describe('wire: fs listing', () => {
+	it('maps nodes to menu rows', () => {
+		const entries = entriesFromNodes([
+			{ name: 'src', path: 'src', type: 'directory' },
+			{ name: 'a.ts', path: 'a.ts', type: 'file', size: 12 }
+		]);
+		expect(entries).toEqual([
+			{ name: 'src', path: 'src', type: 'directory' },
+			{ name: 'a.ts', path: 'a.ts', type: 'file', size: 12 }
+		]);
+	});
+
+	it('falls back to the last segment when the node has no name', () => {
+		const entries = entriesFromNodes([{ path: '/repo/src/main.rs', type: 'file' }]);
+		expect(entries[0].name).toBe('main.rs');
+	});
+
+	it('drops a node with no path', () => {
+		expect(entriesFromNodes([{ name: 'x', type: 'file' }])).toEqual([]);
+	});
+
+	it('treats an unknown type as a file', () => {
+		expect(entriesFromNodes([{ path: 'a', type: 'symlink' }])[0].type).toBe('file');
+	});
+});
+
+describe('wire: relativeTo', () => {
+	it('re-roots an absolute path at the workspace', () => {
+		expect(relativeTo('/repo/app', '/repo/app/src/main.rs')).toBe('src/main.rs');
+	});
+
+	it('normalizes windows separators', () => {
+		expect(relativeTo('C:\\repo', 'C:\\repo\\src\\main.rs')).toBe('src/main.rs');
+	});
+
+	it('ignores a trailing separator on the root', () => {
+		expect(relativeTo('/repo/app/', '/repo/app/a.ts')).toBe('a.ts');
+	});
+
+	it('leaves a path outside the root unchanged', () => {
+		expect(relativeTo('/repo/app', '/other/a.ts')).toBe('/other/a.ts');
 	});
 });

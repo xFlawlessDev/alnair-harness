@@ -159,7 +159,11 @@ describe('ws-transport: handshake', () => {
 		expect(sessions[0].status).toBe('running');
 	});
 
-	it('sends ext methods with the real method nested one level down', async () => {
+	it('sends ext methods with FLAT params, not nested one level down', async () => {
+		// The ACP decoder strips the `_` prefix and hands the whole `params`
+		// object to the handler. Nesting `{ method, params }` leaves the handler
+		// with no fields of its own — a live leader answers
+		// "invalid params: missing field `path`" for `fs/list` sent that way.
 		const { transport } = makeTransport();
 		const connected = transport.connect();
 		await settle();
@@ -170,7 +174,59 @@ describe('ws-transport: handshake', () => {
 		void transport.listSessions();
 		await settle();
 		const request = sentOf(socket, '_alnair/sessions/list')!;
-		expect(request.params).toEqual({ method: 'alnair/sessions/list', params: {} });
+		expect(request.params).toEqual({});
+	});
+
+	it('sends a session id flat for session/info', async () => {
+		const { transport } = makeTransport();
+		const connected = transport.connect();
+		await settle();
+		const socket = FakeSocket.instances[0];
+		answer(socket, 'initialize', {});
+		await connected;
+
+		void transport.sessionContext('s1');
+		await settle();
+		const request = sentOf(socket, '_alnair/session/info')!;
+		expect(request.params).toEqual({ sessionId: 's1' });
+	});
+
+	it('loads a session with its own cwd, never an empty one', async () => {
+		// The agent rejects a relative or empty cwd outright ("Path is not
+		// absolute"), so the roster's cwd has to travel with the load.
+		const { transport } = makeTransport();
+		const connected = transport.connect();
+		await settle();
+		const socket = FakeSocket.instances[0];
+		answer(socket, 'initialize', {});
+		await connected;
+
+		void transport.openSession('s1', '/repo/app');
+		await settle();
+		const request = sentOf(socket, 'session/load')!;
+		expect(request.params).toMatchObject({ sessionId: 's1', cwd: '/repo/app' });
+	});
+
+	it('switches the model with the underscore method name', async () => {
+		// `session/setModel` is answered "Method not found"; ACP spells it
+		// `session/set_model`, and the effort rides in `_meta`.
+		const { transport } = makeTransport();
+		const connected = transport.connect();
+		await settle();
+		const socket = FakeSocket.instances[0];
+		answer(socket, 'initialize', {});
+		await connected;
+
+		transport.openSession('s1', '/repo/app');
+		await settle();
+		transport.setModel('kimi-code/kimi-k2', 'high');
+		await settle();
+		const request = sentOf(socket, 'session/set_model')!;
+		expect(request.params).toMatchObject({
+			sessionId: 's1',
+			modelId: 'kimi-code/kimi-k2',
+			_meta: { reasoningEffort: 'high' }
+		});
 	});
 });
 
@@ -208,25 +264,52 @@ describe('ws-transport: frames', () => {
 		expect((frames[0].frame.params._meta as Record<string, unknown>).eventId).toBe('s1-4');
 	});
 
-	it('unwraps a wrapped ext notification into the store shape', async () => {
+	it('dispatches an ext notification with its real method and flat params', async () => {
+		// The extension rail is NOT nested: `_alnair/session/update` carries
+		// `{ sessionId, update, _meta }` at the top of `params`, exactly like
+		// `session/update`. A live replay confirmed this.
 		const { socket, frames } = await connectedTransport();
 		socket.deliver({
 			jsonrpc: '2.0',
 			method: '_alnair/session/update',
 			params: {
-				method: 'alnair/session/update',
-				params: {
-					sessionId: 's1',
-					update: { sessionUpdate: 'graph_updated', total_nodes: 3 },
-					_meta: { eventId: 's1-9' }
-				}
+				sessionId: 's1',
+				update: { sessionUpdate: 'graph_updated', total_nodes: 3 },
+				_meta: { eventId: 's1-9' }
 			}
 		});
 		expect(frames).toHaveLength(1);
+		// The method passes through verbatim: the reducer picks the extension
+		// decoder by this exact name.
 		expect(frames[0].frame.method).toBe('_alnair/session/update');
 		expect((frames[0].frame.params.update as Record<string, unknown>).sessionUpdate).toBe(
 			'graph_updated'
 		);
+	});
+
+	it('routes alnair/session_notification to the extension decoder', async () => {
+		// A model switch made in the TUI rides this rail, not `session/update`.
+		const { socket, frames } = await connectedTransport();
+		socket.deliver({
+			jsonrpc: '2.0',
+			method: 'alnair/session_notification',
+			params: {
+				sessionId: 's1',
+				update: { sessionUpdate: 'model_changed', model_id: 'a/b' }
+			}
+		});
+		expect(frames).toHaveLength(1);
+		expect(frames[0].frame.method).toBe('alnair/session_notification');
+	});
+
+	it('drops a session notification with no update', async () => {
+		const { socket, frames } = await connectedTransport();
+		socket.deliver({
+			jsonrpc: '2.0',
+			method: 'session/update',
+			params: { sessionId: 's1' }
+		});
+		expect(frames).toHaveLength(0);
 	});
 
 	it('ignores notifications with no session id', async () => {

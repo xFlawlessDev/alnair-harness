@@ -296,6 +296,8 @@ export interface Session {
 	workspace: string;
 	/** The repo root, when the agent reported one. */
 	gitRootDir?: string;
+	/** `yolo` on the roster: the session runs tools without asking. */
+	yolo?: boolean;
 	/** Derived: a live turn, a parked request, or neither. */
 	status: SessionStatus;
 }
@@ -431,6 +433,16 @@ export interface ContextUsage {
  * invention.
  */
 export type AccessMode = 'ask' | 'auto' | 'always-approve';
+
+/**
+ * Which surface the store is ready to render.
+ *
+ * `connecting` means the socket is open (or opening) but no state has arrived
+ * yet: the page shows a skeleton rather than a conversation it cannot vouch
+ * for. `error` means the transport gave up and the page shows what it knows
+ * with a banner.
+ */
+export type StorePhase = 'connecting' | 'ready' | 'error';
 
 /** The composer's view of the workspace and the agent's access. */
 export interface ComposerContext {

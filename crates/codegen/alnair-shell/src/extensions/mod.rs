@@ -6,6 +6,7 @@ pub mod code_nav;
 pub mod debug;
 pub mod feedback;
 pub mod fs;
+pub mod fs_search;
 pub mod git;
 pub mod hooks;
 pub mod hunk_tracker;

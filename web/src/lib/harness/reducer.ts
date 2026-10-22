@@ -89,6 +89,13 @@ export interface ToolState {
 
 export interface SubagentState {
 	id: string;
+	/**
+	 * The child session's id. It is what `alnair/session/updates` takes to read
+	 * the subagent's transcript, so it must be carried separately: the wire
+	 * happens to send the same value as `subagent_id` today, and depending on
+	 * that would break silently the day it does not.
+	 */
+	childSessionId: string;
 	description: string;
 	agent: string;
 	model?: string;
@@ -109,6 +116,24 @@ export interface Acc {
 	openTurnId?: string;
 	/** Prompt text already streamed as `user_message_chunk`, so `send()` can skip it. */
 	streamedUserText: string;
+	/**
+	 * Set by `openUserTurn` while the prompt in flight is already on screen.
+	 *
+	 * A live send paints the user turn immediately, and the agent then echoes
+	 * the same text back as `user_message_chunk`. Replay has no optimistic turn,
+	 * so the chunks there are the ONLY source of user turns. One flag
+	 * distinguishes the two: while it is set, echoed chunks are swallowed;
+	 * when it is clear, they build the transcript.
+	 */
+	optimisticUserTurn?: boolean;
+	/**
+	 * The user turn still accepting `user_message_chunk` text.
+	 *
+	 * A prompt arrives as many chunks and they must join one bubble, but nothing
+	 * in a chunk says "this is the last one". Any non-user update closes the
+	 * window, which is exactly when the agent has started answering.
+	 */
+	openUserChunkId?: string;
 	tools: Record<string, ToolState>;
 	subagents: Record<string, SubagentState>;
 	todos: TodoItem[];
@@ -169,6 +194,57 @@ function patchPart(
 			: turn
 	);
 	return { ...acc, turns };
+}
+
+/**
+ * Fold a replayed `user_message_chunk` into the user turn it belongs to.
+ *
+ * Consecutive chunks join one bubble; the window closes on the next non-user
+ * update (see `openUserChunkId`). This is the replay path only — a live send
+ * paints its own turn and swallows the echo.
+ */
+function appendUserChunk(acc: Acc, chunk: string, at: number): Acc {
+	const openId = acc.openUserChunkId;
+	if (openId !== undefined) {
+		const turns = acc.turns.map((turn) =>
+			turn.id === openId
+				? {
+						...turn,
+						parts: turn.parts.map((part) =>
+							part.kind === 'text' ? { ...part, text: part.text + chunk } : part
+						)
+					}
+				: turn
+		);
+		return { ...acc, turns };
+	}
+
+	const turn: Turn = {
+		id: newId(),
+		role: 'user',
+		status: 'complete',
+		at: new Date(at).toISOString(),
+		parts: [{ kind: 'text', id: newId(), text: chunk }]
+	};
+	// A new prompt ends the previous answer. Without this, the next
+	// `agent_message_chunk` joins the turn BEFORE it and the transcript runs
+	// out of order. Real transcripts also carry `turn_completed`, but a
+	// truncated one (the tail of a crash) does not, and the boundary is
+	// unambiguous from the prompt itself.
+	const turns =
+		acc.openTurnId === undefined
+			? acc.turns
+			: acc.turns.map((existing) =>
+					existing.id === acc.openTurnId && existing.status === 'streaming'
+						? { ...existing, status: 'complete' as TurnStatus }
+						: existing
+				);
+	return {
+		...acc,
+		turns: [...turns, turn],
+		openUserChunkId: turn.id,
+		openTurnId: undefined
+	};
 }
 
 /** Append a part to the open turn, creating one if the agent sent updates first. */
@@ -520,18 +596,32 @@ export interface ReduceContext {
 }
 
 /** Fold one ACP `session/update` payload. */
-export function reduceAcpUpdate(acc: Acc, update: SessionUpdate, ctx: ReduceContext): Acc {
+export function reduceAcpUpdate(input: Acc, update: SessionUpdate, ctx: ReduceContext): Acc {
 	const { now } = ctx;
 
 	// Frames from a newer agent may carry a variant this build does not know;
 	// an unknown or absent discriminator is ignored rather than fatal.
-	if (!update || typeof update.sessionUpdate !== 'string') return acc;
+	if (!update || typeof update.sessionUpdate !== 'string') return input;
+
+	// The user-chunk window closes as soon as anything else arrives, which is
+	// exactly when the agent has started answering. Closing it here keeps the
+	// rule in one place instead of repeating it in every arm below.
+	const acc: Acc =
+		input.openUserChunkId !== undefined && update.sessionUpdate !== 'user_message_chunk'
+			? { ...input, openUserChunkId: undefined }
+			: input;
 
 	switch (update.sessionUpdate) {
 		case 'user_message_chunk': {
 			const chunk = textOf(update.content);
 			if (!chunk) return acc;
-			return { ...acc, streamedUserText: acc.streamedUserText + chunk };
+			// The live path already painted this prompt optimistically; the echo
+			// is only bookkeeping for `send()`.
+			if (acc.optimisticUserTurn) {
+				return { ...acc, streamedUserText: acc.streamedUserText + chunk };
+			}
+			// Replay has no optimistic turn, so these chunks ARE the user turn.
+			return appendUserChunk(acc, chunk, now);
 		}
 
 		case 'agent_message_chunk': {
@@ -789,12 +879,14 @@ export function reduceExtUpdate(acc: Acc, update: ExtSessionUpdate, ctx: ReduceC
 		case 'subagent_spawned': {
 			const event = update as unknown as {
 				subagent_id: string;
+				child_session_id: string;
 				description: string;
 				subagent_type: string;
 				model?: string;
 			};
 			const state: SubagentState = {
 				id: event.subagent_id,
+				childSessionId: event.child_session_id,
 				description: event.description,
 				agent: event.subagent_type,
 				model: event.model,
@@ -1176,12 +1268,28 @@ export function closeTurn(
 				}
 			: current
 	);
-	return { ...acc, turns, openTurnId: undefined, streamedUserText: '' };
+	return {
+		...acc,
+		turns,
+		openTurnId: undefined,
+		streamedUserText: '',
+		// The turn is over, so the next prompt's echo must build its own turn
+		// again if this accumulator is ever replayed.
+		optimisticUserTurn: undefined
+	};
 }
 
 /* -------------------------------------------------------------- entrypoints */
 
-/** Open a new user turn, then fold a frame into the assistant turn it starts. */
+/**
+ * Open a new user turn, then fold a frame into the assistant turn it starts.
+ *
+ * Any turn still marked open is closed first. Without that, the reply to this
+ * prompt is appended to the PREVIOUS assistant turn — which sits earlier in the
+ * list — and the answer renders above the question. That happens whenever a
+ * replay leaves a turn open (a transcript whose last turn never got a
+ * `turn_completed`), and the reader sees the conversation run backwards.
+ */
 export function openUserTurn(
 	acc: Acc,
 	text: string,
@@ -1189,6 +1297,14 @@ export function openUserTurn(
 	modelId?: string,
 	effort?: string
 ): Acc {
+	const turns = acc.openTurnId
+		? acc.turns.map((turn) =>
+				turn.id === acc.openTurnId && turn.status === 'streaming'
+					? { ...turn, status: 'complete' as TurnStatus }
+					: turn
+			)
+		: acc.turns;
+
 	const turn: Turn = {
 		id: newId(),
 		role: 'user',
@@ -1196,7 +1312,16 @@ export function openUserTurn(
 		at: new Date(at).toISOString(),
 		parts: [{ kind: 'text', id: newId(), text }]
 	};
-	return { ...acc, turns: [...acc.turns, turn], modelId, effort };
+	return {
+		...acc,
+		turns: [...turns, turn],
+		openTurnId: undefined,
+		// The prompt is on screen; the agent's echo of it must not add a second
+		// bubble. Cleared when the turn closes.
+		optimisticUserTurn: true,
+		modelId,
+		effort
+	};
 }
 
 /** Replay a whole transcript, as `alnair/session/updates` returns it. */

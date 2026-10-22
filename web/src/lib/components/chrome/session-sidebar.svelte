@@ -118,6 +118,7 @@
 										]}
 										onclick={() => onselect(session.id)}
 										aria-current={active ? 'true' : undefined}
+										data-session-id={session.id}
 									>
 										<span class="flex items-center gap-1.5">
 											<MessageSquareIcon

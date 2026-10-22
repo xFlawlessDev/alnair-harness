@@ -42,13 +42,13 @@
 		context,
 		busy,
 		commands = [],
-		files = [],
 		onsend,
 		oncancel,
 		onmodel,
 		oneffort,
 		onaccess,
-		onbrowse
+		onbrowse,
+		onsearch
 	}: {
 		models: ModelOption[];
 		model: string;
@@ -58,15 +58,25 @@
 		busy: boolean;
 		/** Commands the agent advertised; empty until it does. */
 		commands?: SlashCommand[];
-		/** The workspace listing for the `@` menu. */
-		files?: FileEntry[];
 		onsend: (text: string) => void;
 		oncancel: () => void;
 		onmodel: (id: string) => void;
 		oneffort: (effort: string) => void;
 		onaccess: (mode: AccessMode) => void;
-		/** Open a directory in the mention menu. */
-		onbrowse?: (path: string) => FileEntry[];
+		/**
+		 * List one directory, for the `@` menu's drill-down.
+		 *
+		 * Async because the listing is an RPC to the agent: the browser has no
+		 * filesystem, and the menu must not block the keystroke on it.
+		 */
+		onbrowse?: (path: string) => Promise<FileEntry[]>;
+		/**
+		 * Ranked matches across the workspace, for a typed `@` query.
+		 *
+		 * This is the fuzzy search the TUI runs in-process; over the wire it is
+		 * `alnair/fs/search`.
+		 */
+		onsearch?: (query: string) => Promise<FileEntry[]>;
 	} = $props();
 
 	let draft = $state('');
@@ -78,7 +88,14 @@
 	let active = $state(0);
 	/** The directory the `@` menu is currently listing. */
 	let browsing = $state<string | undefined>(undefined);
-	let listing = $state<FileEntry[]>(files);
+	/**
+	 * The rows for the directory being browsed.
+	 *
+	 * Starts empty: the first `@` fetches the workspace root from the agent, so
+	 * nothing has to be seeded up front and the menu can never show a listing
+	 * the agent would not agree with.
+	 */
+	let listing = $state<FileEntry[]>([]);
 	/**
 	 * Set right after an insert: the text now ends in a valid mention token, so
 	 * a naive re-sync would reopen the menu the reader just closed. Any further
@@ -86,11 +103,27 @@
 	 */
 	let suppress = $state(false);
 
+	/**
+	 * Results of the in-flight `@` query.
+	 *
+	 * A separate cell from `listing` because the two answer different
+	 * questions: `listing` is "what is in this directory" (a drill-down), and
+	 * this is "what matches what I typed" (a ranked search across the tree).
+	 * When the query is empty the menu shows the listing; once it has text, the
+	 * search wins.
+	 */
+	let matches = $state<FileEntry[]>([]);
+	/** Guards against an older query's reply overwriting a newer one. */
+	let searchSeq = 0;
+
 	const canSend = $derived(draft.trim().length > 0 && !busy);
 
 	const options = $derived.by(() => {
 		if (trigger?.kind === 'command') return filterCommands(commands, trigger.query);
-		if (trigger?.kind === 'mention') return filterEntries(listing, trigger.query);
+		if (trigger?.kind === 'mention') {
+			const source = trigger.query.length > 0 && matches.length > 0 ? matches : listing;
+			return filterEntries(source, trigger.query);
+		}
 		return [];
 	});
 
@@ -108,7 +141,41 @@
 		// until the reader edits the token again.
 		if (next?.kind !== trigger?.kind || next?.start !== trigger?.start) active = 0;
 		trigger = next;
-		if (next?.kind === 'mention' && browsing === undefined) listing = files;
+		if (next?.kind === 'mention') {
+			// The first `@` of a session has nothing to show yet: the listing is
+			// an RPC, and `files` only carries whatever the page seeded. Ask for
+			// the workspace root once, lazily, so opening the menu is not a
+			// startup cost.
+			if (browsing === undefined && listing.length === 0) void loadRoot();
+			void refreshMatches(next.query);
+		}
+	}
+
+	/** Fetch the workspace root listing the first time the menu needs it. */
+	async function loadRoot() {
+		if (!onbrowse) return;
+		const children = await onbrowse('');
+		// Only fill in if the reader has not already drilled elsewhere.
+		if (browsing === undefined && listing.length === 0) listing = children;
+	}
+
+	/**
+	 * Ask the agent for matches for the typed query.
+	 *
+	 * Empty query means "no search": the menu shows the directory listing,
+	 * which is the pre-typed state. Each reply is tagged with the sequence it
+	 * answered, so a slow reply for "co" cannot replace the rows for "comp".
+	 */
+	async function refreshMatches(query: string) {
+		if (!onsearch || query.length === 0) {
+			searchSeq += 1;
+			matches = [];
+			return;
+		}
+		const seq = ++searchSeq;
+		const found = await onsearch(query);
+		if (seq !== searchSeq) return;
+		matches = found;
 	}
 
 	/** Called on every edit: a fresh keystroke lifts the post-insert mute. */
@@ -120,6 +187,7 @@
 	function close() {
 		trigger = null;
 		browsing = undefined;
+		matches = [];
 	}
 
 	function accept() {
@@ -136,9 +204,11 @@
 		const entry = choice as FileEntry;
 		if (entry.type === 'directory') {
 			// Drill in without touching the text: the mention is not finished yet.
-			const children = onbrowse?.(entry.path) ?? [];
+			// The listing is an RPC, so the token is rewritten immediately and
+			// the rows fill in when the agent answers.
 			browsing = entry.path;
-			listing = children;
+			matches = [];
+			listing = [];
 			draft = `${draft.slice(0, trigger.start)}@${entry.path}/${draft.slice(trigger.end)}`;
 			trigger = {
 				kind: 'mention',
@@ -147,6 +217,12 @@
 				end: trigger.start + entry.path.length + 2
 			};
 			active = 0;
+			const path = entry.path;
+			void onbrowse?.(path).then((children) => {
+				// A drill-down that resolved after the menu moved on must not
+				// replace the rows for whatever is showing now.
+				if (browsing === path) listing = children;
+			});
 			void tick().then(() => textarea?.focus());
 			return;
 		}

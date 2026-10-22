@@ -2,6 +2,7 @@
 //!
 //! Routing: absolute paths work directly; relative paths require sessionId for lookup.
 //! Business logic delegated to `session::file_system::*` pure functions.
+use super::fs_search::FsSearchRequest;
 use super::{Empty, ExtResult, parse_params, to_ext_response};
 use crate::agent::MvpAgent;
 use crate::session::ExtMethodResult;
@@ -243,6 +244,32 @@ pub async fn handle(agent: &MvpAgent, args: &acp::ExtRequest) -> ExtResult {
             let path = resolve_path(agent, &req.path, req.session_id.as_ref())?;
             let (path, _) = confine_local(agent, &path, req.session_id.as_ref()).await?;
             let result = fs::delete_file(&path).await.map(|_| Empty {});
+            to_ext_response(result)
+        }
+        "alnair/fs/search" => {
+            // `path` is optional here (defaults to the session cwd), unlike the
+            // other fs methods, because the composer always searches the
+            // workspace root it is already showing.
+            let req = parse_params::<FsSearchRequest>(args)?;
+            let requested = match req.path.as_deref() {
+                Some(path) if !path.is_empty() => path.to_string(),
+                _ => {
+                    let session_id = req.session_id.as_ref().ok_or_else(|| {
+                        acp::Error::invalid_params()
+                            .data("path or sessionId is required for fs/search")
+                    })?;
+                    agent
+                        .get_session_cwd(session_id)
+                        .map(|cwd| cwd.to_string_lossy().to_string())
+                        .ok_or_else(|| {
+                            acp::Error::invalid_params()
+                                .data(format!("session not found: {}", session_id.0))
+                        })?
+                }
+            };
+            let path = resolve_path(agent, &requested, req.session_id.as_ref())?;
+            let (path, _) = confine_local(agent, &path, req.session_id.as_ref()).await?;
+            let result = super::fs_search::search(path, req).await;
             to_ext_response(result)
         }
         _ => Err(acp::Error::method_not_found()),

@@ -49,6 +49,7 @@ import type {
 	AccessMode,
 	AvailableCommand,
 	ContextUsage,
+	FileEntry,
 	GraphState,
 	ModelOption,
 	PermissionRequest,
@@ -56,6 +57,7 @@ import type {
 	QuestionAnswer,
 	QuestionRequest,
 	Session,
+	StorePhase,
 	SubagentSummary,
 	TodoItem,
 	Turn,
@@ -65,7 +67,7 @@ import type {
 import { groupByWorkspace } from './workspaces.js';
 import { sortSubagents } from './subagents.js';
 import { admit, beginReplay, endReplay, eventIdOf, liveGate, type GateState } from './dedup.js';
-import { applyRosterDelta } from './wire.js';
+import { applyRosterDelta, relativeTo } from './wire.js';
 
 /** A frame the agent sent, plus the prompt it answers (if any). */
 export interface IncomingFrame {
@@ -103,14 +105,30 @@ export interface Transport {
 	 * Attach to a session: sends `session/load` and streams the replay through
 	 * `onFrame`. The store resets its accumulator first (`beginSessionLoad`).
 	 *
+	 * `cwd` is the session's OWN directory. The agent resolves the session
+	 * directory from `(id, cwd)` and rejects an empty one, so the roster's cwd
+	 * must be passed along.
+	 *
 	 * Returns the session's model catalog and mode, which only the load
 	 * response carries.
 	 */
-	openSession?(sessionId: string): Promise<SessionOpenResult | void>;
+	openSession?(sessionId: string, cwd?: string): Promise<SessionOpenResult | void>;
 	/** Create a session in `cwd` and return its id. */
 	newSession?(cwd: string): Promise<string>;
 	/** The exact context snapshot (`alnair/session/info`). */
 	sessionContext?(sessionId: string): Promise<ContextUsage | undefined>;
+	/** One directory of the workspace (`alnair/fs/list`). */
+	fsList?(path: string, sessionId: string): Promise<FileEntry[]>;
+	/** Fuzzy path search across the workspace (`alnair/fs/search`). */
+	fsSearch?(request: {
+		sessionId: string;
+		path?: string;
+		query: string;
+		limit?: number;
+		dirs?: boolean;
+	}): Promise<FileEntry[]>;
+	/** Subagents running under a session right now. */
+	listSubagents?(sessionId: string): Promise<SubagentSummary[]>;
 	/** A stored transcript, as `alnair/session/updates` returns it. */
 	sessionUpdates?(request: {
 		sessionId: string;
@@ -141,7 +159,36 @@ export interface SessionOpenResult {
 	access?: AccessMode;
 }
 
+/**
+ * The context meter before the agent has reported one.
+ *
+ * Zeroes, not a guess: the meter renders "—" for an unknown limit, and inventing
+ * a window would show a percentage of a number the agent never sent.
+ */
+function emptyContextUsage(): ContextUsage {
+	return {
+		used: 0,
+		limit: 0,
+		percent: 0,
+		systemPromptTokens: 0,
+		toolDefinitionsTokens: 0,
+		toolDefinitionsCount: 0,
+		messageTokens: 0,
+		messageCount: 0,
+		turnCount: 0,
+		toolCallCount: 0,
+		compactionCount: 0,
+		freeTokens: 0,
+		autoCompactThresholdPercent: 0,
+		categories: []
+	};
+}
+
 export interface SessionStore {
+	/** What may be rendered now; `connecting` means "show a skeleton". */
+	readonly phase: StorePhase;
+	/** Why `phase` is `error`, when it is. */
+	readonly phaseDetail: string | undefined;
 	readonly workspace: WorkspaceInfo;
 	readonly sessions: Session[];
 	/** Conversations nested under their workspace; what the sidebar renders. */
@@ -204,6 +251,18 @@ export interface SessionStore {
 	openSession(sessionId: string): Promise<void>;
 	/** Handshake, roster, and attach to the first session. Called once. */
 	bootstrap(): Promise<void>;
+	/**
+	 * The `@` menu's listing for one directory (`alnair/fs/list`).
+	 *
+	 * Empty when the transport cannot list files (the fixture transport).
+	 */
+	listFiles(path: string): Promise<FileEntry[]>;
+	/**
+	 * The `@` menu's ranked matches across the workspace (`alnair/fs/search`).
+	 *
+	 * Empty when the transport cannot search files.
+	 */
+	searchFiles(query: string, dirs?: boolean): Promise<FileEntry[]>;
 }
 
 const STREAM_TICK_MS = 24;
@@ -274,10 +333,23 @@ export class FixtureTransport implements Transport {
 }
 
 export class HarnessStore implements SessionStore {
+	/**
+	 * What the UI may render right now.
+	 *
+	 * `connecting` is the whole reason this exists: the socket transport hands
+	 * back a store before the handshake, the roster and the first `session/load`
+	 * have landed. Painting the scripted fixtures during that window would show
+	 * a conversation that is not the user's, so the page renders a skeleton
+	 * instead and swaps it out when the first real state arrives.
+	 */
+	phase = $state<StorePhase>('ready');
+	/** Why `phase` is `error`, when it is. */
+	phaseDetail = $state<string | undefined>(undefined);
+
 	workspace = $state(workspace);
-	sessions = $state(sessions);
-	models = $state(models);
-	context = $state(contextUsage);
+	sessions = $state<Session[]>(sessions);
+	models = $state<ModelOption[]>(models);
+	context = $state<ContextUsage>(contextUsage);
 
 	activeSessionId = $state(sessions[0].id);
 	model = $state(models[0].id);
@@ -293,6 +365,16 @@ export class HarnessStore implements SessionStore {
 	 */
 	subagentTurns = $state<Turn[]>([]);
 	busy = $state(false);
+
+	/**
+	 * Whether this store drives a real agent.
+	 *
+	 * A transport that implements `connect` has a server behind it; the fixture
+	 * transport does not, and is the only case where scripted state may be
+	 * shown. Everything below keys off this rather than off a URL, so the
+	 * decision is made once and cannot drift.
+	 */
+	private readonly live: boolean;
 
 	get groups(): WorkspaceGroup[] {
 		// Alphabetical, with no session-derived pinning: clicking a conversation
@@ -314,6 +396,24 @@ export class HarnessStore implements SessionStore {
 	});
 
 	constructor(private transport: Transport = new FixtureTransport()) {
+		this.live = typeof transport.connect === 'function';
+
+		if (this.live) {
+			// Nothing is known yet. Every value the fixtures supplied is cleared
+			// so a component cannot mistake scripted data for the user's.
+			this.phase = 'connecting';
+			this.sessions = [];
+			this.models = [];
+			this.subagents = [];
+			this.accs = {};
+			this.activeSessionId = '';
+			this.model = '';
+			this.effort = '';
+			this.access = 'ask';
+			this.context = emptyContextUsage();
+			this.planArtifact = undefined;
+		}
+
 		// A real transport pushes frames for whichever session they belong to,
 		// so the store owns the routing (the fixture transport calls back with
 		// the session it was started for).
@@ -351,42 +451,75 @@ export class HarnessStore implements SessionStore {
 	 */
 	async openSession(sessionId: string) {
 		if (!this.transport.openSession) return;
+
+		const session = this.sessions.find((candidate) => candidate.id === sessionId);
 		this.beginSessionLoad(sessionId);
-		const result = await this.transport.openSession(sessionId);
+		const result = await this.transport.openSession(sessionId, session?.cwd);
 
 		if (result) {
 			if (result.models.length > 0) {
 				this.models = result.models;
 				if (result.currentModel) this.model = result.currentModel;
 			}
-			if (result.access) this.access = result.access;
+			// The roster carries the session's own `yolo` flag, and it is the
+			// ONLY permission bit the wire exposes for an existing session:
+			// `auto` lives inside the session actor, is not on the handle, and
+			// has no read method. The load response's `_meta.yoloMode` /
+			// `autoMode` are injected by the leader into `session/new` only, so
+			// they describe a session this client just created.
+			//
+			// So: trust the roster when it says always-approve, and otherwise
+			// keep what the load reported. A session the TUI put in `auto` reads
+			// here as `ask`, which is the most restrictive of the three — the
+			// safe direction to be wrong in, since a wrong `auto` would silently
+			// widen permissions.
+			if (session?.yolo === true) this.access = 'always-approve';
+			else if (result.access) this.access = result.access;
 		}
 
 		// The stream carries only `auto_compact_*` deltas; the itemized totals
 		// come from `alnair/session/info`, once per attach.
 		const context = await this.transport.sessionContext?.(sessionId);
 		if (context) this.context = context;
+
+		// Subagents running in this session right now. A spawn that happened
+		// before this tab opened is only visible here; later ones arrive as
+		// `subagent_spawned` frames.
+		const running = await this.transport.listSubagents?.(sessionId);
+		if (running) this.subagents = sortSubagents(running);
+
+		if (this.phase === 'connecting') this.phase = 'ready';
 	}
 
 	/**
 	 * First load: handshake, roster, then attach to something.
 	 *
-	 * Called once by the layout. A failure leaves the store empty rather than
-	 * throwing into the component tree — the transport reconnects on its own.
+	 * Called once by the layout. A failure moves the store to `error` rather
+	 * than throwing into the component tree — the socket transport retries with
+	 * backoff, and a later reconnect re-runs `bootstrap`'s tail through
+	 * `reloadAfterReconnect`.
 	 */
 	async bootstrap() {
 		if (!this.transport.connect) return;
 		try {
 			await this.transport.connect();
-			const sessions = await this.transport.listSessions?.();
-			if (sessions && sessions.length > 0) {
-				this.sessions = sessions;
-				this.activeSessionId = sessions[0].id;
-				await this.openSession(sessions[0].id);
+			const roster = await this.transport.listSessions?.();
+			if (roster) this.sessions = roster;
+
+			if (roster && roster.length > 0) {
+				this.activeSessionId = roster[0].id;
+				await this.openSession(roster[0].id);
 			}
-		} catch {
+			// A connected agent with no sessions is a valid, ready state: the
+			// page shows its empty state rather than a skeleton forever.
+			if (this.phase === 'connecting') this.phase = 'ready';
+		} catch (error) {
 			// Offline, or the leader is still starting. The socket transport
-			// retries with backoff; the UI shows its empty state until then.
+			// retries with backoff; the page shows the reason meanwhile.
+			if (this.phase === 'connecting') {
+				this.phase = 'error';
+				this.phaseDetail = error instanceof Error ? error.message : 'the agent is unreachable';
+			}
 		}
 	}
 
@@ -394,10 +527,28 @@ export class HarnessStore implements SessionStore {
 		return this.accs[this.activeSessionId] ?? emptyAcc();
 	}
 
+	/**
+	 * The session in front.
+	 *
+	 * Never throws: during `connecting` the roster is still empty and the page
+	 * renders a skeleton, but a component that reads this before then must not
+	 * take the whole tree down. A placeholder keeps the contract "there is
+	 * always something to render".
+	 */
 	get activeSession(): Session {
 		const session = this.sessions.find((s) => s.id === this.activeSessionId);
-		if (!session) throw new Error('active session is not in the list');
-		return { ...session, status: sessionStatus(this.acc) };
+		if (session) return { ...session, status: sessionStatus(this.acc) };
+		return {
+			id: this.activeSessionId,
+			title: '',
+			cwd: '',
+			source: 'local',
+			numMessages: 0,
+			createdAt: new Date(0).toISOString(),
+			updatedAt: new Date(0).toISOString(),
+			workspace: '',
+			status: 'idle'
+		};
 	}
 
 	get turns(): Turn[] {
@@ -461,6 +612,10 @@ export class HarnessStore implements SessionStore {
 		this.planArtifact = undefined;
 		this.planToolCallId = undefined;
 		this.questionRequest = undefined;
+		// Subagents are per-session too. The new session's running set is
+		// re-read by `openSession`, so clearing here only drops the old rows.
+		this.subagents = [];
+		this.subagentTurns = [];
 
 		// Attach for real: `session/load` subscribes this client and replays the
 		// transcript. Without it the stream for this session never arrives.
@@ -511,7 +666,9 @@ export class HarnessStore implements SessionStore {
 	 */
 	openSubagent(subagent: SubagentSummary) {
 		const childSessionId = subagent.childSessionId;
-		// The fixture transport has no child transcript to read.
+		// Only the fixture transport has no child transcript to read. A live
+		// store must never fall back to the scripted one: it would show a
+		// conversation the child never had.
 		if (!this.transport.sessionUpdates) {
 			this.subagentTurns = replay(initialSubagentTranscript(subagent), childSessionId).turns;
 			return;
@@ -522,10 +679,11 @@ export class HarnessStore implements SessionStore {
 		// parent's. The replay is folded by the same reducer the main thread uses,
 		// so this is a normal conversation, not a summary.
 		const parent = this.activeSession;
+		this.subagentTurns = [];
 		void this.transport
 			.sessionUpdates({ sessionId: childSessionId, cwd: parent.cwd })
 			.then((envelopes) => {
-				if (envelopes) this.subagentTurns = replay(envelopes, childSessionId).turns;
+				this.subagentTurns = envelopes ? replay(envelopes, childSessionId).turns : [];
 			})
 			.catch(() => {
 				this.subagentTurns = [];
@@ -560,6 +718,50 @@ export class HarnessStore implements SessionStore {
 		this.transport.stop();
 		this.write(emptyAcc());
 		this.busy = false;
+	}
+
+	/**
+	 * The `@` menu's listing for one directory.
+	 *
+	 * An empty path means the workspace root: the agent resolves a relative path
+	 * against the session cwd, so the root's own cwd is the natural "here".
+	 *
+	 * Rows are re-rooted at the workspace before they reach the menu, because
+	 * `fs/list` reports absolute paths and a mention token must be relative —
+	 * the agent's own tools resolve `@src/x.ts`, never `@/home/me/repo/src/x.ts`.
+	 */
+	async listFiles(path: string): Promise<FileEntry[]> {
+		const sessionId = this.activeSessionId;
+		if (!this.transport.fsList || !sessionId) return [];
+		const root = this.activeSession.cwd;
+		const target = path || root;
+		if (!target) return [];
+		try {
+			const entries = await this.transport.fsList(target, sessionId);
+			return root
+				? entries.map((entry) => ({ ...entry, path: relativeTo(root, entry.path) }))
+				: entries;
+		} catch {
+			// A directory that vanished mid-typing is not an error worth a card.
+			return [];
+		}
+	}
+
+	/** Ranked matches across the workspace, for the `@` menu's typed query. */
+	async searchFiles(query: string, dirs = false): Promise<FileEntry[]> {
+		const sessionId = this.activeSessionId;
+		if (!this.transport.fsSearch || !sessionId) return [];
+		try {
+			// `fs/search` already answers root-relative paths, so no re-rooting.
+			return await this.transport.fsSearch({
+				sessionId,
+				path: this.activeSession.cwd || undefined,
+				query,
+				dirs
+			});
+		} catch {
+			return [];
+		}
 	}
 
 	answerPermission(optionId: string) {
@@ -695,11 +897,83 @@ export class HarnessStore implements SessionStore {
 		this.gates = { ...this.gates, [sessionId]: verdict.state };
 
 		const ctx = { now: Date.now(), sessionId, modelId: this.model, effort: this.effort };
-		const acc =
-			frame.method === '_alnair/session/update'
-				? reduceExtUpdate(this.acc, update as ExtSessionUpdate, ctx)
-				: reduceAcpUpdate(this.acc, update as SessionUpdate, ctx);
+		const acc = this.isExtFrame(frame.method)
+			? reduceExtUpdate(this.acc, update as ExtSessionUpdate, ctx)
+			: reduceAcpUpdate(this.acc, update as SessionUpdate, ctx);
 		this.write(acc);
+
+		// The composer's picker and the header's subagent list are store state,
+		// not transcript state: the reducer keeps them in the accumulator for
+		// the thread, and these mirror the parts the chrome reads.
+		this.syncFromUpdate(update as ExtSessionUpdate);
+	}
+
+	/**
+	 * Whether a frame rides the extension rail.
+	 *
+	 * `_alnair/session/update` is the replay/persisted form; the live one-shot
+	 * rail is `alnair/session_notification`. Both carry the extension payload,
+	 * and the ACP rail is the only one that does not.
+	 */
+	private isExtFrame(method: string): boolean {
+		return method === '_alnair/session/update' || method === 'alnair/session_notification';
+	}
+
+	/**
+	 * Mirror the extension updates the chrome reads into store state.
+	 *
+	 * The thread renders from the accumulator, so a component inside it needs
+	 * nothing here. These four are outside it: the model picker, the context
+	 * meter, the subagent list in the header, and the session row's status.
+	 */
+	private syncFromUpdate(update: ExtSessionUpdate) {
+		switch (update.sessionUpdate) {
+			case 'model_changed': {
+				const event = update as unknown as {
+					model_id?: string;
+					reasoning_effort?: string;
+				};
+				if (event.model_id) this.model = event.model_id;
+				if (event.reasoning_effort) this.effort = event.reasoning_effort;
+				return;
+			}
+			case 'subagent_spawned':
+			case 'subagent_progress':
+			case 'subagent_finished': {
+				// The reducer folds these into the transcript card; the header's
+				// list is the same data in a different shape. Re-derive it from
+				// the accumulator so the two can never disagree.
+				this.subagents = sortSubagents(
+					Object.values(this.acc.subagents).map((state) => ({
+						id: state.id,
+						agent: state.agent,
+						description: state.description,
+						childSessionId: state.childSessionId,
+						status:
+							state.status === 'running'
+								? 'running'
+								: state.status === 'error'
+									? 'failed'
+									: 'completed',
+						startedAt: state.startedAt,
+						durationMs: (state.endedAt ?? Date.now()) - state.startedAt,
+						turnCount: state.turnCount,
+						toolCallCount: state.toolCallCount,
+						tokensUsed: state.tokensUsed,
+						contextWindowTokens: 0,
+						contextUsagePct: 0,
+						toolsUsed: state.toolsUsed,
+						errorCount: state.error ? 1 : 0,
+						output: state.result,
+						failureError: state.error,
+						model: state.model
+					}))
+				);
+				return;
+			}
+			default:
+				return;
+		}
 	}
 
 	private write(acc: Acc) {

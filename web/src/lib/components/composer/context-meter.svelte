@@ -16,6 +16,15 @@
 	 */
 	let { usage }: { usage: ContextUsage } = $props();
 
+	/**
+	 * Whether the agent has reported a window yet.
+	 *
+	 * A store that has attached but not yet read `alnair/session/info` carries
+	 * zeroes. Rendering "0%" of a 0-token window would claim the conversation
+	 * is empty; a dash says the truth, which is that nothing is known yet.
+	 */
+	const known = $derived(usage.limit > 0);
+
 	const percent = $derived(usage.limit === 0 ? 0 : (usage.used / usage.limit) * 100);
 	const tone = $derived(
 		percent > 90
@@ -61,10 +70,12 @@
 				{...props}
 				type="button"
 				class="flex h-7 items-center gap-1.5 rounded-md px-1.5 transition-colors hover:bg-paper-card"
-				aria-label={`Context ${formatPercent(percent / 100)} used`}
+				aria-label={known
+					? `Context ${formatPercent(percent / 100)} used`
+					: 'Context usage unknown'}
 			>
-				<span class={['tabular font-mono text-[11.5px]', tone]}>
-					{formatPercent(percent / 100)}
+				<span class={['tabular font-mono text-[11.5px]', known ? tone : 'text-ink-tertiary']}>
+					{known ? formatPercent(percent / 100) : '—'}
 				</span>
 				<svg viewBox="0 0 14 14" class="size-3.5 -rotate-90" aria-hidden="true">
 					<circle
@@ -99,55 +110,62 @@
 		</div>
 
 		<div class="px-3.5 pt-2.5">
-			<div class="flex items-baseline gap-1.5">
-				<span class="tabular text-[22px] leading-none font-semibold text-ink">
-					{formatTokens(usage.used)}
-				</span>
-				<span class="text-[11.5px] text-ink-tertiary">of {formatTokens(usage.limit)} tokens</span>
-				<span
-					class={[
-						'ml-auto rounded-sm px-1.5 py-0.5 font-mono text-[11px]',
-						percent > 90
-							? 'bg-error/10 text-error'
-							: percent > threshold
-								? 'bg-plan/10 text-plan'
-								: 'bg-paper-card text-ink-secondary'
-					]}
+			{#if !known}
+				<p class="py-4 text-center text-[12px] text-ink-tertiary">
+					The agent has not reported this session's context window yet.
+				</p>
+			{:else}
+				<div class="flex items-baseline gap-1.5">
+					<span class="tabular text-[22px] leading-none font-semibold text-ink">
+						{formatTokens(usage.used)}
+					</span>
+					<span class="text-[11.5px] text-ink-tertiary">of {formatTokens(usage.limit)} tokens</span>
+					<span
+						class={[
+							'ml-auto rounded-sm px-1.5 py-0.5 font-mono text-[11px]',
+							percent > 90
+								? 'bg-error/10 text-error'
+								: percent > threshold
+									? 'bg-plan/10 text-plan'
+									: 'bg-paper-card text-ink-secondary'
+						]}
+					>
+						{formatPercent(percent / 100)}
+					</span>
+				</div>
+
+				<!-- The matrix: one cell per percent, filled in legend order. -->
+				<div
+					class="mt-2.5 grid w-full gap-[3px]"
+					style="grid-template-columns: repeat({MATRIX_COLUMNS}, minmax(0, 1fr))"
+					aria-hidden="true"
 				>
-					{formatPercent(percent / 100)}
-				</span>
-			</div>
+					{#each cells as cell, index (index)}
+						<span class={['aspect-square rounded-[2px]', cell ?? 'bg-line/50']}></span>
+					{/each}
+				</div>
 
-			<!-- The matrix: one cell per percent, filled in legend order. -->
-			<div
-				class="mt-2.5 grid w-full gap-[3px]"
-				style="grid-template-columns: repeat({MATRIX_COLUMNS}, minmax(0, 1fr))"
-				aria-hidden="true"
-			>
-				{#each cells as cell, index (index)}
-					<span class={['aspect-square rounded-[2px]', cell ?? 'bg-line/50']}></span>
-				{/each}
-			</div>
-
-			<ul class="mt-3 flex flex-col gap-1.5">
-				{#each rows as row (row.label)}
-					<li class="flex items-baseline gap-2">
-						<span class={['size-2 shrink-0 translate-y-px rounded-[2px]', row.tone]}></span>
-						<span class="text-[12px] text-ink-secondary">{row.label}</span>
-						{#if row.detail}
-							<span class="truncate font-mono text-[10px] text-ink-tertiary/70">{row.detail}</span>
-						{/if}
-						<span class="tabular ml-auto shrink-0 font-mono text-[11.5px] text-ink-secondary">
-							{formatTokens(row.tokens)}
-						</span>
-					</li>
-				{/each}
-			</ul>
+				<ul class="mt-3 flex flex-col gap-1.5">
+					{#each rows as row (row.label)}
+						<li class="flex items-baseline gap-2">
+							<span class={['size-2 shrink-0 translate-y-px rounded-[2px]', row.tone]}></span>
+							<span class="text-[12px] text-ink-secondary">{row.label}</span>
+							{#if row.detail}
+								<span class="truncate font-mono text-[10px] text-ink-tertiary/70">{row.detail}</span
+								>
+							{/if}
+							<span class="tabular ml-auto shrink-0 font-mono text-[11.5px] text-ink-secondary">
+								{formatTokens(row.tokens)}
+							</span>
+						</li>
+					{/each}
+				</ul>
+			{/if}
 		</div>
 
 		<div class="mt-3 flex items-center justify-between gap-2 border-t border-line px-3 py-2">
 			<span class="tabular font-mono text-[11px] text-plan">
-				{formatTokens(remaining)} free
+				{known ? `${formatTokens(remaining)} free` : '—'}
 			</span>
 			<span class="font-mono text-[10px] text-ink-tertiary/70">
 				{usage.turnCount} turns · {usage.toolCallCount} tools

@@ -16,17 +16,21 @@
  *   bridge does not replay server-side, unlike the stdio bridge for IDE clients.
  */
 
-import type { AskUserQuestionResponse } from './types/ext.js';
+import type { AskUserQuestionResponse, SubagentLiveSnapshot } from './types/ext.js';
 import type { IncomingFrame, PlanOutcome, Transport } from './session-store.svelte.js';
-import type { ContextUsage, ModelOption, Session } from './types.js';
+import type { ContextUsage, FileEntry, ModelOption, Session, SubagentSummary } from './types.js';
 import {
 	accessFromSession,
 	contextFromInfo,
+	entriesFromNodes,
+	lastSegment,
 	modelsFromState,
 	sessionsFromRoster,
 	unwrapExt,
+	type FsNode,
 	type RosterRow
 } from './wire.js';
+import { fromLive } from './subagents.js';
 
 /** What `session/load` (or `session/new`) told us about the session. */
 export interface SessionOpenResult {
@@ -119,12 +123,17 @@ export class WebSocketTransport implements Transport {
 	 *
 	 * The response carries the session's model catalog and mode state, which is
 	 * where the composer's picker and access control come from.
+	 *
+	 * `cwd` must be the session's OWN directory, not the pager's: the agent
+	 * resolves the session directory from `(id, cwd)` and rejects a relative or
+	 * empty path outright ("Path is not absolute"), so a bare id is not enough.
 	 */
-	async openSession(sessionId: string): Promise<SessionOpenResult> {
+	async openSession(sessionId: string, cwd?: string): Promise<SessionOpenResult> {
 		this.activeSessionId = sessionId;
+		const sessionCwd = cwd ?? this.cwd ?? '';
 		const result = (await this.request('session/load', {
 			sessionId,
-			cwd: this.cwd,
+			cwd: sessionCwd,
 			mcpServers: []
 		})) as { models?: unknown; _meta?: Record<string, unknown> } | undefined;
 
@@ -151,17 +160,74 @@ export class WebSocketTransport implements Transport {
 	 *
 	 * `alnair/session/info` is the only place the exact totals live; the stream
 	 * only carries `auto_compact_*` deltas. Read once on attach and on demand.
-	 * The payload nests `context` under `data` in the Rust struct but the ext
-	 * response flattens `data` onto the result, so both are accepted.
+	 *
+	 * The handler answers `SessionInfoResponse` — `{ sessionId, cwd, ...data }`,
+	 * where `SessionInfoData` is `#[serde(flatten)]`ed, so `context` sits at the
+	 * TOP level of the result and there is no `data` wrapper on the wire.
 	 */
 	async sessionContext(sessionId: string): Promise<ContextUsage | undefined> {
 		const raw = await this.ext('alnair/session/info', { sessionId });
 		const payload = unwrapExt<Record<string, unknown>>(raw);
 		if (!payload) return undefined;
-		const context =
-			(payload.context as Record<string, unknown> | undefined) ??
-			(payload.data as { context?: Record<string, unknown> } | undefined)?.context;
+		// An unknown session id answers `{}`; a context is what makes it real.
+		const context = payload.context as Record<string, unknown> | undefined;
 		return context ? contextFromInfo(context) : undefined;
+	}
+
+	/**
+	 * One directory of the workspace, for the composer's `@` menu.
+	 *
+	 * Paths come back as the agent reports them (absolute). The store re-roots
+	 * them at the workspace, because a mention token must be relative: the
+	 * agent's own tools resolve `@src/x.ts`, not `@/home/me/repo/src/x.ts`.
+	 */
+	async fsList(path: string, sessionId: string): Promise<FileEntry[]> {
+		const raw = await this.ext('alnair/fs/list', { path, sessionId });
+		const payload = unwrapExt<{ nodes?: FsNode[] }>(raw);
+		return entriesFromNodes(payload?.nodes ?? []);
+	}
+
+	/**
+	 * Fuzzy path search across the workspace.
+	 *
+	 * Unlike `fsList` (one directory at a time), this ranks the whole tree, so
+	 * the `@` menu can offer a match from any depth without drilling. The agent
+	 * keeps the walk alive between calls; `done: false` means it is still
+	 * streaming and another call will return more.
+	 */
+	async fsSearch(request: {
+		sessionId: string;
+		path?: string;
+		query: string;
+		limit?: number;
+		dirs?: boolean;
+	}): Promise<FileEntry[]> {
+		const raw = await this.ext('alnair/fs/search', {
+			sessionId: request.sessionId,
+			...(request.path ? { path: request.path } : {}),
+			query: request.query,
+			...(request.limit ? { limit: request.limit } : {}),
+			...(request.dirs ? { dirs: true } : {})
+		});
+		const payload = unwrapExt<{ results?: { path?: unknown; type?: unknown }[] }>(raw);
+		return (payload?.results ?? [])
+			.map((hit): FileEntry | undefined => {
+				const path = typeof hit.path === 'string' ? hit.path : '';
+				if (!path) return undefined;
+				return {
+					name: lastSegment(path),
+					path,
+					type: hit.type === 'directory' ? 'directory' : 'file'
+				};
+			})
+			.filter((entry): entry is FileEntry => entry !== undefined);
+	}
+
+	/** Subagents running under a session right now. */
+	async listSubagents(sessionId: string): Promise<SubagentSummary[]> {
+		const raw = await this.ext('alnair/subagent/list_running', { sessionId });
+		const payload = unwrapExt<{ subagents?: SubagentLiveSnapshot[] }>(raw);
+		return (payload?.subagents ?? []).map(fromLive);
 	}
 
 	// --- Transport: turns ----------------------------------------------------
@@ -212,15 +278,26 @@ export class WebSocketTransport implements Transport {
 		// store ignores sessions it is not showing.
 	}
 
+	/**
+	 * Switch the session's model.
+	 *
+	 * The method is `session/set_model`, not `session/setModel`: ACP names the
+	 * model switch with an underscore (the leader's own `AGENT_METHOD_NAMES`
+	 * agrees), and the camelCase spelling is answered "Method not found".
+	 *
+	 * The effort rides in `_meta.reasoningEffort`, which is where
+	 * `parse_reasoning_effort_meta` reads it. It is a per-session override, so
+	 * it is sent only when the caller named one.
+	 */
 	setModel(modelId: string, effort?: string): void {
 		const sessionId = this.activeSessionId;
 		if (!sessionId) return;
-		void this.request('session/setModel', {
+		void this.request('session/set_model', {
 			sessionId,
 			modelId,
 			...(effort ? { _meta: { reasoningEffort: effort } } : {})
 		}).catch(() => {
-			// A rejected model switch is surfaced by `model_changed` not arriving.
+			// A rejected switch is surfaced by `model_changed` not arriving.
 		});
 	}
 
@@ -370,7 +447,21 @@ export class WebSocketTransport implements Transport {
 		this.dispatch(message);
 	}
 
-	/** Fold a notification into the store's frame stream. */
+	/**
+	 * Fold a notification into the store's frame stream.
+	 *
+	 * Every notification the agent sends for a session carries a FLAT `params`
+	 * with `sessionId` and `update`, whichever method it arrives under:
+	 *
+	 * - `session/update` — the ACP rail.
+	 * - `_alnair/session/update` — the extension rail. The `_` is only the
+	 *   gateway's extension marker; the params are not nested one level down.
+	 *   A live replay confirmed this: `params` is `{ sessionId, update, _meta }`.
+	 *
+	 * The method name is passed through verbatim, because the reducer branches
+	 * on it to choose the ACP or extension decoder. Rewriting it (or looking for
+	 * nested params) silently discards the frame.
+	 */
 	private dispatch(message: Rpc) {
 		const params = (message.params ?? {}) as Record<string, unknown>;
 
@@ -385,21 +476,25 @@ export class WebSocketTransport implements Transport {
 			return;
 		}
 
-		// Ext notifications arrive wrapped: the real method and params sit one
-		// level down under `params`. Unwrap so the store sees one shape.
-		if (message.method?.startsWith('_')) {
-			const inner = (params.params ?? {}) as Record<string, unknown>;
-			const sessionId = String(inner.sessionId ?? params.sessionId ?? '');
-			if (!sessionId) return;
-			this.frameSink?.(sessionId, {
-				method: inner.method ? `_${inner.method}` : (message.method ?? ''),
-				params: inner
-			});
+		// A model switch made elsewhere (the TUI, another tab) rides this rail
+		// rather than `session/update`. It is an extension update, so the store
+		// routes it to the extension decoder by method name.
+		if (message.method === 'alnair/session_notification') {
+			const sessionId = String(params.sessionId ?? '');
+			if (!sessionId || !params.update) return;
+			this.frameSink?.(sessionId, { method: message.method, params });
 			return;
 		}
 
+		if (!message.method) return;
+
 		const sessionId = String(params.sessionId ?? params.session_id ?? '');
-		if (!sessionId || !message.method) return;
+		if (!sessionId) return;
+
+		// `update` is required for the reducer; anything else is a notification
+		// the store has no arm for, and passing it on would be a no-op with
+		// extra steps.
+		if (!params.update) return;
 		this.frameSink?.(sessionId, { method: message.method, params });
 	}
 
@@ -501,14 +596,18 @@ export class WebSocketTransport implements Transport {
 	/**
 	 * Call an `alnair/*` extension method.
 	 *
-	 * These must go out **wrapped**: the gateway routes a top-level
-	 * `_alnair/<name>` method and reads the real method plus params one level
-	 * down. A plain `alnair/<name>` request is answered "Method not found" —
-	 * verified against a live leader, where the plain form failed and this one
-	 * returned the roster.
+	 * These go out with the `_` prefix and **flat** params. The ACP decoder
+	 * strips the prefix and hands the whole `params` object to the handler, so
+	 * nesting `{ method, params }` one level down leaves the handler with no
+	 * fields of its own. Verified against a live leader: `_alnair/fs/list` with
+	 * a flat `{ path }` returns the listing, and the nested form is rejected
+	 * with `invalid params: missing field 'path'`.
+	 *
+	 * (A method that ignores unknown fields, like `sessions/list`, answers
+	 * either way — which is exactly how this bug hid.)
 	 */
 	private ext(method: string, params: Record<string, unknown>): Promise<unknown> {
-		return this.request(`_${method}`, { method, params });
+		return this.request(`_${method}`, params);
 	}
 
 	private sendRaw(message: Rpc) {

@@ -19,6 +19,7 @@ import type {
 	AccessMode,
 	ContextCategory,
 	ContextUsage,
+	FileEntry,
 	ModelOption,
 	Session,
 	SessionStatus
@@ -33,14 +34,28 @@ interface ExtEnvelope<T> {
 /**
  * Unwrap an `alnair/*` extension response.
  *
- * Ext handlers answer `ExtMethodResult { result, error }`, so the payload is
- * one level below the JSON-RPC `result`. A handler that reports a partial
- * failure still carries `result`, which is worth rendering.
+ * Two shapes come back, and both are legitimate:
+ *
+ * - **Enveloped** — `ExtMethodResult { result, error }`, built by
+ *   `to_ext_response`. `alnair/session/info`, `fs/list`, `fs/search` and
+ *   `sessions/list` use this, so the payload sits one level below the
+ *   JSON-RPC result.
+ * - **Raw** — the handler writes its payload straight into the `ExtResponse`
+ *   (`to_raw_response`, or a hand-built `ExtResponse::new`).
+ *   `alnair/session/updates` and `alnair/commands/list` use this, so the
+ *   result IS the payload.
+ *
+ * The discriminator is the presence of a `result` key: the envelope always
+ * serializes it (`Option<T>`, no `skip_serializing_if`), so its absence means
+ * the object was never wrapped. Reading only the envelope shape silently
+ * turned every `session/updates` reply into `undefined` — a stored transcript
+ * that existed on disk and never reached the transcript pane.
  */
 export function unwrapExt<T>(raw: unknown): T | undefined {
 	if (!raw || typeof raw !== 'object') return undefined;
 	const envelope = raw as ExtEnvelope<T>;
-	return envelope.result ?? undefined;
+	if ('result' in envelope) return envelope.result ?? undefined;
+	return raw as T;
 }
 
 /** A roster row, as `alnair/sessions/list` sends it. */
@@ -134,6 +149,15 @@ export function sessionFromRoster(row: RosterRow): Session | undefined {
 		// sends, and the agent derives `repoName` from the same value.
 		workspace: lastSegment(cwd) || cwd,
 		gitRootDir: undefined,
+		// `yolo` is the session's own runtime mode. It is the only place the
+		// browser can learn the mode of a session it did not create: the load
+		// response only reports the mode for sessions the leader creates.
+		//
+		// A missing key means UNKNOWN rather than `false`. `RosterEntry.yolo` is
+		// a plain bool, so a full row always carries it — but a thin
+		// `sessions/changed` delta may not, and reading absence as "not yolo"
+		// would let an unrelated tick clear an always-approve session.
+		yolo: typeof row.yolo === 'boolean' ? row.yolo : undefined,
 		status: statusFromActivity(row.activity)
 	};
 }
@@ -330,8 +354,7 @@ function contextWindowFromMeta(meta: Record<string, unknown>): number {
 	return 0;
 }
 
-/**
- * The permission mode the runtime is actually in.
+/** The permission mode the runtime is actually in.
  *
  * `yolo` wins over `auto`: the leader injects both into `session/new`, and a
  * client that advertised neither stays on `ask`.
@@ -340,4 +363,54 @@ export function accessFromSession(yolo: unknown, auto: unknown): AccessMode {
 	if (yolo === true) return 'always-approve';
 	if (auto === true) return 'auto';
 	return 'ask';
+}
+
+/**
+ * A node from `alnair/fs/list`.
+ *
+ * `FsListNode` is snake_case in Rust but its `type` is renamed, and the live
+ * wire sends `name`, `path`, `type`, `size`, `modifiedAt` — camelCase, because
+ * the struct is serialized with the extension's own convention. Accepting both
+ * spellings costs one lookup per field and keeps a serialization change from
+ * emptying the menu.
+ */
+export interface FsNode {
+	name?: unknown;
+	path?: unknown;
+	type?: unknown;
+	size?: unknown;
+}
+
+/** `alnair/fs/list` nodes → the composer's `@` menu rows. */
+export function entriesFromNodes(nodes: FsNode[]): FileEntry[] {
+	return nodes
+		.map((node): FileEntry | undefined => {
+			const path = typeof node.path === 'string' ? node.path : '';
+			if (!path) return undefined;
+			const name = typeof node.name === 'string' && node.name ? node.name : lastSegment(path);
+			return {
+				name,
+				path,
+				type: node.type === 'directory' ? 'directory' : 'file',
+				...(typeof node.size === 'number' ? { size: node.size } : {})
+			};
+		})
+		.filter((entry): entry is FileEntry => entry !== undefined);
+}
+
+/**
+ * Re-root an absolute path at `root`, with `/` separators.
+ *
+ * A mention token has to be relative for the agent's own tools to resolve it.
+ * A path outside the root is returned unchanged rather than guessed at: a
+ * worktree session can legitimately list a directory its cwd does not contain,
+ * and inventing `../../` would be worse than leaving it absolute.
+ */
+export function relativeTo(root: string, path: string): string {
+	const normalizedRoot = root.replace(/[\\/]+$/, '');
+	if (!path.startsWith(normalizedRoot)) return path.replace(/\\/g, '/');
+	return path
+		.slice(normalizedRoot.length)
+		.replace(/^[\\/]+/, '')
+		.replace(/\\/g, '/');
 }

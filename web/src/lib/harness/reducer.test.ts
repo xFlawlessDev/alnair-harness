@@ -415,3 +415,102 @@ describe('reducer: replay', () => {
 		expect(kinds).toContain('text');
 	});
 });
+
+describe('reducer: turn ordering', () => {
+	const userChunk = (text: string): SessionUpdate =>
+		({
+			sessionUpdate: 'user_message_chunk',
+			content: { type: 'text', text }
+		}) as unknown as SessionUpdate;
+
+	const agentChunk = (text: string): SessionUpdate =>
+		({
+			sessionUpdate: 'agent_message_chunk',
+			content: { type: 'text', text }
+		}) as unknown as SessionUpdate;
+
+	it('does not append a new reply to a stale open turn', () => {
+		// A replay can leave a turn open (its transcript never got
+		// `turn_completed`). Sending a prompt then used to append the answer to
+		// that earlier turn, so the reply rendered ABOVE the question.
+		let acc: Acc = reduceAcpUpdate(emptyAcc(), agentChunk('stale answer'), {
+			now: NOW,
+			sessionId: SESSION
+		});
+		expect(acc.openTurnId).toBeDefined();
+
+		acc = openUserTurn(acc, 'fresh question', NOW + 10);
+		acc = reduceAcpUpdate(acc, agentChunk('fresh answer'), { now: NOW + 20, sessionId: SESSION });
+
+		expect(acc.turns.map((turn) => turn.role)).toEqual(['assistant', 'user', 'assistant']);
+		const last = acc.turns.at(-1)!;
+		expect(last.parts[0]).toMatchObject({ kind: 'text', text: 'fresh answer' });
+		// The stale turn is closed rather than left streaming forever.
+		expect(acc.turns[0].status).toBe('complete');
+	});
+
+	it('builds user turns from replayed chunks', () => {
+		// Replay has no optimistic turn, so `user_message_chunk` is the only
+		// source of the user side of the conversation.
+		const acc = replay(
+			[
+				{
+					timestamp: new Date(NOW).toISOString(),
+					method: 'session/update',
+					params: { sessionId: SESSION, update: userChunk('hello') }
+				},
+				{
+					timestamp: new Date(NOW + 1).toISOString(),
+					method: 'session/update',
+					params: { sessionId: SESSION, update: userChunk(' world') }
+				},
+				{
+					timestamp: new Date(NOW + 2).toISOString(),
+					method: 'session/update',
+					params: { sessionId: SESSION, update: agentChunk('hi there') }
+				}
+			],
+			SESSION
+		);
+
+		expect(acc.turns.map((turn) => turn.role)).toEqual(['user', 'assistant']);
+		expect(acc.turns[0].parts[0]).toMatchObject({ kind: 'text', text: 'hello world' });
+	});
+
+	it('starts a new user turn for a second replayed prompt', () => {
+		const envelopes = [
+			{
+				timestamp: new Date(NOW).toISOString(),
+				method: 'session/update',
+				params: { sessionId: SESSION, update: userChunk('one') }
+			},
+			{
+				timestamp: new Date(NOW + 1).toISOString(),
+				method: 'session/update',
+				params: { sessionId: SESSION, update: agentChunk('a') }
+			},
+			{
+				timestamp: new Date(NOW + 2).toISOString(),
+				method: 'session/update',
+				params: { sessionId: SESSION, update: userChunk('two') }
+			},
+			{
+				timestamp: new Date(NOW + 3).toISOString(),
+				method: 'session/update',
+				params: { sessionId: SESSION, update: agentChunk('b') }
+			}
+		];
+		const acc = replay(envelopes, SESSION);
+		expect(acc.turns.map((turn) => turn.role)).toEqual(['user', 'assistant', 'user', 'assistant']);
+		expect(acc.turns[2].parts[0]).toMatchObject({ text: 'two' });
+	});
+
+	it('swallows the echo of a live prompt', () => {
+		// A live send paints the prompt; the agent echoing it back must not add
+		// a second bubble.
+		let acc = openUserTurn(emptyAcc(), 'hello', NOW);
+		acc = reduceAcpUpdate(acc, userChunk('hello'), { now: NOW + 1, sessionId: SESSION });
+		expect(acc.turns).toHaveLength(1);
+		expect(acc.turns[0].role).toBe('user');
+	});
+});

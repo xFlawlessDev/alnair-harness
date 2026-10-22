@@ -1,11 +1,17 @@
 /**
- * End-to-end probe against a live `alnair web`.
- *
- * Speaks the same JSON-RPC the browser transport speaks and reports what
- * actually came back — the point is to see real payload shapes, not to assert
- * what we hope they are.
+ * End-to-end probe against a live `alnair web`: prints the raw payload shapes.
  *
  *   node scripts/web-probe.mjs http://127.0.0.1:2441
+ *
+ * For assertions use `web-verify.mjs`, and for the UI in a real browser use
+ * `web-browser-test.mjs`. This one is for looking at what the wire actually
+ * says when something is unexpected.
+ *
+ * Extension methods go out `_`-prefixed with FLAT params. The ACP decoder
+ * strips the `_` and hands the whole `params` object to the handler, so nesting
+ * `{ method, params }` one level down leaves it with no fields — which is how
+ * a release shipped with an empty UI. `plainExt` below shows that failure on
+ * purpose.
  *
  * Implemented on `node:http` + `node:net` rather than the built-in `WebSocket`,
  * because that one cannot set an `Origin` header and the server's gate
@@ -161,14 +167,27 @@ await probe('initialize', 'initialize', {
 	}
 });
 
-const rosterPlain = await probe('rosterPlain', 'alnair/sessions/list', {});
-const roster = await probe('roster', '_alnair/sessions/list', {
+// The two envelopes, side by side: the flat form the client must use, and the
+// nested form that silently loses every field.
+const rosterFlat = await probe('rosterFlat', '_alnair/sessions/list', {});
+const rosterNested = await probe('rosterNested', '_alnair/sessions/list', {
 	method: 'alnair/sessions/list',
 	params: {}
 });
-const rows = roster?.result?.sessions ?? roster?.sessions ?? [];
+const rows = rosterFlat?.result?.sessions ?? rosterFlat?.sessions ?? [];
 report.rosterCount = rows.length;
 report.firstRow = rows[0];
+
+// `fs/list` REQUIRES `path`, so it tells the two forms apart: the nested one is
+// rejected with "invalid params: missing field `path`". The roster ignores
+// unknown fields and answers either way, which is how the bug hid.
+report.fsListFlat = await probe('fsListFlat', '_alnair/fs/list', {
+	path: rows[0]?.cwd ?? ''
+});
+report.fsListNested = await probe('fsListNested', '_alnair/fs/list', {
+	method: 'alnair/fs/list',
+	params: { path: rows[0]?.cwd ?? '' }
+});
 
 if (rows[0]?.sessionId) {
 	const sessionId = rows[0].sessionId;
@@ -177,10 +196,10 @@ if (rows[0]?.sessionId) {
 	report.loadKeys = load ? Object.keys(load) : [];
 	report.loadModels = load?.models ?? null;
 
-	await probe('info', '_alnair/session/info', {
-		method: 'alnair/session/info',
-		params: { sessionId }
-	});
+	// Flat params, the correct form. Nested here would fall back to the FIRST
+	// resident session, which is why a probe that only looks at row 0 cannot
+	// see the mistake.
+	await probe('info', '_alnair/session/info', { sessionId });
 
 	await new Promise((resolve) => setTimeout(resolve, 1500));
 	report.frameCount = frames.filter((frame) => frame.method).length;
