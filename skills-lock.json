@@ -7,6 +7,12 @@
       "skillPath": "frameworks/ratatui/SKILL.md",
       "computedHash": "19758743f6f90d37c6934563797e2e8ec7d95c3a1135b99844434ec3d8d4903f"
     },
+    "rust-best-practices": {
+      "source": "apollographql/skills",
+      "sourceType": "github",
+      "skillPath": "skills/rust-best-practices/SKILL.md",
+      "computedHash": "a3db351ec552ed9d36b59e547d6c1d94077867eb5bcb98b3f802dfebb0a8a248"
+    },
     "shadcn-svelte": {
       "source": "huntabyte/shadcn-svelte",
       "sourceType": "github",
