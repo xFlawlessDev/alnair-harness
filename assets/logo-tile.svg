@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Alnair logo tile: the mark from web/src/lib/assets/logo-white.svg, unchanged,
+  inset into a rounded black square for use as an avatar / README badge.
+  Raster twin: assets/logo-tile.png (1024x1024, rendered from this file).
+-->
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <!-- Rounded black plate; radius is ~22% of the side (the app-icon proportion). -->
+  <rect x="0" y="0" width="1024" height="1024" rx="224" ry="224" fill="#000000"/>
+  <!-- Hairline so the tile keeps an edge against a dark README background. -->
+  <rect x="1" y="1" width="1022" height="1022" rx="223" ry="223"
+        fill="none" stroke="#ffffff" stroke-opacity="0.14" stroke-width="2"/>
+
+  <!-- Mark: the 1000-unit art box scaled to 680 and centred (172 units of padding). -->
+  <g fill="#ffffff" transform="translate(172 172) scale(0.68)">
+    <path d="M82.85,905.68l282.23-62,305.34-67.48-50.44-112.24-67.33-150.79,78.33,100.97,229.24,310.14-856.72-.11c26.04-7.41,51.76-12.14,79.34-18.48Z"/>
+    <polygon points="130.28 765.6 193.39 650.71 420.99 235.7 509.51 75.73 324.98 700.13 606.64 749.65 130.28 765.6"/>
+    <path d="M879.44,797.83l-335.33-352.92-161.83,215.99c59.26-139.33,120.4-273.77,183.08-413.28,109.41,167.8,216.31,333.73,322.58,501.83l108.13,169.87c.55,2.15.84,2.87-1,1.28l-115.63-122.76Z"/>
+  </g>
+</svg>
