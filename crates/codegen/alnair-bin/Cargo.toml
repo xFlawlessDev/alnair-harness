@@ -17,6 +17,9 @@ path = "src/main.rs"
 [lints]
 workspace = true
 
+[target.'cfg(windows)'.build-dependencies]
+winres = "0.1"
+
 [dependencies]
 # The pager library (all application logic + the public API main.rs drives).
 alnair-tui = { path = "../alnair-tui" }

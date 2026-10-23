@@ -3,6 +3,14 @@ use std::process::Command;
 fn main() {
     println!("cargo:rerun-if-changed=.git/HEAD");
     println!("cargo:rerun-if-env-changed=ALNAIR_VERSION");
+    println!("cargo:rerun-if-changed=alnair.ico");
+
+    #[cfg(windows)]
+    {
+        let mut resource = winres::WindowsResource::new();
+        resource.set_icon("alnair.ico");
+        resource.compile().expect("failed to compile Windows icon resource");
+    }
 
     let commit = Command::new("git")
         .args(["rev-parse", "--short", "HEAD"])
