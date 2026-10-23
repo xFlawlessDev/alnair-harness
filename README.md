@@ -1,12 +1,18 @@
 <div align="center">
 
-<h1>Alnair (<code>alnair</code>) 🌘</h1>
+<img src="assets/logo-tile.png" width="120" height="120" alt="Alnair logo">
 
-<h3>🕸️ The world's first CLI with built-in <em>Graph Engineering</em></h3>
+<h1>Alnair (<code>alnair</code>)</h1>
+
+<h3>🕸️ Graph engineering, built in</h3>
 
 <p><code>/graph</code> turns one objective into a dependency graph of
 autonomous, self-verifying agent loops — planned, parallelized,
 adversarially verified, and merged back, end to end.</p>
+
+<p>When the harness gets it wrong, it writes the lesson down. The next session
+in that repo starts with what already failed — so it doesn't fail the same way
+twice.</p>
 
 **Alnair** is a coding agent that lives in your terminal. It reads the repo,
 writes the patch, runs the tests, and keeps going while you do something else.
@@ -19,6 +25,7 @@ key? OpenAI, Anthropic, Google, DeepSeek, Groq, Moonshot and
 
 [Installation](#installation) ·
 [Graph engineering](#graph-engineering) ·
+[Lessons](#lessons) ·
 [Providers and API keys](#providers-and-api-keys) ·
 [Building from source](#building-from-source) ·
 [One identity](#one-identity-no-coexistence-shims) ·
@@ -83,6 +90,62 @@ back tomorrow, `/graph resume`. A teammate can pick it up from the same file.
 
 On by default. `ALNAIR_GRAPH=0` turns it off; `ALNAIR_GRAPH_CONCURRENCY` (default
 3) controls how many nodes run at once.
+
+## Lessons
+
+When a goal keeps failing the same way, Alnair already stops and works out
+*why* — then throws the answer away when the goal ends. Lessons keep it.
+
+A lesson records what the harness itself got wrong in this repository and what
+fixed it. It is written when the goal strategist restructures a stuck goal, and
+when a `/graph` node is archived after a retry. The next session in the same
+repository starts with the three newest, marked as advisory notes about how the
+harness worked here — not as facts about your code.
+
+```
+/lessons              # what has been captured for this workspace
+/lessons clear        # delete them
+```
+
+You will see them as a small block at the top of a new session:
+
+```
+<harness-lessons>
+## Lessons from earlier sessions in this workspace
+
+These are notes about how the harness worked here, not facts about the code.
+Apply one only when the situation matches.
+
+### Verification gaps keep reopening after a partial fix
+Restructure the unit under test rather than patching the symptom; split the
+tangled module first. (component: workflow)
+</harness-lessons>
+```
+
+Three properties worth knowing, because they are what make this safe to leave on:
+
+- **Nothing captured, nothing injected.** An empty store changes your prompt by
+  zero bytes. A workspace that has never produced a lesson behaves exactly as
+  it did before.
+- **It lives in `~/.alnair/lessons/`, never in your repo.** A file that is read
+  into context automatically is a file a hostile repository could use to steer
+  every future session in it. Yours stays outside version control.
+- **It is a plain Markdown file you can edit.** Delete any entry you disagree
+  with in `~/.alnair/lessons/<workspace>/LESSONS.md`; that is the escape hatch.
+
+On by default. `ALNAIR_LESSONS=0` turns it off, and `[lessons]` in
+`config.toml` tunes the caps:
+
+```toml
+[lessons]
+enabled = true          # capture and injection
+max_entries = 50        # kept on disk, oldest dropped
+inject_max = 3          # entries in the first-turn block
+inject_max_chars = 400  # per entry
+```
+
+Edits apply to a running session, so turning capture off mid-goal takes effect
+on the next strategist pass.
 
 ## Providers and API keys
 
@@ -192,10 +255,11 @@ launcher at `bin/protoc`; install dotslash (`brew install dotslash` or
 ## One identity, no coexistence shims
 
 Alnair is an independent coding agent — a hard fork of
-[xai-org/grok-build](https://github.com/xai-org/grok-build), provider-agnostic
-rather than a build of any single vendor's CLI, and not affiliated with
-Moonshot AI or xAI. It has its own binary (`alnair`), its own `~/.alnair`, its
-own keyring entry, and its own `ALNAIR_*` env vars.
+[Kigi-CLI](https://git.zacharyzhang.com/ZacharyZhang-NY/Kigi-CLI), which is
+itself a fork of [xai-org/grok-build](https://github.com/xai-org/grok-build).
+It is provider-agnostic rather than a build of any single vendor's CLI, and not
+affiliated with Moonshot AI or xAI. It has its own binary (`alnair`), its own
+`~/.alnair`, its own keyring entry, and its own `ALNAIR_*` env vars.
 
 Because it is its own thing, there is no "which CLI am I" confusion to manage:
 Alnair never reads or writes another CLI's home directory. The single
@@ -211,5 +275,7 @@ Apache-2.0. See [LICENSE](LICENSE), [NOTICE](NOTICE), and
 [THIRD-PARTY-NOTICES](THIRD-PARTY-NOTICES.md). Code ported from
 openai/codex and sst/opencode is documented in
 [crates/codegen/alnair-tools/THIRD_PARTY_NOTICES.md](crates/codegen/alnair-tools/THIRD_PARTY_NOTICES.md).
-Alnair is based on Grok Build Open Source, Copyright 2025-2026 X.AI Corp.;
-the `--version` output carries that attribution.
+Alnair is based on Grok Build Open Source, Copyright 2025-2026 X.AI Corp.,
+via [Kigi-CLI](https://git.zacharyzhang.com/ZacharyZhang-NY/Kigi-CLI);
+`NOTICE` carries both the Kigi attribution and the Grok Build one, and the
+`--version` output carries the Grok Build note.

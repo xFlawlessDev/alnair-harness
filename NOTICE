@@ -4,6 +4,10 @@ Copyright 2026 the Alnair contributors
 This product is based on Grok Build (https://github.com/xai-org/grok-build),
 Copyright 2025-2026 X.AI Corp., licensed under the Apache License, Version 2.0.
 
+Alnair is a fork of Kigi-CLI (https://git.zacharyzhang.com/ZacharyZhang-NY/Kigi-CLI),
+Copyright 2026 the Kigi contributors, itself a fork of Grok Build. Kigi's
+NOTICE is reproduced in full below, as required by Apache License 2.0 §4(d).
+
 Modifications relative to the upstream work (Apache License 2.0 §4(b) notice):
 - All `xai-*`/`xai-grok-*` crates renamed into the `alnair-*` namespace; the
   binary is `alnair`, the config directory is `~/.alnair`, and environment
@@ -20,6 +24,41 @@ Modifications relative to the upstream work (Apache License 2.0 §4(b) notice):
   user-declared providers by base URL. Self-update uses GitHub Releases
   (github.com).
 
+Modifications relative to Kigi (Apache License 2.0 §4(b) notice):
+- Crate, binary, config-directory and environment-variable names changed from
+  the `kigi-*`/`kigi`/`~/.kigi`/`KIGI_*` forms to the `alnair-*`/`alnair`/
+  `~/.alnair`/`ALNAIR_*` forms throughout.
+- Identity and release surfaces rewritten: the README, the "one identity"
+  section, the install scripts and the self-update release source now point at
+  the Alnair project (GitHub Releases) rather than Kigi's Gitea forge.
+- Login and logout were replaced by `alnair connect` / `/connect`, a single
+  provider picker that is also the only disconnect surface; the primary-scope
+  `logout` command was removed.
+- NEW: a browser client, `alnair web` (`crates/codegen/alnair-web` plus the
+  `web/` SvelteKit harness). It is a client of the shared leader rather than a
+  second agent, and adds an embedded single-binary SPA, a cookie + `Origin`
+  authenticated WebSocket bridge, a native directory picker endpoint, and
+  per-session client fan-out.
+- NEW: multi-terminal session UX in the pager — leader-by-default resolution,
+  startup auto-attach to a matching session, a global session tab strip (F2)
+  that spans repositories and persists to `~/.alnair/run/pager_tabs.json`, a
+  dashboard with session CRUD, and an app-level directory picker with three
+  distinct purposes.
+- NEW: an interactive terminal pane (F3) that owns its own PTY, forwards input,
+  paste and resize, replays a ring buffer on reopen, and is fed by the extracted
+  `alnair-terminal-screen` emulator crate.
+- NEW: config hot-reload. A debounced watcher feeds a reloader that diffs and
+  dispatches to two transports (ACP stream injection under a leader, direct
+  dispatch in the in-process TUI), covering `[platforms.*]`, `[model.*]`,
+  `[mcp_servers]`, `[skills]`, `[compat]`, `[ui]`, and `AGENTS.md` / `CLAUDE.md`
+  / rules `*.md`.
+- NEW: a workspace lesson library (`[lessons]`, `/lessons`, `~/.alnair/lessons/`):
+  harness postmortems captured from the goal strategist and graph node
+  archives, distilled deterministically, and injected once at the start of the
+  next session in the same workspace.
+- The local release line was reset to 0.1.1 when the project stopped presenting
+  itself as a Kimi Code community build; it stands at 0.1.2 here.
+
 This product includes code ported from openai/codex and sst/opencode; see
 crates/codegen/alnair-tools/THIRD_PARTY_NOTICES.md for the license terms and
 the per-file change notices.
@@ -27,4 +66,35 @@ the per-file change notices.
 This product bundles model metadata derived from models.dev
 (https://github.com/sst/models.dev, MIT License) as
 crates/codegen/alnair-models/enrichment_snapshot.json, and may refresh it
+from https://models.dev/api.json at runtime.
+
+--------------------------------------------------------------------------------
+NOTICE of Kigi-CLI, reproduced under Apache License 2.0 §4(d)
+--------------------------------------------------------------------------------
+
+Kigi — unofficial Kimi Code CLI community build
+Copyright 2026 the Kigi contributors
+
+This product is based on Grok Build (https://github.com/xai-org/grok-build),
+Copyright 2025-2026 X.AI Corp., licensed under the Apache License, Version 2.0.
+
+Modifications relative to the upstream work (Apache License 2.0 §4(b) notice):
+- All `xai-*`/`xai-grok-*` crates renamed into the `kigi-*` namespace; the
+  binary is `kigi`, the config directory is `~/.kigi`, and environment
+  variables use the `KIGI_*` prefix.
+- xAI/Grok service integrations removed or replaced: telemetry (Mixpanel,
+  OpenTelemetry export, Sentry, trace upload), voice input, announcements,
+  plugin marketplace, remote relay/gateway services, and the xAI OAuth and
+  subscription-proxy endpoints.
+- Endpoints re-targeted at the Kimi Code subscription API
+  (api.kimi.com/coding/v1), the Moonshot open platform (api.moonshot.cn/v1,
+  api.moonshot.ai/v1), and Gitea Releases (git.zacharyzhang.com) for self-update.
+
+This product includes code ported from openai/codex and sst/opencode; see
+crates/codegen/kigi-tools/THIRD_PARTY_NOTICES.md for the license terms and
+the per-file change notices.
+
+This product bundles model metadata derived from models.dev
+(https://github.com/sst/models.dev, MIT License) as
+crates/codegen/kigi-models/enrichment_snapshot.json, and may refresh it
 from https://models.dev/api.json at runtime.

@@ -27,7 +27,11 @@ another CLI's home directory. The one legacy exception is the opt-in,
 read-only `~/.kimi` import (`alnair import-kimi`, PRD F7) — nothing else may
 touch `~/.kimi` or a `KIMI_*` env var.
 
-Upstream sync record (update on every sync): fork baseline is upstream
+Upstream sync record (update on every sync): Alnair is a fork of **Kigi-CLI**
+(`git.zacharyzhang.com/ZacharyZhang-NY/Kigi-CLI`), which is itself a fork of
+Grok Build. `NOTICE` must carry both attributions — Kigi's NOTICE is
+reproduced there verbatim under Apache-2.0 §4(d), and dropping it is a license
+violation, not a cleanup. The fork baseline inherited from Kigi is upstream
 snapshot `8adf901` (2026-07-16, ≈v0.2.102); bug fixes evaluated and
 selectively ported through upstream `77cd7eb` (2026-08-25, ≈v1.0.10) in
 the 0.1.13 cycle, through `3794978` (2026-09-09, ≈v1.0.24) in the 0.1.15
