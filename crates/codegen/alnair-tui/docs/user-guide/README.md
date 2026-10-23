@@ -1,6 +1,6 @@
 # Alnair User Guide
 
-Learn how to install, configure, and extend Alnair, the terminal-based AI coding assistant from SpaceXAI.
+Learn how to install, configure, and extend Alnair, the terminal-based AI coding assistant.
 
 ---
 

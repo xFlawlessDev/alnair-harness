@@ -6,7 +6,7 @@ Alnair connects to custom model endpoints for alternative providers, self-hosted
 
 ## Default Models
 
-By default, Alnair uses models hosted by SpaceXAI, and new sessions start with `alnair`. Default models require no configuration. Authenticate with `alnair connect` or an API key, then start a session.
+By default, Alnair uses the models its configured provider serves, and new sessions start with `alnair`. Default models require no configuration. Authenticate with `alnair connect` or an API key, then start a session.
 
 List all available models:
 

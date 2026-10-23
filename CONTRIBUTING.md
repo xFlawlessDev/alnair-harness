@@ -1,8 +1,9 @@
 # Contributing
 
-Alnair is a hard fork of [xai-org/grok-build](https://github.com/xai-org/grok-build)
-(which does not accept external contributions). Alnair itself welcomes issues
-and pull requests.
+Alnair is a hard fork of [Kigi-CLI](https://git.zacharyzhang.com/ZacharyZhang-NY/Kigi-CLI),
+which is itself a hard fork of
+[xai-org/grok-build](https://github.com/xai-org/grok-build) (neither accepts
+external contributions). Alnair itself welcomes issues and pull requests.
 
 ## Ground rules
 
