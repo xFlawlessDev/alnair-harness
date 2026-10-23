@@ -13,6 +13,27 @@ what the Alnair fork adds, changes, or removes.
 
 Nothing yet.
 
+## [0.1.3] — 2026-10-23
+
+### Added
+
+- **Offline installers for local builds.** `scripts/install-local.sh` and
+  `scripts/install-local.ps1` install a locally built release archive without
+  network access. They verify `SHA256SUMS`, smoke-test the binary before
+  replacing an installation, and use the same managed layout as the updater.
+  See `docs/RELEASE.md` for usage.
+- **Rich terminal chrome.** `[chrome] style = "rich" | "plain"` controls the
+  appearance of the welcome screen, prompt, status line, shortcuts, and session
+  tabs. Rich mode is the default; plain mode keeps the minimal presentation.
+- **Windows application icon.** The `alnair` executable now carries the Alnair
+  logo as a multi-resolution Windows icon.
+
+### Changed
+
+- The dashboard delete-session shortcut is now `Ctrl+Shift+Backspace`.
+- Added the `winres` build dependency and updated locked dependencies for
+  Windows icon resource compilation.
+
 ## [0.1.2] — 2026-10-23
 
 The first release under the Alnair identity. Version 0.1.1 was a rename of the
