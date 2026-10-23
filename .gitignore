@@ -2,6 +2,12 @@
 **/*.rs.bk
 .DS_Store
 
+# Release archives and SHA256SUMS produced by the release build / local
+# installer (docs/RELEASE.md). Build outputs, never sources: `dist/` is
+# recreated by `cargo build --profile release-dist`, and committing a binary
+# here would put a 38 MB artifact in history that goes stale on the next bump.
+/dist/
+
 # Node tooling (web/ harness)
 .wrangler/
 node_modules/

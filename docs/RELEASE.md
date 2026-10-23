@@ -64,6 +64,43 @@ does not run — it is kept only as a reference for the GitHub-hosted layout.
    ~/.alnair/bin/alnair --version
    ```
 
+## Installing a local build
+
+`install.sh` / `install.ps1` resolve a release over the network. To install an
+artifact you just built — before it is published, or on a machine with no
+outbound access — use the local pair instead. They never touch the network:
+
+```sh
+cargo build --profile release-dist -p alnair-bin   # plus the web build, above
+pwsh scripts/install-local.ps1                     # Windows
+sh   scripts/install-local.sh                      # macOS / Linux
+```
+
+Both pick the newest matching archive under `dist/` by default, and both
+verify it against the `SHA256SUMS` beside it. Pass `-SkipChecksum` /
+`--skip-checksum` only for an archive whose manifest you did not generate.
+
+They install into the **same managed layout the self-updater maintains**, so
+`alnair update` takes over without knowing the binary was placed by hand:
+
+| Path | Contents |
+| --- | --- |
+| `<home>/downloads/alnair-<version>-<os>-<arch>` | versioned binary, no extension |
+| `<home>/bin/alnair` (symlink) / `alnair.exe` | the active binary |
+
+The versioned name must stay in that exact form: `cleanup_old_downloads` parses
+the version out of it with `version_from_versioned_binary_name`, and the
+platform half is the updater's `detect_platform()` vocabulary (`windows`,
+`macos`, `linux` — not the release triple), so a `-windows-x86_64.exe` suffix
+would read as a separate, permanently-retained version.
+
+Useful flags: `-AlnairHome <dir>` / `--home <dir>` to install somewhere other
+than `~/.alnair`, and `-NoPath` / `--no-path` to leave `PATH` alone. A rebuild
+of the same version is safe to reinstall: the old binary is moved aside, the
+new one is smoke-tested, and only then is the aside copy dropped. On Windows
+that rename-aside is required — a running `alnair.exe` blocks an in-place
+overwrite but allows the rename.
+
 ## Build runners
 
 Gitea has no hosted runners, so all three `runs-on` labels below are machines
