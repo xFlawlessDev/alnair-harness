@@ -12,12 +12,12 @@ cargo about generate about.hbs -o THIRD-PARTY-NOTICES.md
 
 ## Overview
 
-- Apache License 2.0 (751 crates)
-- MIT License (294 crates)
+- Apache License 2.0 (752 crates)
+- MIT License (297 crates)
 - ISC License (27 crates)
 - BSD 3-Clause "New" or "Revised" License (19 crates)
 - Unicode License v3 (19 crates)
-- Mozilla Public License 2.0 (9 crates)
+- Mozilla Public License 2.0 (8 crates)
 - Do What The F*ck You Want To Public License (4 crates)
 - zlib License (4 crates)
 - Boost Software License 1.0 (2 crates)
@@ -2270,7 +2270,6 @@ Applies to:
 - [windows-result 0.4.1](https://github.com/microsoft/windows-rs)
 - [windows-strings 0.5.1](https://github.com/microsoft/windows-rs)
 - [windows-sys 0.48.0](https://github.com/microsoft/windows-rs)
-- [windows-sys 0.52.0](https://github.com/microsoft/windows-rs)
 - [windows-sys 0.59.0](https://github.com/microsoft/windows-rs)
 - [windows-sys 0.60.2](https://github.com/microsoft/windows-rs)
 - [windows-sys 0.61.2](https://github.com/microsoft/windows-rs)
@@ -16436,68 +16435,70 @@ limitations under the License.
 
 Applies to:
 
-- [alnair-proto-build 0.1.21](https://crates.io/crates/alnair-proto-build)
-- [alnair-acp-lib 0.1.21](https://crates.io/crates/alnair-acp-lib)
-- [alnair-agent 0.1.21](https://crates.io/crates/alnair-agent)
-- [alnair-agent-lifecycle 0.1.21](https://crates.io/crates/alnair-agent-lifecycle)
-- [alnair-auth 0.1.21](https://crates.io/crates/alnair-auth)
-- [alnair-bin 0.1.21](https://crates.io/crates/alnair-bin)
-- [alnair-chat-state 0.1.21](https://crates.io/crates/alnair-chat-state)
-- [alnair-codebase-graph 0.1.21](https://crates.io/crates/alnair-codebase-graph)
-- [alnair-config 0.1.21](https://crates.io/crates/alnair-config)
-- [alnair-config-types 0.1.21](https://crates.io/crates/alnair-config-types)
-- [alnair-crash-handler 0.1.21](https://crates.io/crates/alnair-crash-handler)
-- [alnair-env 0.1.21](https://crates.io/crates/alnair-env)
-- [alnair-fast-worktree 0.1.21](https://crates.io/crates/alnair-fast-worktree)
-- [alnair-file-utils 0.1.21](https://crates.io/crates/alnair-file-utils)
-- [alnair-fsnotify 0.1.21](https://crates.io/crates/alnair-fsnotify)
-- [alnair-gix-status 0.1.21](https://crates.io/crates/alnair-gix-status)
-- [alnair-hooks 0.1.21](https://crates.io/crates/alnair-hooks)
-- [alnair-hooks-plugins-types 0.1.21](https://crates.io/crates/alnair-hooks-plugins-types)
-- [alnair-http 0.1.21](https://crates.io/crates/alnair-http)
-- [alnair-hunk-tracker 0.1.21](https://crates.io/crates/alnair-hunk-tracker)
-- [alnair-log 0.1.21](https://crates.io/crates/alnair-log)
-- [alnair-markdown 0.1.21](https://crates.io/crates/alnair-markdown)
-- [alnair-markdown-core 0.1.21](https://crates.io/crates/alnair-markdown-core)
-- [alnair-mcp 0.1.21](https://crates.io/crates/alnair-mcp)
-- [alnair-memory 0.1.21](https://crates.io/crates/alnair-memory)
-- [alnair-models 0.1.21](https://crates.io/crates/alnair-models)
-- [alnair-pager-minimal 0.1.21](https://crates.io/crates/alnair-pager-minimal)
-- [alnair-pager-pty-harness 0.1.21](https://crates.io/crates/alnair-pager-pty-harness)
-- [alnair-pager-render 0.1.21](https://crates.io/crates/alnair-pager-render)
-- [alnair-paths 0.1.21](https://crates.io/crates/alnair-paths)
-- [alnair-prompt-queue 0.1.21](https://crates.io/crates/alnair-prompt-queue)
-- [alnair-ratatui-inline 0.1.21](https://crates.io/crates/alnair-ratatui-inline)
-- [alnair-ratatui-textarea 0.1.21](https://crates.io/crates/alnair-ratatui-textarea)
-- [alnair-sampler 0.1.21](https://crates.io/crates/alnair-sampler)
-- [alnair-sampling-types 0.1.21](https://crates.io/crates/alnair-sampling-types)
-- [alnair-sandbox 0.1.21](https://crates.io/crates/alnair-sandbox)
-- [alnair-secrets 0.1.21](https://crates.io/crates/alnair-secrets)
+- [alnair-proto-build 0.1.2](https://crates.io/crates/alnair-proto-build)
+- [alnair-acp-lib 0.1.2](https://crates.io/crates/alnair-acp-lib)
+- [alnair-agent 0.1.2](https://crates.io/crates/alnair-agent)
+- [alnair-agent-lifecycle 0.1.2](https://crates.io/crates/alnair-agent-lifecycle)
+- [alnair-auth 0.1.2](https://crates.io/crates/alnair-auth)
+- [alnair-bin 0.1.2](https://crates.io/crates/alnair-bin)
+- [alnair-chat-state 0.1.2](https://crates.io/crates/alnair-chat-state)
+- [alnair-codebase-graph 0.1.2](https://crates.io/crates/alnair-codebase-graph)
+- [alnair-config 0.1.2](https://crates.io/crates/alnair-config)
+- [alnair-config-types 0.1.2](https://crates.io/crates/alnair-config-types)
+- [alnair-crash-handler 0.1.2](https://crates.io/crates/alnair-crash-handler)
+- [alnair-env 0.1.2](https://crates.io/crates/alnair-env)
+- [alnair-fast-worktree 0.1.2](https://crates.io/crates/alnair-fast-worktree)
+- [alnair-file-utils 0.1.2](https://crates.io/crates/alnair-file-utils)
+- [alnair-fsnotify 0.1.2](https://crates.io/crates/alnair-fsnotify)
+- [alnair-gix-status 0.1.2](https://crates.io/crates/alnair-gix-status)
+- [alnair-hooks 0.1.2](https://crates.io/crates/alnair-hooks)
+- [alnair-hooks-plugins-types 0.1.2](https://crates.io/crates/alnair-hooks-plugins-types)
+- [alnair-http 0.1.2](https://crates.io/crates/alnair-http)
+- [alnair-hunk-tracker 0.1.2](https://crates.io/crates/alnair-hunk-tracker)
+- [alnair-log 0.1.2](https://crates.io/crates/alnair-log)
+- [alnair-markdown 0.1.2](https://crates.io/crates/alnair-markdown)
+- [alnair-markdown-core 0.1.2](https://crates.io/crates/alnair-markdown-core)
+- [alnair-mcp 0.1.2](https://crates.io/crates/alnair-mcp)
+- [alnair-memory 0.1.2](https://crates.io/crates/alnair-memory)
+- [alnair-models 0.1.2](https://crates.io/crates/alnair-models)
+- [alnair-pager-minimal 0.1.2](https://crates.io/crates/alnair-pager-minimal)
+- [alnair-pager-pty-harness 0.1.2](https://crates.io/crates/alnair-pager-pty-harness)
+- [alnair-pager-render 0.1.2](https://crates.io/crates/alnair-pager-render)
+- [alnair-paths 0.1.2](https://crates.io/crates/alnair-paths)
+- [alnair-prompt-queue 0.1.2](https://crates.io/crates/alnair-prompt-queue)
+- [alnair-ratatui-inline 0.1.2](https://crates.io/crates/alnair-ratatui-inline)
+- [alnair-ratatui-textarea 0.1.2](https://crates.io/crates/alnair-ratatui-textarea)
+- [alnair-sampler 0.1.2](https://crates.io/crates/alnair-sampler)
+- [alnair-sampling-types 0.1.2](https://crates.io/crates/alnair-sampling-types)
+- [alnair-sandbox 0.1.2](https://crates.io/crates/alnair-sandbox)
+- [alnair-secrets 0.1.2](https://crates.io/crates/alnair-secrets)
 - [alnair-shared 0.0.0](https://crates.io/crates/alnair-shared)
-- [alnair-shell 0.1.21](https://crates.io/crates/alnair-shell)
-- [alnair-shell-base 0.1.21](https://crates.io/crates/alnair-shell-base)
-- [alnair-sqlite-journal 0.1.21](https://crates.io/crates/alnair-sqlite-journal)
-- [alnair-subagent-resolution 0.1.21](https://crates.io/crates/alnair-subagent-resolution)
-- [alnair-system-power 0.1.21](https://crates.io/crates/alnair-system-power)
-- [alnair-test-support 0.1.21](https://crates.io/crates/alnair-test-support)
-- [alnair-token-estimation 0.1.21](https://crates.io/crates/alnair-token-estimation)
-- [alnair-tools 0.1.21](https://crates.io/crates/alnair-tools)
-- [alnair-tools-api 0.1.21](https://crates.io/crates/alnair-tools-api)
-- [alnair-tracing-macros 0.1.21](https://crates.io/crates/alnair-tracing-macros)
-- [alnair-tty-utils 0.1.21](https://crates.io/crates/alnair-tty-utils)
-- [alnair-tui 0.1.21](https://crates.io/crates/alnair-tui)
-- [alnair-update 0.1.21](https://crates.io/crates/alnair-update)
-- [alnair-version 0.1.21](https://crates.io/crates/alnair-version)
-- [alnair-workspace 0.1.21](https://crates.io/crates/alnair-workspace)
-- [alnair-workspace-types 0.1.21](https://crates.io/crates/alnair-workspace-types)
-- [ptyctl 0.1.21](https://crates.io/crates/ptyctl)
-- [ptyctl-cli 0.1.21](https://crates.io/crates/ptyctl-cli)
-- [alnair-compaction 0.1.21](https://crates.io/crates/alnair-compaction)
-- [alnair-interjection-core 0.1.21](https://crates.io/crates/alnair-interjection-core)
-- [alnair-test-utils 0.1.21](https://crates.io/crates/alnair-test-utils)
-- [alnair-tool-protocol 0.1.21](https://crates.io/crates/alnair-tool-protocol)
-- [alnair-tool-runtime 0.1.21](https://crates.io/crates/alnair-tool-runtime)
-- [alnair-tool-types 0.1.21](https://crates.io/crates/alnair-tool-types)
+- [alnair-shell 0.1.2](https://crates.io/crates/alnair-shell)
+- [alnair-shell-base 0.1.2](https://crates.io/crates/alnair-shell-base)
+- [alnair-sqlite-journal 0.1.2](https://crates.io/crates/alnair-sqlite-journal)
+- [alnair-subagent-resolution 0.1.2](https://crates.io/crates/alnair-subagent-resolution)
+- [alnair-system-power 0.1.2](https://crates.io/crates/alnair-system-power)
+- [alnair-terminal-screen 0.1.2](https://crates.io/crates/alnair-terminal-screen)
+- [alnair-test-support 0.1.2](https://crates.io/crates/alnair-test-support)
+- [alnair-token-estimation 0.1.2](https://crates.io/crates/alnair-token-estimation)
+- [alnair-tools 0.1.2](https://crates.io/crates/alnair-tools)
+- [alnair-tools-api 0.1.2](https://crates.io/crates/alnair-tools-api)
+- [alnair-tracing-macros 0.1.2](https://crates.io/crates/alnair-tracing-macros)
+- [alnair-tty-utils 0.1.2](https://crates.io/crates/alnair-tty-utils)
+- [alnair-tui 0.1.2](https://crates.io/crates/alnair-tui)
+- [alnair-update 0.1.2](https://crates.io/crates/alnair-update)
+- [alnair-version 0.1.2](https://crates.io/crates/alnair-version)
+- [alnair-web 0.1.2](https://crates.io/crates/alnair-web)
+- [alnair-workspace 0.1.2](https://crates.io/crates/alnair-workspace)
+- [alnair-workspace-types 0.1.2](https://crates.io/crates/alnair-workspace-types)
+- [ptyctl 0.1.2](https://crates.io/crates/ptyctl)
+- [ptyctl-cli 0.1.2](https://crates.io/crates/ptyctl-cli)
+- [alnair-compaction 0.1.2](https://crates.io/crates/alnair-compaction)
+- [alnair-interjection-core 0.1.2](https://crates.io/crates/alnair-interjection-core)
+- [alnair-test-utils 0.1.2](https://crates.io/crates/alnair-test-utils)
+- [alnair-tool-protocol 0.1.2](https://crates.io/crates/alnair-tool-protocol)
+- [alnair-tool-runtime 0.1.2](https://crates.io/crates/alnair-tool-runtime)
+- [alnair-tool-types 0.1.2](https://crates.io/crates/alnair-tool-types)
 - [agent-client-protocol 0.10.4](https://github.com/agentclientprotocol/rust-sdk)
 - [allocator-api2 0.2.21](https://github.com/zakarumych/allocator-api2)
 - [anes 0.1.6](https://github.com/zrzka/anes-rs)
@@ -16772,7 +16773,7 @@ limitations under the License.
 
 Applies to:
 
-- [alnair-mermaid 0.1.21](https://crates.io/crates/alnair-mermaid)
+- [alnair-mermaid 0.1.2](https://crates.io/crates/alnair-mermaid)
 
 ```
 Roboto-Regular.ttf
@@ -23289,6 +23290,40 @@ SOFTWARE.
 
 Applies to:
 
+- [rust-embed-impl 8.13.0](https://pyrossh.dev/repos/rust-embed)
+- [rust-embed-utils 8.13.0](https://pyrossh.dev/repos/rust-embed)
+- [rust-embed 8.13.0](https://pyrossh.dev/repos/rust-embed)
+
+```
+The MIT License (MIT)
+
+Copyright (c) 2018 pyros2097
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+
+```
+
+### MIT License
+
+Applies to:
+
 - [fuzzy-matcher 0.3.7](https://github.com/lotabout/fuzzy-matcher)
 
 ```
@@ -23834,8 +23869,6 @@ SOFTWARE.
 
 Applies to:
 
-- [nucleo-matcher 0.3.1](https://github.com/helix-editor/nucleo)
-- [nucleo 0.5.0](https://github.com/helix-editor/nucleo)
 - [nucleo 0.5.0](https://github.com/helix-editor/nucleo)
 - [dtoa-short 0.3.5](https://github.com/upsuper/dtoa-short)
 
@@ -24605,6 +24638,7 @@ Exhibit B - "Incompatible With Secondary Licenses" Notice
 
 Applies to:
 
+- [nucleo-matcher 0.3.1](https://github.com/helix-editor/nucleo)
 - [option-ext 0.2.0](https://github.com/soc/option-ext.git)
 - [selectors 0.26.0](https://github.com/servo/stylo)
 
@@ -25333,5 +25367,4 @@ the following restrictions:
 
 3. This notice may not be removed or altered from any source distribution.
 ```
-
 
