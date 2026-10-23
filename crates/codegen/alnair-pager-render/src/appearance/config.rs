@@ -12,6 +12,16 @@ use toml_edit::{DocumentMut, Item, RawString};
 
 // Runtime Config (used by render code)
 
+/// Terminal chrome presentation density.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
+pub enum ChromeStyle {
+    /// Use accent treatments for badges, labels, and prompt details.
+    #[default]
+    Rich,
+    /// Keep the existing low-decoration presentation.
+    Plain,
+}
+
 /// Background style for block content area.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
 pub enum BlockBackground {
@@ -24,6 +34,7 @@ pub enum BlockBackground {
 /// Runtime appearance configuration with resolved types.
 #[derive(Debug, Clone)]
 pub struct AppearanceConfig {
+    pub chrome: ChromeStyle,
     pub animation: AnimationConfig,
     pub prompt: PromptViewConfig,
     pub scrollback: ScrollbackConfig,
@@ -719,6 +730,8 @@ impl Default for ExecuteConfig {
 #[derive(Debug, Clone, Default, Serialize, Deserialize, Documented, DocumentedFields)]
 #[serde(default)]
 pub struct RawAppearanceConfig {
+    /// Rich applies the new accent treatments; plain keeps chrome minimal.
+    pub chrome: RawChromeConfig,
     /// Terminal behavior settings (fullscreen policy).
     pub terminal: RawTerminalConfig,
     /// Animation settings.
@@ -736,6 +749,40 @@ pub struct RawAppearanceConfig {
     /// available, even after the user exits plan mode.
     /// Defaults to false (chip hidden once plan mode ends).
     pub show_plan_chip: bool,
+}
+
+/// Chrome presentation style for TOML configuration.
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum RawChromeStyle {
+    #[default]
+    Rich,
+    Plain,
+}
+
+impl From<RawChromeStyle> for ChromeStyle {
+    fn from(raw: RawChromeStyle) -> Self {
+        match raw {
+            RawChromeStyle::Rich => Self::Rich,
+            RawChromeStyle::Plain => Self::Plain,
+        }
+    }
+}
+
+/// Chrome presentation settings (TOML format).
+#[derive(Debug, Clone, Serialize, Deserialize, Documented, DocumentedFields)]
+#[serde(default)]
+pub struct RawChromeConfig {
+    /// Rich accent treatments or plain minimal chrome.
+    pub style: RawChromeStyle,
+}
+
+impl Default for RawChromeConfig {
+    fn default() -> Self {
+        Self {
+            style: RawChromeStyle::Rich,
+        }
+    }
 }
 
 /// Terminal behavior configuration (TOML format).
@@ -1360,6 +1407,7 @@ impl From<RawBlockBackground> for BlockBackground {
 impl From<RawAppearanceConfig> for AppearanceConfig {
     fn from(raw: RawAppearanceConfig) -> Self {
         Self {
+            chrome: raw.chrome.style.into(),
             animation: raw.animation.into(),
             prompt: PromptViewConfig {
                 collapse_unfocused: raw.prompt.collapse_unfocused,
@@ -1840,6 +1888,10 @@ impl RawAppearanceConfig {
 "
         );
 
+        if let Some(chrome) = doc.get_mut("chrome").and_then(Item::as_table_mut) {
+            annotate_table::<RawChromeConfig>(chrome);
+        }
+
         if let Some(terminal) = doc.get_mut("terminal").and_then(Item::as_table_mut) {
             annotate_table::<RawTerminalConfig>(terminal);
         }
@@ -2241,6 +2293,15 @@ gutter_bg = true
         assert!(
             toml.contains("# Minimum content lines to show"),
             "Missing prompt min_lines comment in:\n{toml}"
+        );
+        // Check chrome section and documented style toggle.
+        assert!(
+            toml.contains("[chrome]"),
+            "Missing [chrome] section in:\n{toml}"
+        );
+        assert!(
+            toml.contains("style = "),
+            "Missing chrome style in:\n{toml}"
         );
         // Check prompt view section
         assert!(

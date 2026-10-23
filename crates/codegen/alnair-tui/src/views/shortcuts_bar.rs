@@ -11,11 +11,12 @@ use std::borrow::Cow;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
-use ratatui::text::Span;
+use ratatui::text::{Line, Span};
 use ratatui::widgets::Widget;
 use unicode_width::UnicodeWidthStr;
 
 use crate::input::key::KeyShortcut;
+use crate::render::SafeBuf;
 use crate::theme::Theme;
 
 /// A single hint for the shortcuts bar.
@@ -90,6 +91,8 @@ pub struct ShortcutsBar<'a> {
     pending_confirmation: Option<PendingHint>,
     /// Right-aligned text (e.g. team name).
     right_text: Option<&'a str>,
+    /// Rich ambient status line (branch, cwd, agent state, context).
+    right_status: Option<Line<'a>>,
     /// Compact mode config: render only the first `max_visible` hints from
     /// `hints`, then always append `help_hint` (e.g. the "all shortcuts"
     /// modal trigger). When None, all hints are rendered.
@@ -120,6 +123,7 @@ impl<'a> ShortcutsBar<'a> {
             hints,
             pending_confirmation: None,
             right_text: None,
+            right_status: None,
             compact: None,
         }
     }
@@ -145,6 +149,12 @@ impl<'a> ShortcutsBar<'a> {
         self.right_text = text;
         self
     }
+
+    /// Set the right-aligned ambient status line (rich chrome only).
+    pub fn with_right_status(mut self, line: Option<Line<'a>>) -> Self {
+        self.right_status = line;
+        self
+    }
 }
 
 impl Widget for ShortcutsBar<'_> {
@@ -168,8 +178,13 @@ impl Widget for ShortcutsBar<'_> {
             }
         }
 
+        let rich = crate::views::chrome::is_rich();
         let key_style = Style::default()
-            .fg(theme.text_secondary)
+            .fg(if rich {
+                theme.accent_remember
+            } else {
+                theme.text_secondary
+            })
             .bg(theme.bg_base)
             .add_modifier(Modifier::BOLD);
 
@@ -184,8 +199,12 @@ impl Widget for ShortcutsBar<'_> {
 
             let mut x = area.x;
 
-            let key_span = Span::styled(&key_text, key_style);
-            let key_width = key_text.width() as u16;
+            let key_span = if rich {
+                Span::styled(format!(" {key_text} "), key_style)
+            } else {
+                Span::styled(&key_text, key_style)
+            };
+            let key_width = key_span.width() as u16;
             buf.set_span(x, area.y, &key_span, key_width);
             x += key_width;
 
@@ -207,6 +226,21 @@ impl Widget for ShortcutsBar<'_> {
             .add_modifier(Modifier::DIM)
             .remove_modifier(Modifier::BOLD);
 
+        // Reserve the ambient status on the right so hints never paint under
+        // it. Narrow terminals drop the status entirely rather than squeezing
+        // the key list to nothing.
+        let right_status = if rich { self.right_status } else { None };
+        let right_w = right_status
+            .as_ref()
+            .map(|line| line.width() as u16)
+            .unwrap_or(0);
+        let reserve_right = right_w > 0 && area.width > right_w + 16;
+        let hint_limit = if reserve_right {
+            area.width.saturating_sub(right_w + 2)
+        } else {
+            area.width
+        };
+
         let mut x = area.x;
 
         let effective = compute_effective_hints(self.hints, self.compact.as_ref());
@@ -215,7 +249,7 @@ impl Widget for ShortcutsBar<'_> {
             if i > 0 {
                 let sep = Span::styled("  │  ", sep_style);
                 let sep_width = 5u16;
-                if x + sep_width > area.x + area.width {
+                if x + sep_width > area.x + hint_limit {
                     break;
                 }
                 buf.set_span(x, area.y, &sep, sep_width);
@@ -223,16 +257,20 @@ impl Widget for ShortcutsBar<'_> {
             }
 
             let key_text = hint.key_display();
-            let key_span = Span::styled(&key_text, key_style);
-            let key_width = key_text.width() as u16;
-            if x + key_width > area.x + area.width {
+            let key_span = if rich {
+                Span::styled(format!(" {key_text} "), key_style)
+            } else {
+                Span::styled(&key_text, key_style)
+            };
+            let key_width = key_span.width() as u16;
+            if x + key_width > area.x + hint_limit {
                 break;
             }
             buf.set_span(x, area.y, &key_span, key_width);
             x += key_width;
 
             let colon = Span::styled(":", action_style);
-            if x + 1 > area.x + area.width {
+            if x + 1 > area.x + hint_limit {
                 break;
             }
             buf.set_span(x, area.y, &colon, 1);
@@ -240,14 +278,23 @@ impl Widget for ShortcutsBar<'_> {
 
             let action_span = Span::styled(hint.label.as_ref(), action_style);
             let action_width = hint.label.width() as u16;
-            if x + action_width > area.x + area.width {
+            if x + action_width > area.x + hint_limit {
                 break;
             }
             buf.set_span(x, area.y, &action_span, action_width);
             x += action_width;
         }
 
-        if let Some(text) = self.right_text {
+        if reserve_right {
+            if let Some(line) = right_status
+                && area.x + area.width >= right_w
+            {
+                let rx = area.x + area.width.saturating_sub(right_w);
+                if rx > x + 1 {
+                    buf.set_line_safe(rx, area.y, &line, right_w);
+                }
+            }
+        } else if let Some(text) = self.right_text {
             let right_style = Style::default().fg(theme.gray).bg(theme.bg_base);
             let display = format!("{text} ");
             let rw = display.width() as u16;

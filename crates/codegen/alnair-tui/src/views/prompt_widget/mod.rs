@@ -2740,6 +2740,14 @@ impl PromptWidget {
         } else {
             theme.prompt_border
         });
+        let rich_chrome = crate::views::chrome::is_rich();
+        let border_color = if rich_chrome && style.focused && style.border_color_override.is_none()
+        {
+            crate::render::color::blend_color(theme.bg_base, theme.accent_remember, 0.55)
+                .unwrap_or(theme.prompt_border_active)
+        } else {
+            border_color
+        };
 
         // Fill entire area with fg + bg so every cell has RGB colors (needed for blending)
         buf.set_style(area, Style::default().fg(theme.text_primary).bg(bg));
@@ -2841,12 +2849,15 @@ impl PromptWidget {
                 } else {
                     (crate::glyphs::prompt_arrow(), style.accent_color(&theme))
                 };
-            buf.set_string(
-                text_area_rect.x,
-                text_area_rect.y,
-                prefix_str,
-                Style::default().fg(accent_color).bg(bg),
-            );
+            let prefix_style = if crate::views::chrome::is_rich() && style.focused {
+                Style::default()
+                    .fg(accent_color)
+                    .bg(bg)
+                    .add_modifier(Modifier::BOLD)
+            } else {
+                Style::default().fg(accent_color).bg(bg)
+            };
+            buf.set_string(text_area_rect.x, text_area_rect.y, prefix_str, prefix_style);
         }
 
         let ta_area = Rect {
@@ -2963,12 +2974,15 @@ impl PromptWidget {
 
         if self.textarea.text().is_empty() && ta_area.width > 0 && !style.focused {
             let placeholder = style.placeholder_override.unwrap_or("Build anything");
-            buf.set_string(
-                ta_area.x,
-                ta_area.y,
-                placeholder,
-                Style::default().fg(theme.gray).bg(bg),
-            );
+            let placeholder_style = if crate::views::chrome::is_rich() {
+                Style::default()
+                    .fg(theme.gray_dim)
+                    .bg(bg)
+                    .add_modifier(Modifier::ITALIC)
+            } else {
+                Style::default().fg(theme.gray).bg(bg)
+            };
+            buf.set_string(ta_area.x, ta_area.y, placeholder, placeholder_style);
         }
 
         // Side borders: │ on left and right of each text row.
@@ -3153,7 +3167,11 @@ impl PromptWidget {
         let sep_opacity = if focused { 1.0 } else { 0.6 };
         let flag_opacity = if focused { 0.75 } else { 0.5 };
 
-        let model_style = Self::chrome_caption_style(bg, theme, focused);
+        let model_style = if crate::views::chrome::is_rich() {
+            Self::chrome_caption_style(bg, theme, focused).add_modifier(Modifier::BOLD)
+        } else {
+            Self::chrome_caption_style(bg, theme, focused)
+        };
         let sep_fg = if focused {
             theme.gray_dim
         } else {
@@ -3168,13 +3186,37 @@ impl PromptWidget {
         // blanked out instead of showing the underlying `─` glyphs from the
         // bottom-border fill — giving 1 cell of visual padding on each side.
         let pad_style = Style::default().bg(bg);
+        let rich = crate::views::chrome::is_rich();
+        if rich {
+            // Rich chrome keeps the bottom rule mostly intact and groups the
+            // model + mode on the right, like a compact status strip.
+            let mut right_spans = vec![
+                Span::styled(" ", pad_style),
+                Span::styled(info.model_name, model_style),
+            ];
+            for flag in info.flags {
+                right_spans.push(Span::styled("  ", pad_style));
+                right_spans.push(Span::styled("· ", sep_style));
+                let mut style = Style::default().fg(flag.color.unwrap_or(theme.gray)).bg(bg);
+                style = style.add_modifier(Modifier::BOLD);
+                right_spans.push(Span::styled(flag.text, style));
+            }
+            if info.multiline {
+                right_spans.push(Span::styled("  multiline", flag_style));
+            }
+            right_spans.push(Span::styled(" ", pad_style));
+            let right_line = Line::from(right_spans);
+            let right_w = (right_line.width() as u16).min(area.width);
+            let rx = area.x + area.width.saturating_sub(right_w);
+            buf.set_line_safe(rx, area.y, &right_line, right_w);
+            return;
+        }
         let mut left_spans = vec![Span::styled(" ", pad_style)];
         left_spans.push(Span::styled(info.model_name, model_style));
         for flag in info.flags {
             left_spans.push(Span::styled(" · ", sep_style));
             let mut style = if let Some(color) = flag.color {
                 if flag.bold {
-                    // Bold flags use full color for visibility.
                     Style::default().fg(color).bg(bg)
                 } else {
                     let dimmed = crate::render::color::blend_color(bg, color, flag_opacity)
@@ -3198,10 +3240,10 @@ impl PromptWidget {
         // Trailing pad mirrors the leading pad above.
         left_spans.push(Span::styled(" ", pad_style));
 
-        // Build right-side spans: "multiline" indicator.
+        // Build right-side spans: mode and multiline indicators.
         let mut right_spans: Vec<Span<'static>> = Vec::new();
         if info.multiline {
-            right_spans.push(Span::styled("multiline", flag_style));
+            right_spans.push(Span::styled("  multiline", flag_style));
         }
 
         if !right_spans.is_empty() {
@@ -3260,7 +3302,13 @@ pub fn file_ref_display(path: &str) -> Line<'static> {
     } else {
         (path, None)
     };
-    crate::views::file_search::styled_file_ref(file_part, line_part, &theme, true)
+    let line_range = line_part.filter(|s| !s.is_empty());
+    let line = crate::views::file_search::styled_file_ref(file_part, line_range, &theme, true);
+    if crate::views::chrome::is_rich() {
+        line.patch_style(Style::default().bg(theme.bg_highlight))
+    } else {
+        line
+    }
 }
 
 /// Extract the display number from an `[Image #N]` or

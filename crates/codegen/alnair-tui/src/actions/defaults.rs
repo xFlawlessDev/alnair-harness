@@ -917,11 +917,20 @@ pub fn default_actions(mouse_reporting_toggle_enabled: bool) -> Vec<ActionDef> {
             id: ActionId::DashboardDelete,
             label: "delete",
             description: "Delete session history",
-            // Ctrl+Shift+D. Ctrl+D is the Quit alias, and Ctrl+X is stop;
-            // deleting is the destructive sibling of closing, so it needs a
+            // Ctrl+Shift+Backspace. Ctrl+D is the Quit alias and Ctrl+X is stop,
+            // so deleting is the destructive sibling of closing and needs a
             // chord the user cannot hit while reaching for either.
-            default_key: key!('D', CONTROL),
-            alt_keys: vec![],
+            //
+            // Ctrl+Shift+D was the original binding and is unusable on the
+            // most common Windows host: Windows Terminal binds it to
+            // `duplicateTab`, so the chord never reaches the pager and the
+            // user gets a new terminal instead of a delete. Ctrl+Shift+Backspace
+            // uses a key sequence terminals report distinctly and has no default
+            // Windows Terminal binding.
+            default_key: key!(Backspace, CONTROL | SHIFT),
+            // Keep the original chord as an alt where the terminal delivers it;
+            // Windows Terminal consumes it before the pager can see it.
+            alt_keys: vec![key!('D', CONTROL)],
             category: Category::Dashboard,
             context: When::DashboardFocused,
             hint_priority: None,

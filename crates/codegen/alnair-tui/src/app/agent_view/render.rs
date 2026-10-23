@@ -32,6 +32,73 @@ use ratatui::widgets::Widget;
 use std::collections::HashSet;
 use std::time::Instant;
 impl AgentView {
+    /// Right-aligned footer status: branch, cwd, agent state, context usage.
+    ///
+    /// Built only in Rich chrome. Each item is already computed for the status
+    /// bar or turn status, so this adds no new state and no new I/O; the branch
+    /// read is the same lazy git cache the status bar uses.
+    fn footer_status_line(
+        &self,
+        theme: &Theme,
+        in_dashboard_overlay: bool,
+    ) -> Option<Line<'static>> {
+        if !crate::views::chrome::is_rich() || in_dashboard_overlay {
+            return None;
+        }
+        let dim = Style::default().fg(theme.gray_dim).bg(theme.bg_base);
+        let sep = Style::default().fg(theme.gray_dim).bg(theme.bg_base);
+        let mut spans = Vec::new();
+        let lazy_git = crate::git_info::cwd_git_info_lazy(&self.session.cwd);
+        let branch = self
+            .current_branch
+            .clone()
+            .or_else(|| lazy_git.as_ref().and_then(|i| i.branch.clone()));
+        if let Some(branch) = branch {
+            if !spans.is_empty() {
+                spans.push(Span::styled("  ", sep));
+            }
+            spans.push(Span::styled(
+                crate::git_info::branch_icon().to_string(),
+                Style::default().fg(theme.accent_success).bg(theme.bg_base),
+            ));
+            spans.push(Span::styled(format!(" {branch}"), dim));
+        }
+        if let Ok(home) = std::env::var("HOME") {
+            let display = self.session.cwd.display().to_string();
+            let short = display
+                .strip_prefix(&home)
+                .map_or_else(|| display.clone(), |rest| format!("~{rest}"));
+            spans.push(Span::styled("  ", sep));
+            spans.push(Span::styled(short, dim));
+        }
+        let agent_state = if self.session.state.is_turn_running() {
+            "working"
+        } else if self.session.state.is_cancelling() {
+            "cancelling"
+        } else {
+            "idle"
+        };
+        spans.push(Span::styled("  ", sep));
+        spans.push(Span::styled(
+            crate::glyphs::filled_dot().to_string(),
+            Style::default()
+                .fg(if self.session.state.is_idle() {
+                    theme.gray
+                } else {
+                    theme.accent_running
+                })
+                .bg(theme.bg_base),
+        ));
+        spans.push(Span::styled(format!(" agent: {agent_state}"), dim));
+        if let Some(ctx) = self.context_state.as_ref()
+            && ctx.total > 0
+        {
+            spans.push(Span::styled("  ", sep));
+            spans.push(Span::styled(format!("ctx: {}%", ctx.usage_pct), dim));
+        }
+        (!spans.is_empty()).then(|| Line::from(spans))
+    }
+
     pub(crate) fn update_scrollback_selection_state(
         &mut self,
         model: ResolvedSelectionModel,
@@ -3140,9 +3207,11 @@ impl AgentView {
                 }
                 hint
             });
+            let right_status = self.footer_status_line(&theme, in_dashboard_overlay);
             ShortcutsBar::new(&hints)
                 .compact(5, help_hint)
                 .with_pending(pending_hint)
+                .with_right_status(right_status)
                 .render(layout.shortcuts, buf);
         }
         let is_plan_viewer = self.is_plan_viewer();

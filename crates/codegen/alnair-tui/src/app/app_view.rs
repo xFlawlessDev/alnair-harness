@@ -1908,7 +1908,9 @@ impl AppView {
                     TabHitTarget::NewSession => {
                         InputOutcome::Action(Action::NewSessionPickLocation)
                     }
-                    TabHitTarget::CloseTab => InputOutcome::Action(Action::CloseTab),
+                    TabHitTarget::CloseTab(session_id) => {
+                        InputOutcome::Action(Action::CloseTabId(session_id))
+                    }
                 };
             }
             let is_mouse_action = matches!(

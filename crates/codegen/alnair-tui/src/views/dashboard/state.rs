@@ -452,7 +452,7 @@ pub struct DashboardState {
     /// close-confirm pattern.
     pub stop_confirm: Option<(DashboardRowId, Instant)>,
     /// Pending delete confirmation. `Some((row, set_at))` after the first
-    /// `Ctrl+Shift+D` press on a top-level row; the second press within
+    /// `Ctrl+Shift+Backspace` press on a top-level row; the second press within
     /// [`STOP_CONFIRM_WINDOW`] deletes the session's history from disk.
     ///
     /// Deliberately a SEPARATE field from [`Self::stop_confirm`]: closing an

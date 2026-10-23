@@ -6,6 +6,7 @@ use ratatui::style::{Modifier, Style};
 use ratatui::text::Span;
 
 use crate::theme::Theme;
+use crate::views::chrome;
 
 use super::logo::logo_visual_width;
 
@@ -143,6 +144,10 @@ pub fn render_menu(
             }
         } else if is_selected {
             key_selected_style
+        } else if chrome::is_rich() {
+            Style::default()
+                .fg(theme.accent_remember)
+                .add_modifier(Modifier::BOLD)
         } else {
             key_style
         };

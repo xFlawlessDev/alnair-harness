@@ -131,6 +131,8 @@ pub enum Action {
     SwitchToTabId(String),
     /// Close the active tab. The session keeps running.
     CloseTab,
+    /// Close the tab for this session id. The session keeps running.
+    CloseTabId(String),
     /// Reopen the most recently closed tab.
     ReopenTab,
     /// Move the tab cursor forward (`true`) or backward.
@@ -783,7 +785,7 @@ pub enum Action {
     /// Stop / kill the selected row (top-level: cancel turn → close;
     /// subagent: kill). Double-press protected for top-level rows.
     DashboardStop,
-    /// Delete the selected session's stored history (`Ctrl+Shift+D`).
+    /// Delete the selected session's stored history (`Ctrl+Shift+Backspace`).
     ///
     /// Distinct from [`Self::DashboardStop`], which only closes the agent and
     /// leaves the transcript on disk. This one destroys it, so it carries its

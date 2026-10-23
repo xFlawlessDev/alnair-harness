@@ -19,6 +19,7 @@ use crate::app::app_view::{
 };
 use crate::startup::StartupWarning;
 use crate::theme::Theme;
+use crate::views::chrome;
 use crate::views::prompt_widget::{PromptFlag, PromptInfo, PromptWidget};
 mod hero_box;
 pub(crate) mod logo;
@@ -315,7 +316,11 @@ pub(super) fn render_version_badge(
             spans.push(Span::styled(
                 "Alnair  ",
                 Style::default()
-                    .fg(theme.text_primary)
+                    .fg(if chrome::is_rich() {
+                        theme.accent_remember
+                    } else {
+                        theme.text_primary
+                    })
                     .add_modifier(Modifier::BOLD),
             ));
             spans.push(Span::styled(

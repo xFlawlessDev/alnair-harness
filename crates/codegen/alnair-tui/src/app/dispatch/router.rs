@@ -198,6 +198,7 @@ pub(crate) fn dispatch(action: Action, app: &mut AppView) -> Vec<Effect> {
             super::tabs::dispatch_switch_to_tab_id(app, &session_id)
         }
         Action::CloseTab => super::tabs::dispatch_close_tab(app),
+        Action::CloseTabId(session_id) => super::tabs::dispatch_close_tab_id(app, &session_id),
         Action::ReopenTab => super::tabs::dispatch_reopen_tab(app),
         Action::CycleTab(forward) => super::tabs::dispatch_cycle_tab(app, forward),
         Action::RecordSessionView(session_id) => {

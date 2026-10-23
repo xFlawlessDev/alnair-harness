@@ -45,7 +45,14 @@ impl KeyShortcut {
         Self::new(code, KeyModifiers::CONTROL)
     }
 
-    /// Normalize Shift+lowercase ↔ uppercase.
+    /// Normalize Shift+lowercase ↔ uppercase, and resolve a lone Shift on a
+    /// punctuation key to the character it produces on a US keyboard.
+    ///
+    /// Terminals disagree on how to report shifted punctuation. Windows'
+    /// console reports the produced character with SHIFT still set, while
+    /// kitty reports the base key plus SHIFT (for example, `?` as `/+SHIFT`).
+    /// Canonicalizing both forms makes `key!('?')` match on either terminal.
+    /// Modified chords such as Ctrl+Shift+/ keep their SHIFT bit.
     fn normalize_case(mut self) -> Self {
         let c = match self.code {
             KeyCode::Char(c) => c,
@@ -53,8 +60,11 @@ impl KeyShortcut {
         };
         if c.is_ascii_uppercase() {
             self.modifiers.insert(KeyModifiers::SHIFT);
-        } else if self.modifiers.contains(KeyModifiers::SHIFT) {
+        } else if c.is_ascii_alphabetic() && self.modifiers.contains(KeyModifiers::SHIFT) {
             self.code = KeyCode::Char(c.to_ascii_uppercase());
+        } else if self.modifiers == KeyModifiers::SHIFT {
+            self.code = KeyCode::Char(shifted_ascii(c).unwrap_or(c));
+            self.modifiers.remove(KeyModifiers::SHIFT);
         }
         self
     }
@@ -157,6 +167,34 @@ impl KeyShortcut {
         let mods = self.modifiers;
         mods.is_empty() || mods == KeyModifiers::SHIFT
     }
+}
+
+/// US keyboard punctuation produced by holding Shift on the base key.
+fn shifted_ascii(c: char) -> Option<char> {
+    Some(match c {
+        '`' => '~',
+        '1' => '!',
+        '2' => '@',
+        '3' => '#',
+        '4' => '$',
+        '5' => '%',
+        '6' => '^',
+        '7' => '&',
+        '8' => '*',
+        '9' => '(',
+        '0' => ')',
+        '-' => '_',
+        '=' => '+',
+        '[' => '{',
+        ']' => '}',
+        '\\' => '|',
+        ';' => ':',
+        '\'' => '"',
+        ',' => '<',
+        '.' => '>',
+        '/' => '?',
+        _ => return None,
+    })
 }
 
 pub fn is_paste_key(key: &KeyEvent) -> bool {
@@ -451,6 +489,46 @@ mod tests {
             KeyModifiers::SUPER | KeyModifiers::SHIFT,
         );
         assert!(is_inline_paste_key(&ev));
+    }
+
+    /// A shifted punctuation key may arrive as its produced character plus
+    /// SHIFT (Windows console) or its base key plus SHIFT (kitty protocol).
+    #[test]
+    fn shifted_punctuation_spellings_match() {
+        let question = key!('?');
+        assert!(question.matches(&KeyEvent::new(KeyCode::Char('?'), KeyModifiers::NONE)));
+        assert!(question.matches(&KeyEvent::new(KeyCode::Char('?'), KeyModifiers::SHIFT)));
+        assert!(question.matches(&KeyEvent::new(KeyCode::Char('/'), KeyModifiers::SHIFT)));
+        assert_eq!(
+            KeyShortcut::new(KeyCode::Char('/'), KeyModifiers::SHIFT),
+            question,
+        );
+    }
+
+    /// Modified shortcuts retain SHIFT, so Ctrl+Shift+/ remains distinct
+    /// from Ctrl+? and from Ctrl+/.
+    #[test]
+    fn modified_shift_punctuation_stays_distinct() {
+        let ctrl_shift_slash = key!('/', CONTROL | SHIFT);
+        assert!(ctrl_shift_slash.matches(&KeyEvent::new(
+            KeyCode::Char('/'),
+            KeyModifiers::CONTROL | KeyModifiers::SHIFT
+        )));
+        assert!(
+            !ctrl_shift_slash.matches(&KeyEvent::new(KeyCode::Char('/'), KeyModifiers::CONTROL))
+        );
+        assert!(
+            !ctrl_shift_slash.matches(&KeyEvent::new(KeyCode::Char('?'), KeyModifiers::CONTROL))
+        );
+    }
+    /// Letters keep the existing fold: `Shift+g` and `G` are one shortcut,
+    /// because both mean the same key on every layout we support.
+    #[test]
+    fn shift_on_letters_still_folds_to_uppercase() {
+        let upper = key!('G');
+        assert_eq!(upper.code, KeyCode::Char('G'));
+        assert_eq!(upper.modifiers, KeyModifiers::SHIFT);
+        assert!(upper.matches(&KeyEvent::new(KeyCode::Char('g'), KeyModifiers::SHIFT)));
     }
 
     #[test]

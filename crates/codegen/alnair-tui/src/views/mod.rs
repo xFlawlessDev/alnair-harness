@@ -4,6 +4,7 @@ pub mod agent_status;
 pub mod agents_modal;
 pub mod block_viewer;
 pub mod btw_overlay;
+pub mod chrome;
 pub mod completion_dropdown;
 pub mod context_bar;
 pub mod dashboard;

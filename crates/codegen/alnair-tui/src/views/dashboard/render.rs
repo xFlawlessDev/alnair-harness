@@ -2874,7 +2874,7 @@ fn render_footer(
         let delete_key = registry
             .find(crate::actions::ActionId::DashboardDelete)
             .map(|d| d.default_key)
-            .unwrap_or_else(|| key!('D', CONTROL));
+            .unwrap_or_else(|| key!(Backspace, CONTROL | SHIFT));
         let pending = PendingHint {
             shortcut: delete_key,
             label: "DELETE this session's history",
@@ -3001,7 +3001,7 @@ fn render_footer(
         if stoppable {
             let delete = key_for(
                 crate::actions::ActionId::DashboardDelete,
-                key!('D', CONTROL),
+                key!(Backspace, CONTROL | SHIFT),
             );
             hints.push(HintItem::new(delete, "delete"));
         }
@@ -7301,6 +7301,33 @@ mod tests {
         assert!(
             content.contains(":list"),
             "row-selected + empty prompt footer must hint `Tab:list`, got: {content:?}",
+        );
+    }
+
+    #[test]
+    fn render_footer_shows_ctrl_shift_backspace_delete_binding() {
+        let theme = Theme::current();
+        let registry = crate::actions::ActionRegistry::defaults();
+        let mut state = DashboardState::new();
+        state.list_focused = true;
+        state.focus_row(DashboardRowId::TopLevel(crate::app::agent::AgentId(0)));
+        let mut buf = Buffer::empty(Rect::new(0, 0, 200, 1));
+
+        render_footer(
+            &mut buf,
+            Rect::new(0, 0, 200, 1),
+            &theme,
+            &state,
+            &registry,
+            Some(RowState::Idle),
+            false,
+            None,
+        );
+
+        let content = buf_to_text(&buf);
+        assert!(
+            content.contains("Ctrl+Shift+Bsp :delete"),
+            "delete hint must show the safe, non-editing binding, got: {content:?}",
         );
     }
 

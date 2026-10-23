@@ -592,6 +592,8 @@ pub fn render_turn_status(
         let cancel_x = x;
         let cancel_style = if cancel_hovered {
             right_style(theme.accent_error)
+        } else if crate::views::chrome::is_rich() {
+            right_style(theme.accent_error).add_modifier(Modifier::BOLD)
         } else {
             right_style(theme.gray)
         };

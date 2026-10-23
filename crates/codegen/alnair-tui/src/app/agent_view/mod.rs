@@ -1893,7 +1893,7 @@ fn resolve_action(action_id: Option<ActionId>) -> Option<InputOutcome> {
         | ActionId::DashboardOpenLocationPicker
         | ActionId::DashboardToggleWorktree
         // Dashboard CRUD is dashboard-only: the agent view must not swallow the
-        // chord, or Ctrl+Shift+D / Ctrl+Shift+N would do nothing while a
+        // chord, or Ctrl+Shift+Backspace / Ctrl+Shift+N would do nothing while a
         // session is in front (they resolve on the dashboard via `When`).
         | ActionId::DashboardDelete
         | ActionId::DashboardNewAgentInDirectory

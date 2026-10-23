@@ -60,6 +60,9 @@ impl TabStatus {
 pub struct TabHit {
     pub session_id: String,
     pub rect: Rect,
+    /// The `×` affordance inside this chip (rich chrome only). Checked before
+    /// `rect` so a click on the close glyph never activates the tab.
+    pub close_rect: Option<Rect>,
 }
 
 /// What a click on the strip landed on.
@@ -68,8 +71,8 @@ pub enum TabHitTarget {
     Tab(String),
     /// The `[ + ]` affordance: ask where the new session should live.
     NewSession,
-    /// The `[ × ]` affordance: close the active tab (never the session).
-    CloseTab,
+    /// A chip's `×` affordance: close that tab (never the session).
+    CloseTab(String),
 }
 
 /// One chip's data, gathered by the caller.
@@ -100,29 +103,27 @@ pub struct TabStripParams<'a> {
 pub struct TabStripRendered {
     pub tabs: Vec<TabHit>,
     pub new_session: Option<Rect>,
-    pub close_tab: Option<Rect>,
     /// True when chips were dropped and the overflow markers are shown.
     pub overflow: bool,
 }
 
 impl TabStripRendered {
     pub fn hit(&self, column: u16, row: u16) -> Option<TabHitTarget> {
+        let point = (column, row).into();
+        // A chip's close glyph is checked before the chip body: the `×` is
+        // inside the rect, so the reverse order would activate instead.
         for hit in &self.tabs {
-            if hit.rect.contains((column, row).into()) {
+            if hit.close_rect.is_some_and(|r| r.contains(point)) {
+                return Some(TabHitTarget::CloseTab(hit.session_id.clone()));
+            }
+        }
+        for hit in &self.tabs {
+            if hit.rect.contains(point) {
                 return Some(TabHitTarget::Tab(hit.session_id.clone()));
             }
         }
-        if self
-            .new_session
-            .is_some_and(|r| r.contains((column, row).into()))
-        {
+        if self.new_session.is_some_and(|r| r.contains(point)) {
             return Some(TabHitTarget::NewSession);
-        }
-        if self
-            .close_tab
-            .is_some_and(|r| r.contains((column, row).into()))
-        {
-            return Some(TabHitTarget::CloseTab);
         }
         None
     }
@@ -155,29 +156,33 @@ pub fn render_tab_strip(
     let chips = params.chips;
     let active = params.active;
     let multi_repo = spans_multiple_repos(chips);
+    let rich = crate::views::chrome::is_rich();
 
-    // Right-hand affordances reserve their width up front so chips never
-    // collide with them. `[ × ]` is only offered while a tab is active —
-    // with nothing to close it would be a dead button.
-    let plus = "[ + ]";
-    let close = "[ \u{00d7} ]";
+    // Rich chrome follows the tab-strip idiom: every chip owns its own `×`
+    // and `+` sits right after the last chip. Plain keeps the legacy layout
+    // (one close button at the right edge, for the active tab only).
+    let (plus, close) = if rich {
+        (" + ", "\u{00d7}")
+    } else {
+        ("[ + ]", "[ \u{00d7} ]")
+    };
     let plus_w = plus.chars().count() as u16;
     let close_w = close.chars().count() as u16;
     let gutter = 1u16;
-    let show_close = active.is_some();
+    let show_close = !rich && active.is_some();
     let buttons_w = plus_w + if show_close { close_w + gutter } else { 0 };
     let reserve = buttons_w + gutter * 3;
     if area.width <= reserve + MIN_CHIP {
         // Not enough room for even one chip plus the buttons: show only the
         // buttons, so `+` (and `×`) are never unreachable.
         let x = area.x + area.width.saturating_sub(buttons_w + gutter);
-        let (add, close_rect) =
-            place_buttons(buf, area, theme, x, plus, show_close.then_some(close));
+        let (add, _) = place_buttons(buf, area, theme, x, plus, show_close.then_some(close));
         out.new_session = Some(add);
-        out.close_tab = close_rect;
         return out;
     }
     let chip_budget = area.width - reserve;
+    let left_inset = if rich { 1 } else { 0 };
+    let close_suffix = if rich { close_w + 1 } else { 0 };
 
     // Build labels, then shrink to fit.
     let labels: Vec<String> = chips
@@ -186,47 +191,162 @@ pub fn render_tab_strip(
         .map(|(i, chip)| chip_label(chip, i, active == Some(i), multi_repo))
         .collect();
 
-    let widths = fit_widths(&labels, chip_budget, active);
-    let mut x = area.x;
+    let widths = fit_widths(
+        &labels,
+        chip_budget.saturating_sub(left_inset),
+        active,
+        close_suffix,
+    );
+    let mut x = area.x + left_inset;
     let mut shown = 0usize;
-    for (i, label) in labels.iter().enumerate() {
+    for (i, _) in labels.iter().enumerate() {
         let Some(w) = widths.get(i).copied().flatten() else {
             continue;
         };
         if w == 0 || x + w > area.x + chip_budget {
             break;
         }
+        let label = labels.get(i).map(String::as_str).unwrap_or("");
+        let text = truncate_str(label, w.saturating_sub(4 + close_suffix) as usize);
+        let text_w = text.chars().count() as u16;
+        let chip_w = text_w + 4 + close_suffix;
+        if chip_w > w {
+            continue;
+        }
         let is_active = active == Some(i);
-        let style = if is_active {
+        let status_style = if rich {
+            match chips[i].status {
+                TabStatus::Idle => Style::default().fg(theme.gray),
+                TabStatus::Running => Style::default().fg(theme.accent_running),
+                TabStatus::Permission | TabStatus::Question => {
+                    Style::default().fg(theme.accent_user)
+                }
+                TabStatus::Unread => Style::default().fg(theme.accent_remember),
+            }
+        } else {
+            Style::default().fg(theme.text_secondary)
+        };
+        let chip_style = if is_active {
             Style::default()
-                .fg(theme.text_primary)
+                .fg(if rich {
+                    theme.accent_remember
+                } else {
+                    theme.text_primary
+                })
                 .bg(theme.bg_hover)
                 .add_modifier(Modifier::BOLD)
+                .add_modifier(if rich {
+                    Modifier::UNDERLINED
+                } else {
+                    Modifier::empty()
+                })
+        } else if rich {
+            Style::default().fg(theme.text_secondary).bg(theme.bg_dark)
         } else {
             Style::default().fg(theme.text_secondary).bg(theme.bg_base)
         };
-        let text = truncate_str(label, w.saturating_sub(4) as usize);
-        let chip = format!("[ {text} ]");
-        let chip_w = chip.chars().count() as u16;
-        if chip_w > w {
-            // Truncation rounding: fall back to the label alone rather than
-            // spilling into the next chip.
-            continue;
+        let gap = if shown > 0 { 1 } else { 0 };
+        x = x.saturating_add(gap);
+        let chip_x = x;
+        let glyph = chips[i].status.glyph();
+        let mut close_rect = None;
+        if rich {
+            // Rich chips read `[ 2 · title × ]`: the close glyph lives INSIDE
+            // the bracket, and its span carries its own hit rect. A narrow chip
+            // may truncate the status glyph away entirely; then the whole text
+            // is painted as the prefix and the close glyph still follows.
+            let glyph_at = text.find(glyph);
+            let (prefix, after_glyph) = match glyph_at {
+                Some(at) => (&text[..at], &text[at + glyph.len()..]),
+                None => (text.as_str(), ""),
+            };
+            let mut cursor = chip_x;
+            let prefix_span = format!("[ {prefix}");
+            let prefix_w = prefix_span.chars().count() as u16;
+            buf.set_span_safe(
+                cursor,
+                area.y,
+                &Span::styled(prefix_span, chip_style),
+                prefix_w,
+            );
+            cursor = cursor.saturating_add(prefix_w);
+            if glyph_at.is_some() {
+                buf.set_span_safe(
+                    cursor,
+                    area.y,
+                    &Span::styled(
+                        glyph,
+                        status_style.bg(chip_style.bg.unwrap_or(theme.bg_base)),
+                    ),
+                    1,
+                );
+                cursor = cursor.saturating_add(1);
+            }
+            let after_w = after_glyph.chars().count() as u16;
+            if after_w > 0 {
+                buf.set_span_safe(
+                    cursor,
+                    area.y,
+                    &Span::styled(after_glyph, chip_style),
+                    after_w,
+                );
+                cursor = cursor.saturating_add(after_w);
+            }
+            buf.set_span_safe(cursor, area.y, &Span::styled(" ", chip_style), 1);
+            cursor = cursor.saturating_add(1);
+            buf.set_span_safe(
+                cursor,
+                area.y,
+                &Span::styled(close, chip_style.fg(theme.gray_bright)),
+                close_w,
+            );
+            close_rect = Some(Rect::new(cursor, area.y, close_w, 1));
+            cursor = cursor.saturating_add(close_w);
+            buf.set_span_safe(cursor, area.y, &Span::styled(" ]", chip_style), 2);
+        } else {
+            let body = format!("[ {text} ]");
+            buf.set_span_safe(
+                chip_x,
+                area.y,
+                &Span::styled(body.clone(), chip_style),
+                body.chars().count() as u16,
+            );
         }
-        buf.set_span_safe(x, area.y, &Span::styled(chip, style), chip_w);
         out.tabs.push(TabHit {
             session_id: chips[i].session_id.clone(),
-            rect: Rect::new(x, area.y, chip_w, 1),
+            rect: Rect::new(chip_x, area.y, chip_w, 1),
+            close_rect,
         });
-        x = x.saturating_add(chip_w).saturating_add(gutter);
+        x = chip_x.saturating_add(chip_w);
         shown += 1;
     }
     out.overflow = shown < chips.len();
 
+    if rich {
+        // `+` follows the last chip instead of floating at the right edge.
+        let plus_x = x.saturating_add(1);
+        let plus_rect = Rect::new(plus_x, area.y, plus_w, 1);
+        if plus_x + plus_w <= area.x + area.width {
+            buf.set_span_safe(
+                plus_x,
+                area.y,
+                &Span::styled(
+                    plus,
+                    Style::default()
+                        .fg(theme.link_fg)
+                        .bg(theme.bg_base)
+                        .add_modifier(Modifier::BOLD),
+                ),
+                plus_w,
+            );
+            out.new_session = Some(plus_rect);
+        }
+        return out;
+    }
+
     let x = area.x + area.width.saturating_sub(buttons_w + gutter);
-    let (add, close_rect) = place_buttons(buf, area, theme, x, plus, show_close.then_some(close));
+    let (add, _close_rect) = place_buttons(buf, area, theme, x, plus, show_close.then_some(close));
     out.new_session = Some(add);
-    out.close_tab = close_rect;
     out
 }
 
@@ -242,7 +362,14 @@ fn place_buttons(
     plus: &str,
     close: Option<&str>,
 ) -> (Rect, Option<Rect>) {
-    let style = Style::default().fg(theme.link_fg).bg(theme.bg_base);
+    let style = Style::default()
+        .fg(theme.link_fg)
+        .bg(theme.bg_base)
+        .add_modifier(if crate::views::chrome::is_rich() {
+            Modifier::BOLD
+        } else {
+            Modifier::empty()
+        });
     let plus_w = plus.chars().count() as u16;
     let mut cursor = x;
     let close_rect = close.map(|text| {
@@ -276,11 +403,21 @@ fn chip_label(chip: &TabChipInput, index: usize, is_active: bool, multi_repo: bo
 }
 
 /// Width each chip wants, then shrink inactive chips before touching the
-/// active one. `None` means "did not fit at all".
-fn fit_widths(labels: &[String], budget: u16, active: Option<usize>) -> Vec<Option<u16>> {
+/// active one. `None` means "did not fit at all". `close_suffix` is the
+/// per-chip `×` width (rich chrome) so the budget accounts for it.
+fn fit_widths(
+    labels: &[String],
+    budget: u16,
+    active: Option<usize>,
+    close_suffix: u16,
+) -> Vec<Option<u16>> {
     let wanted: Vec<u16> = labels
         .iter()
-        .map(|l| (l.chars().count() as u16).saturating_add(4))
+        .map(|l| {
+            (l.chars().count() as u16)
+                .saturating_add(4)
+                .saturating_add(close_suffix)
+        })
         .collect();
     let total: u16 = wanted.iter().copied().sum();
     if total <= budget {
@@ -395,52 +532,58 @@ mod tests {
             Some(TabHitTarget::Tab("a".into()))
         );
         assert!(rendered.new_session.is_some());
-        assert!(rendered.close_tab.is_some());
     }
 
+    /// Rich chrome puts `×` inside every chip and `+` right after the last
+    /// chip, so the strip reads as a row of tabs rather than a list with
+    /// controls floating at the far edge.
     #[test]
-    fn plus_and_close_are_reachable_at_the_right_edge() {
-        let c = chips(&["a"]);
+    fn rich_chips_own_their_close_button() {
+        crate::appearance::cache::set_chrome_style(crate::appearance::ChromeStyle::Rich);
+        let c = chips(&["a", "b", "c"]);
+        let area = Rect::new(0, 0, 80, 1);
+        let (_, rendered) = draw(area, &c, Some(0));
+        assert_eq!(rendered.tabs.len(), 3);
+
+        for hit in &rendered.tabs {
+            let close = hit.close_rect.expect("every rich chip has a close glyph");
+            assert!(close.x >= hit.rect.x && close.right() <= hit.rect.right());
+            assert_eq!(
+                rendered.hit(close.x, 0),
+                Some(TabHitTarget::CloseTab(hit.session_id.clone())),
+                "close glyph wins over the chip body"
+            );
+        }
+
+        let plus = rendered.new_session.expect("+ after the last chip");
+        let last = &rendered.tabs[2];
+        assert!(
+            plus.x > last.rect.x && plus.x <= last.rect.right() + 2,
+            "plus follows the last chip: plus={plus:?} last={:?}",
+            last.rect
+        );
+    }
+
+    /// Plain mode keeps the legacy right-aligned controls.
+    #[test]
+    fn plain_mode_keeps_the_edge_buttons() {
+        crate::appearance::cache::set_chrome_style(crate::appearance::ChromeStyle::Plain);
+        let c = chips(&["a", "b"]);
         let area = Rect::new(0, 0, 60, 1);
         let (_, rendered) = draw(area, &c, Some(0));
         let plus = rendered.new_session.expect("+ chip");
         assert!(plus.x + plus.width <= area.right());
-        let close = rendered.close_tab.expect("x chip");
-        assert!(close.x + close.width <= area.right());
-        assert!(
-            close.x < plus.x,
-            "close sits left of add so the primary action keeps the corner"
-        );
-        assert_eq!(
-            rendered.hit(plus.x, 0),
-            Some(TabHitTarget::NewSession),
-            "the + chip must win the hit test at its own columns"
-        );
-        assert_eq!(
-            rendered.hit(close.x, 0),
-            Some(TabHitTarget::CloseTab),
-            "the x chip must win the hit test at its own columns"
-        );
+        assert!(rendered.tabs.iter().all(|hit| hit.close_rect.is_none()));
+        crate::appearance::cache::set_chrome_style(crate::appearance::ChromeStyle::Rich);
     }
 
-    /// With no active tab there is nothing to close, so the button is omitted
-    /// rather than painted as a dead affordance.
-    #[test]
-    fn close_button_is_absent_without_an_active_tab() {
-        let c = chips(&["a", "b"]);
-        let (_, rendered) = draw(Rect::new(0, 0, 60, 1), &c, None);
-        assert!(rendered.close_tab.is_none());
-        assert!(rendered.new_session.is_some());
-    }
-
-    /// A very narrow strip keeps the buttons even when no chip fits.
+    /// A very narrow strip keeps the add affordance even when no chip fits.
     #[test]
     fn narrow_strip_still_offers_the_buttons() {
         let c = chips(&["a", "b", "c"]);
         let area = Rect::new(0, 0, 18, 1);
         let (_, rendered) = draw(area, &c, Some(0));
         assert!(rendered.new_session.is_some());
-        assert!(rendered.close_tab.is_some());
         for hit in &rendered.tabs {
             assert!(hit.rect.right() <= area.right(), "no chip may overflow");
         }
@@ -525,6 +668,50 @@ mod tests {
             .filter_map(|x| buf.cell((x, 0)).map(|c| c.symbol().to_string()))
             .collect();
         assert!(row.contains('!'), "permission glyph expected, got {row:?}");
+    }
+
+    #[test]
+    fn rich_status_glyph_keeps_its_tint() {
+        crate::appearance::cache::set_chrome_style(crate::appearance::ChromeStyle::Rich);
+        let mut c = chips(&["a"]);
+        c[0].status = TabStatus::Running;
+        let (buf, _) = draw(Rect::new(0, 0, 40, 1), &c, Some(0));
+        let row: String = (0..40)
+            .filter_map(|x| buf.cell((x, 0)).map(|c| c.symbol().to_string()))
+            .collect();
+        let glyph_at = row.find(TabStatus::Running.glyph()).expect("status glyph");
+        let cell = buf.cell((glyph_at as u16, 0)).expect("glyph cell");
+        let theme = theme();
+        assert_eq!(
+            cell.fg, theme.accent_running,
+            "running status keeps its accent"
+        );
+        crate::appearance::cache::set_chrome_style(crate::appearance::ChromeStyle::Rich);
+    }
+
+    /// Rich chrome keeps `×` inside the bracket (`[ … × ]`) and `+` just
+    /// outside it, so neither control crowds the far edge of the strip.
+    #[test]
+    fn rich_close_glyph_sits_inside_the_bracket() {
+        crate::appearance::cache::set_chrome_style(crate::appearance::ChromeStyle::Rich);
+        let c = chips(&["a"]);
+        let (buf, rendered) = draw(Rect::new(0, 0, 60, 1), &c, Some(0));
+        let hit = &rendered.tabs[0];
+        let close = hit.close_rect.expect("close glyph");
+        assert_eq!(
+            rendered.hit(close.x, 0),
+            Some(TabHitTarget::CloseTab("a".into()))
+        );
+
+        let last = hit.rect.right().saturating_sub(1);
+        let closing = buf.cell((last, 0)).expect("closing bracket");
+        assert_eq!(closing.symbol(), "]", "bracket closes after ×");
+        assert!(
+            close.right() < hit.rect.right(),
+            "× stays inside the chip: close={close:?} chip={:?}",
+            hit.rect
+        );
+        crate::appearance::cache::set_chrome_style(crate::appearance::ChromeStyle::Rich);
     }
 
     #[test]

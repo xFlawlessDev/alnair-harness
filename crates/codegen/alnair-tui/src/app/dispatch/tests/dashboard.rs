@@ -5084,7 +5084,7 @@ fn dashboard_with_two_sessions() -> (AppView, AgentId, AgentId) {
     (app, first, second)
 }
 
-/// The first `Ctrl+Shift+D` arms and does nothing destructive.
+/// The first `Ctrl+Shift+Backspace` arms and does nothing destructive.
 #[test]
 fn dashboard_delete_first_press_arms_without_deleting() {
     let (mut app, first, _) = dashboard_with_two_sessions();

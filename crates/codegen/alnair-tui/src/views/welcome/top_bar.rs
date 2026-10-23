@@ -53,7 +53,13 @@ pub(crate) fn location_line_at(theme: &Theme, cwd: &Path) -> Line<'static> {
     if info.as_ref().is_some_and(|i| i.is_worktree) {
         parts.push(Span::styled(
             "worktree ",
-            Style::default().fg(theme.accent_user),
+            Style::default().fg(theme.accent_user).add_modifier(
+                if crate::views::chrome::is_rich() {
+                    Modifier::BOLD
+                } else {
+                    Modifier::empty()
+                },
+            ),
         ));
     }
     let cwd_display = format_cwd_display(cwd, info.as_ref());

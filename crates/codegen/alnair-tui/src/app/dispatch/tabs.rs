@@ -90,6 +90,31 @@ pub(in crate::app::dispatch) fn dispatch_close_tab(app: &mut AppView) -> Vec<Eff
     let Some(index) = app.tabs.active_index() else {
         return vec![];
     };
+    dispatch_close_tab_at(app, index)
+}
+
+/// Close a specific tab by session id (a chip's own `×`).
+///
+/// A click on a background chip's close glyph must remove THAT tab, not
+/// whatever is active; routing it through `dispatch_close_tab` would close the
+/// wrong one.
+pub(in crate::app::dispatch) fn dispatch_close_tab_id(
+    app: &mut AppView,
+    session_id: &str,
+) -> Vec<Effect> {
+    let Some(index) = app
+        .tabs
+        .tabs()
+        .iter()
+        .position(|t| t.session_id == session_id)
+    else {
+        return vec![];
+    };
+    dispatch_close_tab_at(app, index)
+}
+
+/// Remove the tab at `index`, persist, and activate the neighbour.
+fn dispatch_close_tab_at(app: &mut AppView, index: usize) -> Vec<Effect> {
     let Some(closed) = app.tabs.close(index) else {
         return vec![];
     };

@@ -947,6 +947,7 @@ pub(crate) async fn run(
     initial_config.show_timeline = crate::appearance::cache::load_show_timeline();
     let tick_interval = initial_config.animation.tick_interval();
     crate::appearance::set_tab_width(initial_config.scrollback.display.tab_width);
+    crate::appearance::cache::set_chrome_style(initial_config.chrome);
     app.set_appearance(initial_config);
 
     // Seed app state from disk once at the I/O boundary so dispatch
@@ -1845,6 +1846,7 @@ pub(crate) async fn run(
                 config.show_timeline = app.appearance.show_timeline;
                 tick_interval = config.animation.tick_interval();
                 crate::appearance::set_tab_width(config.scrollback.display.tab_width);
+                crate::appearance::cache::set_chrome_style(config.chrome);
                 app.set_appearance(config);
                 app.apply_effective_compact();
 

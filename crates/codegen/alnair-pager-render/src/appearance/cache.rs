@@ -18,6 +18,8 @@ use std::cell::Cell;
 
 use alnair_shared::ui_config::UiConfig;
 
+use super::config::ChromeStyle;
+
 use super::render_mermaid::RenderMermaid;
 use super::scroll_mode::ScrollMode;
 use super::text_selection::TextSelection;
@@ -51,6 +53,22 @@ const INVERT_SCROLL_DEFAULT: bool = false;
 const SCROLL_LINES_UNSET: u8 = 0;
 const SCROLL_LINES_MIN: u8 = 1;
 const SCROLL_LINES_MAX: u8 = 10;
+
+// Chrome style
+
+thread_local! {
+    static CHROME_STYLE_CURRENT: Cell<ChromeStyle> = const { Cell::new(ChromeStyle::Rich) };
+}
+
+/// Read the current chrome style. The runtime appearance is authoritative;
+/// this cached value is updated at startup and on pager config reload.
+pub fn chrome_style() -> ChromeStyle {
+    CHROME_STYLE_CURRENT.with(Cell::get)
+}
+
+pub fn set_chrome_style(style: ChromeStyle) {
+    CHROME_STYLE_CURRENT.with(|current| current.set(style));
+}
 
 // Compact mode
 

@@ -150,6 +150,10 @@ a design against the 0.1.15 teardown), MCP servers on protocol 2026-07-28
 - `third_party/` — vendored Mermaid rendering stack (untouched policy).
 - `bin/protoc` — dotslash launcher used by proto codegen.
 
+## Terminal chrome appearance
+
+`pager.toml` has `[chrome] style = "rich" | "plain"` (default `rich`). Rich styles Welcome, Agent chrome, and prompt details through `alnair-tui/src/views/chrome.rs`; shared gradients live in `alnair-pager-render/src/render/gradient.rs`. Use semantic `Theme` tokens only, preserve measured widths/hit areas, and route any new glyphs through `glyphs::*` for legacy ConHost. Plain mode must retain minimal presentation without changing layout geometry. The event loop updates the thread-local chrome cache on initial appearance load and config reload.
+
 ## Storage discipline
 
 - Tests that touch the filesystem MUST use `tempfile::TempDir` (drop
@@ -252,13 +256,13 @@ row from being painted with one meaning and dispatched with another.
 ### Dashboard CRUD
 
 The dashboard is the session list, so it owns the session's own lifecycle
-verbs: rename (`Ctrl+R`), stop/close (`Ctrl+X`), delete (`Ctrl+Shift+D`), and
+verbs: rename (`Ctrl+R`), stop/close (`Ctrl+X`), delete (`Ctrl+Shift+Backspace`), and
 new-in-a-directory (`Ctrl+Shift+N`). Rename and new already existed; stop and
 delete were the later additions.
 
 **Stop and delete are different actions and must stay that way.** `Ctrl+X`
 closes the agent view and leaves the transcript on disk (resumable via
-`/resume`); `Ctrl+Shift+D` destroys it through `alnair/session/delete`. They
+`/resume`); `Ctrl+Shift+Backspace` destroys it through `alnair/session/delete`. They
 carry separate confirm slots (`stop_confirm` / `delete_confirm`) precisely so a
 user who armed "close" cannot confirm a delete: sharing one slot would make the
 destructive chord read like the reversible one. Both use the same

@@ -4547,8 +4547,39 @@
     }
 
     #[test]
-    fn no_title_keeps_plain_top_border() {
-        let buf = draw_bordered(40, &title_test_style(None));
+    fn rich_info_line_groups_model_and_mode_on_the_right() {
+        crate::appearance::cache::set_chrome_style(crate::appearance::ChromeStyle::Rich);
+        let style = title_test_style(None);
+        let area = Rect::new(0, 0, 60, 4);
+        let mut buf = Buffer::empty(area);
+        let mut pw = PromptWidget::new();
+        let flags = [crate::views::prompt_widget::PromptFlag {
+            text: "always-approve",
+            color: None,
+            bold: false,
+        }];
+        let info = PromptInfo {
+            model_name: "test-model",
+            flags: &flags,
+            multiline: false,
+        };
+        pw.draw(&mut buf, area, None, &style, Some(&info));
+
+        let row = buf_text_at(&buf, 0, 60, 3);
+        assert!(row.contains("test-model"), "model in info row: {row:?}");
+        assert!(
+            row.contains("always-approve"),
+            "mode in info row: {row:?}"
+        );
+        assert!(
+            row.find("always-approve") > row.find("test-model"),
+            "mode follows the model on the right: {row:?}"
+        );
+        crate::appearance::cache::set_chrome_style(crate::appearance::ChromeStyle::Rich);
+    }
+
+    #[test]
+    fn no_title_keeps_plain_top_border() {        let buf = draw_bordered(40, &title_test_style(None));
 
         assert_eq!(buf.cell((0, 0)).unwrap().symbol(), "\u{256d}");
         assert_eq!(buf.cell((39, 0)).unwrap().symbol(), "\u{256e}");
