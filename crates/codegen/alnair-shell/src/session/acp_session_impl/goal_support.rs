@@ -1215,7 +1215,70 @@ impl SessionActor {
                 strategy_file.to_string_lossy().into_owned(),
                 recommendation,
             );
+            // Capture the lesson HERE and not in `GoalTracker::complete()`:
+            // this is the only point where the note's path and the failure
+            // streak are both in hand, and `reset_strategist_fields()` clears
+            // `last_strategy_path` on the next pause/resume/complete. The
+            // tracker pointer is only for the continuation directive.
+            self.capture_lesson_from_strategy(&strategy_file, consecutive_failures)
+                .await;
             bonus_guard.disarm();
+        }
+    }
+
+    /// Distil the strategist's note into a workspace lesson and persist it.
+    ///
+    /// Best-effort and fail-OPEN: a lesson write must never pause, fail, or
+    /// un-achieve a goal. Every error logs and returns. The whole body is
+    /// gated on `[lessons].enabled`, read live so a mid-run config edit
+    /// applies to the next fire.
+    pub(super) async fn capture_lesson_from_strategy(
+        &self,
+        strategy_file: &std::path::Path,
+        streak: u32,
+    ) {
+        let config = self.lessons_config.borrow().clone();
+        if !config.resolve_enabled() {
+            return;
+        }
+        let objective = self
+            .goal_tracker
+            .lock()
+            .snapshot()
+            .map(|o| o.objective.clone())
+            .unwrap_or_default();
+        // Blocking file read on a `spawn_blocking` hop: this runs inside the
+        // turn, and the note is small but the disk is not ours to assume.
+        let path = strategy_file.to_path_buf();
+        let markdown =
+            match tokio::task::spawn_blocking(move || std::fs::read_to_string(path)).await {
+                Ok(Ok(text)) => text,
+                Ok(Err(e)) => {
+                    tracing::warn!(error = %e, "lessons: could not read the strategy note");
+                    return;
+                }
+                Err(e) => {
+                    tracing::warn!(error = %e, "lessons: strategy read task failed");
+                    return;
+                }
+            };
+        let captured = crate::session::lessons::store::now_rfc3339();
+        let Some(entry) =
+            crate::session::lessons::distil_from_strategy(&markdown, streak, &objective, &captured)
+        else {
+            tracing::debug!("lessons: strategy note did not carry the contract; nothing captured");
+            return;
+        };
+        let cwd = std::path::PathBuf::from(self.tool_context.cwd.as_str());
+        let max_entries = config.max_entries;
+        match tokio::task::spawn_blocking(move || {
+            crate::session::lessons::store::append(&cwd, &entry, max_entries)
+        })
+        .await
+        {
+            Ok(Ok(outcome)) => tracing::info!(?outcome, "lessons: strategy note captured"),
+            Ok(Err(e)) => tracing::warn!(error = %e, "lessons: append failed"),
+            Err(e) => tracing::warn!(error = %e, "lessons: append task failed"),
         }
     }
 

@@ -538,6 +538,49 @@ connection overwrites, so only the newest client sees live deltas.
   `ClientCapabilities`: claiming them routes tool calls to a client that cannot
   serve them and the call hangs.
 
+## Lesson library
+
+The harness records its own postmortems per workspace: what the goal
+strategist found wrong and how it restructured the work. Storage is
+user-global and partitioned by `alnair_memory::storage::workspace_key` — the
+SAME key memory uses, so one repo can never own two directories depending on
+which subsystem asked. `~/.alnair/lessons/<slug>-<hash8>/LESSONS.md`, never
+inside the repository: a lesson file is read into context automatically, so a
+repo-controlled one would let a hostile checkout steer every future session in
+it.
+
+Two invariants. **Never in-repo** (above). **Never a tool** — there is no
+`lessons_write`; capture is harness-owned, and a write tool would hand the
+model a permanent auto-injected channel.
+
+Capture happens at the two places the note is still reachable, both before the
+pointer is reset: the strategist's `Advised` arm in
+`maybe_run_goal_strategist`, and `archive_node_artifacts` in graph mode (which
+runs before `mark_node_achieved`, long before `reset_goal_engine_state`).
+Never hook `GoalTracker::complete()`: it is reached on paths that never ran a
+strategist, and by then `last_strategy_path` is `None`. Distillation is a
+deterministic parse of the strategist's own contract — no LLM on the capture
+path, which keeps zero-egress trivially true.
+
+Injection is a `system-reminder` USER message (appended via
+`push_system_reminder`), never a prepended `System` item: appending leaves the
+conversation prefix untouched, so the KV cache is unaffected. The tag is
+`<harness-lessons>` and must never be `<memory-context>` — that tag is both
+memory's dedup key and its cache-stability signal, so sharing it would make one
+subsystem believe the other had already injected. **No entries, no block**: an
+empty store leaves the prompt byte-identical, which is what makes the feature
+safe to default on.
+
+`[lessons]` hot-reloads, and it copies **`[skills]`**, not `[memory]`.
+`ConfigUpdate::Memory`'s two consumers only log — see
+`docs/FINDING-memory-hot-reload.md`. The lessons chain is reloader diff →
+BOTH `app.rs` dispatchers → `alnair/internal/reload_lessons` →
+`SessionCommand::ReloadLessons` → `reload_lessons_config_from_disk`, with no
+payload on the command because the session re-reads (that is also what
+re-evaluates `ALNAIR_LESSONS`). A reload kind wired into only the leader
+dispatcher silently fails in the in-process TUI, which is the mode a long
+harness run uses.
+
 ## Test seams
 Cross-crate test hooks are behind the `test-support` cargo feature
 (alnair-workspace, alnair-pager-render, alnair-config, alnair-tui), enabled via

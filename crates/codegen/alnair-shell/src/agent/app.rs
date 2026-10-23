@@ -247,6 +247,13 @@ pub async fn run_config_update_dispatch_direct(
                 );
                 None
             }
+            ConfigUpdate::Lessons(lessons) => {
+                info!(
+                    enabled = lessons.enabled,
+                    "Lessons config change detected by watcher"
+                );
+                Some(("alnair/internal/reload_lessons", serde_json::json!({})))
+            }
             ConfigUpdate::Compat(_compat) => {
                 info!(
                     "Compat config change detected by watcher \
@@ -479,6 +486,12 @@ async fn run_config_update_dispatch<W>(
                 info!(
                     paths = skills.paths.len(),
                     "Skills config change detected by watcher"
+                );
+            }
+            ConfigUpdate::Lessons(lessons) => {
+                info!(
+                    enabled = lessons.enabled,
+                    "Lessons config change detected by watcher"
                 );
             }
             ConfigUpdate::Compat(_compat) => {

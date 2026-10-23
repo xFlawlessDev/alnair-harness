@@ -1388,6 +1388,52 @@ impl SessionActor {
             }
         }
     }
+    /// Compute the first-turn lessons reminder, if one should be injected.
+    ///
+    /// Sibling of [`Self::first_turn_memory_reminder`], but with a different
+    /// mechanism: the block is APPENDED as a `system-reminder` user message
+    /// rather than prepended as a `System` item, so the conversation prefix
+    /// stays untouched and the KV cache is unaffected.
+    ///
+    /// An empty store returns `None`, which is what makes default-on safe: a
+    /// fresh workspace sees no prompt change at all.
+    pub(crate) async fn first_turn_lessons_reminder(&self) -> Option<String> {
+        if self
+            .memory
+            .lessons_injected
+            .load(std::sync::atomic::Ordering::Relaxed)
+        {
+            return None;
+        }
+        self.memory
+            .lessons_injected
+            .store(true, std::sync::atomic::Ordering::Relaxed);
+
+        let config = self.lessons_config.borrow().clone();
+        if !config.resolve_enabled() {
+            return None;
+        }
+        let conversation = self.chat_state_handle.get_conversation().await;
+        if crate::session::helpers::lessons_context::conversation_has_lessons_context(&conversation)
+        {
+            // A resumed segment already carries the block; re-injecting would
+            // duplicate it and move the prompt prefix.
+            return None;
+        }
+        let cwd = std::path::PathBuf::from(self.tool_context.cwd.as_str());
+        let entries =
+            tokio::task::spawn_blocking(move || crate::session::lessons::store::load(&cwd, 0))
+                .await
+                .ok()
+                .and_then(Result::ok)
+                .unwrap_or_default();
+        crate::session::helpers::lessons_context::format_lessons_reminder(
+            &entries,
+            config.inject_max,
+            config.inject_max_chars,
+        )
+    }
+
     /// Compute the first-turn memory reminder, if one should be injected.
     ///
     /// A block persisted by an earlier session segment (a prior `--resume`
@@ -1684,6 +1730,13 @@ impl SessionActor {
                 );
             }
             self.maybe_inject_mcp_reminder().await;
+            // Lessons ride as a system-reminder (appended), never through the
+            // `memory_reminder` prepend slot: appending leaves the conversation
+            // prefix untouched, so the KV cache is unaffected.
+            if let Some(lessons) = self.first_turn_lessons_reminder().await {
+                self.push_system_reminder(&lessons);
+                tracing::info!("lessons: first-turn lesson block injected");
+            }
             if self.two_pass_active()
                 && !self.compaction.prefire.has_cache()
                 && self.should_prefire_two_pass().await

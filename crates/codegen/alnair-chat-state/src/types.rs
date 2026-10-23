@@ -15,6 +15,16 @@ pub const MEMORY_CONTEXT_OPEN_TAG: &str = "<memory-context>";
 
 pub const MEMORY_CONTEXT_CLOSE_TAG: &str = "</memory-context>";
 
+/// Wrapper for the workspace lesson block injected on a session's first turn.
+///
+/// Deliberately NOT `<memory-context>`: that tag is simultaneously memory's
+/// dedup key (`conversation_has_memory_context`) and its KV-cache-stability
+/// signal, so sharing it would make one subsystem believe the other had
+/// already injected.
+pub const LESSONS_CONTEXT_OPEN_TAG: &str = "<harness-lessons>";
+
+pub const LESSONS_CONTEXT_CLOSE_TAG: &str = "</harness-lessons>";
+
 /// Configuration for the ChatStateActor at spawn time.
 #[derive(Debug, Clone)]
 pub struct ChatStateConfig {

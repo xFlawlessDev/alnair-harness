@@ -32,7 +32,7 @@ Most of `config.toml` is picked up live. Alnair watches the file and re-applies 
 |---|---|
 | `[mcp_servers]` | yes — servers are restarted with the new config |
 | `[platforms.*]`, `[model.*]`, `[models]` | yes — the model catalog is re-resolved |
-| `[skills]`, `[compat]`, `[memory]` | yes |
+| `[skills]`, `[compat]`, `[memory]`, `[lessons]` | yes |
 | `[ui]` theme / `yolo` / `fork_secondary_model` | yes |
 
 Everything else (for example `[cli]`, `[endpoints]`, `[tabs]`, `[session]`, `[harness]`, and the remaining `[ui]` keys) is read once at startup and needs a restart.
@@ -773,6 +773,7 @@ Key environment variables. See the README for the complete list.
 | Variable | Description |
 |----------|-------------|
 | `ALNAIR_MEMORY` | Enable (`1`) or disable (`0`) cross-session memory |
+| `ALNAIR_LESSONS` | Enable (`1`) or disable (`0`) the workspace lesson library |
 | `ALNAIR_SUBAGENTS` | Enable (`1`) or disable (`0`) subagents |
 | `ALNAIR_WEB_FETCH` | Enable (`1`) or disable (`0`) the web_fetch tool |
 | `ALNAIR_AGENT` | Custom agent definition path or name |

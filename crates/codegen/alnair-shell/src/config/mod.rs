@@ -196,6 +196,73 @@ impl MemoryConfig {
         result
     }
 }
+/// Configuration for the workspace lesson library (`[lessons]`).
+///
+/// Lessons are the harness's own postmortems: what the goal strategist found
+/// wrong and how it restructured the work. They are stored per workspace under
+/// `~/.alnair/lessons/<slug>-<hash8>/LESSONS.md` and injected once at the start
+/// of the next session in that workspace.
+///
+/// Enabled by default. An empty store is a no-op, so a fresh workspace is
+/// byte-identical to not having the feature. Force-off via `ALNAIR_LESSONS=0`
+/// (beats TOML); there is deliberately no remote-settings surface — this is
+/// local-only, like the session log.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(default)]
+pub struct LessonsConfig {
+    /// Capture AND inject. Either side alone is half a feature.
+    pub enabled: bool,
+    /// Cap on entries kept on disk. Oldest are dropped past this.
+    pub max_entries: usize,
+    /// Entries placed in the first-turn block.
+    pub inject_max: usize,
+    /// Per-entry character budget in that block.
+    pub inject_max_chars: usize,
+}
+
+impl Default for LessonsConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            max_entries: 50,
+            inject_max: 3,
+            inject_max_chars: 400,
+        }
+    }
+}
+
+impl LessonsConfig {
+    /// Parse the `[lessons]` section out of a raw config tree.
+    ///
+    /// Absent or unparsable falls back to defaults rather than failing the
+    /// session: a typo in an optional section must not block startup. The
+    /// unknown-key warning is emitted elsewhere, by the `Config` deserializer.
+    pub fn from_toml(config: &toml::Value) -> Self {
+        config
+            .get("lessons")
+            .and_then(|v| v.clone().try_into().ok())
+            .unwrap_or_default()
+    }
+
+    /// Whether the feature is on, honouring `ALNAIR_LESSONS`.
+    ///
+    /// Reuses the shared `resolve_enabled` helper so the precedence is the
+    /// house one: env sits above the TOML section. `has_local_section` is
+    /// `true` because `enabled` already defaults to `true`, so "absent" and
+    /// "present with the default value" mean the same thing.
+    pub fn resolve_enabled(&self) -> bool {
+        crate::agent::config::resolve_enabled(
+            None,
+            "ALNAIR_LESSONS",
+            self.enabled,
+            true,
+            None,
+            true,
+        )
+        .value
+    }
+}
+
 /// Configuration for subagent (task tool) support.
 ///
 /// Parsed from the `[subagents]` section of `~/.alnair/config.toml` or

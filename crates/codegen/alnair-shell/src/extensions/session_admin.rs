@@ -11,6 +11,7 @@
 //! - `alnair/internal/reload_all_mcp_servers` config hot-reload, all sessions
 //! - `alnair/internal/reload_project_mcp_servers` config hot-reload, cwd-scoped
 //! - `alnair/internal/reload_skills`          skills file watcher fan-out
+//! - `alnair/internal/reload_lessons`         `[lessons]` config hot-reload, all sessions
 //! - `alnair/internal/reload_project_instructions` AGENTS.md/rules file watcher fan-out
 //! - `alnair/internal/reload_models`          model list hot-reload from config.toml
 //! - `alnair/internal/reload_models_cache`    model catalog hot-reload from disk cache
@@ -44,6 +45,7 @@ pub async fn handle(agent: &MvpAgent, args: &acp::ExtRequest) -> ExtResult {
             handle_reload_project_mcp_servers(agent, args).await
         }
         "alnair/internal/reload_skills" => handle_reload_skills(agent),
+        "alnair/internal/reload_lessons" => handle_reload_lessons(agent),
         "alnair/internal/reload_project_instructions" => {
             handle_reload_project_instructions(agent, args).await
         }
@@ -248,6 +250,25 @@ fn handle_reload_skills(agent: &MvpAgent) -> ExtResult {
     for sid in &session_ids {
         if let Some(handle) = agent.sessions.borrow().get(sid).cloned() {
             let _ = handle.cmd_tx.send(SessionCommand::ReloadSkills);
+        }
+    }
+    ExtMethodResult::success(serde_json::json!({ "reloaded": session_ids.len() }))
+        .to_ext_response()
+        .map_err(|e| acp::Error::internal_error().data(e.to_string()))
+}
+
+/// Reload the `[lessons]` config for ALL active sessions.
+///
+/// No cwd filter: `[lessons]` is a global section, unlike project
+/// instructions, so every session must re-read it. Each session re-reads from
+/// disk itself (the watcher's parsed payload is not forwarded) because the
+/// effective value also depends on `ALNAIR_LESSONS`, which only the session's
+/// own load path resolves.
+fn handle_reload_lessons(agent: &MvpAgent) -> ExtResult {
+    let session_ids: Vec<acp::SessionId> = agent.sessions.borrow().keys().cloned().collect();
+    for sid in &session_ids {
+        if let Some(handle) = agent.sessions.borrow().get(sid).cloned() {
+            let _ = handle.cmd_tx.send(SessionCommand::ReloadLessons);
         }
     }
     ExtMethodResult::success(serde_json::json!({ "reloaded": session_ids.len() }))

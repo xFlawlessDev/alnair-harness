@@ -267,6 +267,37 @@ Memory is also searched after auto-compaction to recover relevant context that m
 
 ---
 
+## Lessons Are Not Memory
+
+A **lesson** is the harness's own postmortem: what went wrong while working in this workspace and what fixed it. Memory answers "what is true about this repo?"; lessons answer "what did the harness get wrong here?".
+
+The distinction matters because they are stored, read, and injected separately:
+
+| | Memory | Lessons |
+|---|---|---|
+| Written by | session-end hook, `/flush`, `/dream` | the goal strategist, when it restructures a stuck goal |
+| Answers | facts about the project | what the harness got wrong and how it recovered |
+| Stored at | `~/.alnair/memory/<workspace>/` | `~/.alnair/lessons/<workspace>/LESSONS.md` |
+| Injected | first turn, and again after compaction | first turn only |
+
+Lessons are on by default and need no flags. An empty store injects nothing, so a workspace that has never produced a lesson sees no change. Configure with:
+
+```toml
+[lessons]
+enabled = true          # capture and injection
+max_entries = 50        # cap on disk
+inject_max = 3          # entries in the first-turn block
+inject_max_chars = 400  # per entry
+```
+
+`ALNAIR_LESSONS=0` forces the feature off and overrides the file. Changes apply live, including to a running session.
+
+Lessons are never written inside the repository: a lesson file is read into context automatically, so a repo-controlled one could steer every future session in that checkout. They live under your home directory and you can edit or delete entries by hand — that is the escape hatch that makes auto-injection acceptable.
+
+Use `/lessons` to list or clear them.
+
+---
+
 ## Memory Search
 
 Alnair searches memory automatically, but you can also trigger searches manually in the chat:

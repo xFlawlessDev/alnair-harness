@@ -54,6 +54,9 @@ pub enum ConfigUpdate {
     Memory(Box<crate::config::MemoryConfig>),
     /// Updated skills discovery config.
     Skills(alnair_agent::prompt::skills::SkillsConfig),
+    /// Updated `[lessons]` config. Carried so the log line can report the new
+    /// `enabled` state; the applying side re-reads from disk like skills does.
+    Lessons(Box<crate::config::LessonsConfig>),
     /// Updated `[compat]` vendor-compatibility config. Applied on the
     /// next agent (re)build, which re-resolves `compat_resolved`.
     Compat(Box<alnair_tools::types::compat::CompatConfigToml>),
@@ -377,6 +380,18 @@ impl ConfigReloader {
         if old_skills != new_skills {
             info!("skills config change detected");
             let _ = self.config_update_tx.send(ConfigUpdate::Skills(new_skills));
+        }
+
+        let old_lessons = crate::config::LessonsConfig::from_toml(&self.last_global_config);
+        let new_lessons = crate::config::LessonsConfig::from_toml(&new_global);
+        if old_lessons != new_lessons {
+            info!(
+                enabled = new_lessons.enabled,
+                "lessons config change detected"
+            );
+            let _ = self
+                .config_update_tx
+                .send(ConfigUpdate::Lessons(Box::new(new_lessons)));
         }
 
         let old_compat = parse_compat_config(&self.last_global_config);

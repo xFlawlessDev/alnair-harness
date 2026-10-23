@@ -282,6 +282,18 @@ Save a note to memory immediately, without waiting for an automatic summary.
 /remember the staging deploy uses the eu-west cluster
 ```
 
+### `/lessons`
+
+Show or clear the harness lessons captured for this workspace. Unlike the commands above, `/lessons` does not require memory to be enabled — it reads its own store.
+
+```
+/lessons
+/lessons list
+/lessons clear
+```
+
+Arguments: `list` (default) or `clear`. Lessons are written when the goal strategist restructures a stuck goal, and are injected once at the start of the next session in the same workspace. See [13-memory.md](13-memory.md) for how they differ from memory.
+
 ---
 
 ## Hooks and Plugins

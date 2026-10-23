@@ -823,10 +823,11 @@ impl SessionActor {
     /// node must not be archived as this node's work. Best-effort: a
     /// failed copy loses audit detail, never progress — but always logs.
     async fn archive_node_artifacts(&self, node_id: &str) {
-        let (sources, dst_dir) = {
+        let (sources, dst_dir, strategy) = {
             let goal = self.goal_tracker.lock();
             let graph = self.graph_tracker.lock();
             let mut sources: Vec<std::path::PathBuf> = Vec::new();
+            let mut strategy: Option<std::path::PathBuf> = None;
             if let Some(o) = goal.snapshot() {
                 if let Some(p) = &o.plan_file {
                     sources.push(p.clone());
@@ -835,11 +836,30 @@ impl SessionActor {
                     sources.push(p.clone());
                 }
                 if let Some(p) = &o.last_strategy_path {
-                    sources.push(std::path::PathBuf::from(p));
+                    let path = std::path::PathBuf::from(p);
+                    // This runs before `mark_node_achieved` and long before
+                    // `reset_goal_engine_state`, so it is the last moment the
+                    // note is reachable for this node. Capture here as well as
+                    // archiving: the archive is a postmortem bucket no later
+                    // node — let alone a later session — ever reads.
+                    strategy = Some(path.clone());
+                    sources.push(path);
                 }
             }
-            (sources, graph.node_archive_dir(node_id))
+            (sources, graph.node_archive_dir(node_id), strategy)
         };
+        // Capture outside the tracker locks: it reads the note from disk and
+        // takes the store lock, and neither may run while the graph mutex is
+        // held.
+        if let Some(path) = strategy {
+            let streak = self
+                .goal_tracker
+                .lock()
+                .snapshot()
+                .map(|o| o.consecutive_not_achieved)
+                .unwrap_or(0);
+            self.capture_lesson_from_strategy(&path, streak).await;
+        }
         if sources.is_empty() {
             return;
         }

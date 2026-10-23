@@ -172,6 +172,7 @@ async fn persist_ack_waits_for_disk_flush_before_success() {
                     backend_params: None,
                     initial_injection_config: Default::default(),
                     context_injected: std::sync::atomic::AtomicBool::new(false),
+                    lessons_injected: std::sync::atomic::AtomicBool::new(false),
                     flush_count: std::sync::atomic::AtomicU64::new(0),
                     last_flush_content: std::cell::RefCell::new(None),
                     flush_success_count: std::sync::atomic::AtomicU64::new(0),
@@ -250,6 +251,7 @@ async fn persist_ack_waits_for_disk_flush_before_success() {
                 goal_classifier_max_runs:
                     crate::session::goal_classifier::GOAL_CLASSIFIER_MAX_RUNS_DEFAULT,
                 goal_strategist_every: 5,
+                lessons_config: std::cell::RefCell::new(Default::default()),
                 goal_reverify_after: crate::session::acp_session::GOAL_REVERIFY_AFTER_DEFAULT,
                 goal_plan_reconciled: std::sync::atomic::AtomicBool::new(false),
                 pending_classifier_completions: parking_lot::Mutex::new(VecDeque::new()),
@@ -634,6 +636,7 @@ async fn first_turn_memory_injection_disabled_does_not_persist_to_chat_history()
                         min_score: Some(0.8),
                     },
                     context_injected: std::sync::atomic::AtomicBool::new(false),
+                    lessons_injected: std::sync::atomic::AtomicBool::new(false),
                     flush_count: std::sync::atomic::AtomicU64::new(0),
                     last_flush_content: std::cell::RefCell::new(None),
                     flush_success_count: std::sync::atomic::AtomicU64::new(0),
@@ -712,6 +715,7 @@ async fn first_turn_memory_injection_disabled_does_not_persist_to_chat_history()
                 goal_classifier_max_runs:
                     crate::session::goal_classifier::GOAL_CLASSIFIER_MAX_RUNS_DEFAULT,
                 goal_strategist_every: 5,
+                lessons_config: std::cell::RefCell::new(Default::default()),
                 goal_reverify_after: crate::session::acp_session::GOAL_REVERIFY_AFTER_DEFAULT,
                 goal_plan_reconciled: std::sync::atomic::AtomicBool::new(false),
                 pending_classifier_completions: parking_lot::Mutex::new(VecDeque::new()),
@@ -896,6 +900,7 @@ async fn cancel_running_task_teardown_clears_running_and_pending_work() {
                     backend_params: None,
                     initial_injection_config: Default::default(),
                     context_injected: std::sync::atomic::AtomicBool::new(false),
+                    lessons_injected: std::sync::atomic::AtomicBool::new(false),
                     flush_count: std::sync::atomic::AtomicU64::new(0),
                     last_flush_content: std::cell::RefCell::new(None),
                     flush_success_count: std::sync::atomic::AtomicU64::new(0),
@@ -974,6 +979,7 @@ async fn cancel_running_task_teardown_clears_running_and_pending_work() {
                 goal_classifier_max_runs:
                     crate::session::goal_classifier::GOAL_CLASSIFIER_MAX_RUNS_DEFAULT,
                 goal_strategist_every: 5,
+                lessons_config: std::cell::RefCell::new(Default::default()),
                 goal_reverify_after: crate::session::acp_session::GOAL_REVERIFY_AFTER_DEFAULT,
                 goal_plan_reconciled: std::sync::atomic::AtomicBool::new(false),
                 pending_classifier_completions: parking_lot::Mutex::new(VecDeque::new()),
@@ -1895,6 +1901,7 @@ async fn cancel_propagates_to_sampler_handle_so_no_further_emission() {
                     backend_params: None,
                     initial_injection_config: Default::default(),
                     context_injected: std::sync::atomic::AtomicBool::new(false),
+                    lessons_injected: std::sync::atomic::AtomicBool::new(false),
                     flush_count: std::sync::atomic::AtomicU64::new(0),
                     last_flush_content: std::cell::RefCell::new(None),
                     flush_success_count: std::sync::atomic::AtomicU64::new(0),
@@ -1973,6 +1980,7 @@ async fn cancel_propagates_to_sampler_handle_so_no_further_emission() {
                 goal_classifier_max_runs:
                     crate::session::goal_classifier::GOAL_CLASSIFIER_MAX_RUNS_DEFAULT,
                 goal_strategist_every: 5,
+                lessons_config: std::cell::RefCell::new(Default::default()),
                 goal_reverify_after: crate::session::acp_session::GOAL_REVERIFY_AFTER_DEFAULT,
                 goal_plan_reconciled: std::sync::atomic::AtomicBool::new(false),
                 pending_classifier_completions: parking_lot::Mutex::new(VecDeque::new()),

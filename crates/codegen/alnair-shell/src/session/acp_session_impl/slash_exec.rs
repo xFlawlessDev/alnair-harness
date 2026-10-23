@@ -79,6 +79,71 @@ impl SessionActor {
                 self.send_slash_command_output(&msg).await;
                 ok_end_turn(0, None)
             }
+            BuiltinAction::LessonsList => {
+                let cwd = std::path::PathBuf::from(&self.session_info.cwd);
+                let config = self.lessons_config.borrow().clone();
+                let entries = tokio::task::spawn_blocking(move || {
+                    crate::session::lessons::store::load(&cwd, 0)
+                })
+                .await
+                .unwrap_or_else(|e| {
+                    tracing::warn!(error = %e, "lessons: list task failed");
+                    Ok(Vec::new())
+                });
+                let text = match entries {
+                    Ok(entries) if entries.is_empty() => {
+                        "No lessons captured in this workspace yet.\n\n\
+                         Lessons are written when the goal strategist restructures a \
+                         stuck goal, and are injected once at the start of the next \
+                         session here."
+                            .to_string()
+                    }
+                    Ok(entries) => {
+                        let mut lines = vec![format!(
+                            "{} lesson(s) captured in this workspace (newest first):\n",
+                            entries.len()
+                        )];
+                        for entry in &entries {
+                            lines.push(format!(
+                                "- `{}` **{}** (component: {})",
+                                entry.id,
+                                entry.cue,
+                                entry.component.as_str()
+                            ));
+                            lines.push(format!("  {}", entry.lesson));
+                        }
+                        if !config.enabled {
+                            lines.push(String::new());
+                            lines.push(
+                                "_Capture and injection are currently disabled by config._"
+                                    .to_string(),
+                            );
+                        }
+                        lines.join("\n")
+                    }
+                    Err(e) => format!("Could not read the lesson store: {e}"),
+                };
+                self.send_slash_command_output(&text).await;
+                ok_end_turn(0, None)
+            }
+            BuiltinAction::LessonsClear => {
+                let cwd = std::path::PathBuf::from(&self.session_info.cwd);
+                let removed = tokio::task::spawn_blocking(move || {
+                    crate::session::lessons::store::clear(&cwd)
+                })
+                .await
+                .unwrap_or_else(|e| {
+                    tracing::warn!(error = %e, "lessons: clear task failed");
+                    Ok(false)
+                });
+                let text = match removed {
+                    Ok(true) => "Cleared this workspace's lesson store.".to_string(),
+                    Ok(false) => "This workspace has no lesson store to clear.".to_string(),
+                    Err(e) => format!("Could not clear the lesson store: {e}"),
+                };
+                self.send_slash_command_output(&text).await;
+                ok_end_turn(0, None)
+            }
             BuiltinAction::HooksList => {
                 let text = match &*self.hook_registry.borrow() {
                     Some(registry) => {

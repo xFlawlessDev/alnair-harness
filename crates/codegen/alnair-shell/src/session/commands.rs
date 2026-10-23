@@ -598,6 +598,12 @@ pub enum SessionCommand {
     /// Re-discover skills from disk, update the SkillManager baseline,
     /// and re-advertise slash commands to the client.
     ReloadSkills,
+    /// Re-read `[lessons]` from disk into the actor's live config.
+    ///
+    /// Carries no payload on purpose, mirroring [`Self::ReloadSkills`]: the
+    /// session re-reads so the env override `ALNAIR_LESSONS` is re-evaluated
+    /// too, which a forwarded parsed struct could not express.
+    ReloadLessons,
     /// Re-read `AGENTS.md` / `CLAUDE.md` / rules files from disk and queue a
     /// `project_instructions_update` item for the next turn boundary.
     ///

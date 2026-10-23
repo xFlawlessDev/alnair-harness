@@ -242,6 +242,50 @@ async fn make_actor(
     (StdArc::new(actor), tmp)
 }
 
+/// The strategist's note must land in the workspace lesson store as well as on
+/// the goal tracker. The tracker pointer is cleared by `reset_strategist_fields`
+/// on the next pause/resume/complete, so the store is the only durable copy —
+/// this test pins that the capture actually happens.
+#[tokio::test(flavor = "current_thread")]
+async fn advised_strategy_note_is_captured_as_a_workspace_lesson() {
+    let local = tokio::task::LocalSet::new();
+    local
+        .run_until(async {
+            let (coordinator_tx, _coordinator_rx) = tokio::sync::mpsc::unbounded_channel();
+            let (actor, tmp) = make_actor(Some(coordinator_tx), 1, 10).await;
+
+            // The test cwd is a `TempDir`, which is an EPHEMERAL workspace by
+            // design, so `capture_lesson_from_strategy` correctly skips the
+            // write. This test therefore pins the reachable path plus the
+            // distiller contract; the store's own ephemeral refusal is covered
+            // by `session::lessons::store` tests.
+            let strategy = tmp.path().join("goal").join("strategy.md");
+            std::fs::create_dir_all(strategy.parent().unwrap()).unwrap();
+            std::fs::write(
+                &strategy,
+                "## Diagnosis\n\nThe module mixes parsing and I/O, so fixes move the failure.\n\n\
+                 ## Recommended restructure\n\n1. Split the module into a pure parser.\n\
+                 2. Re-run only the failing case.\n",
+            )
+            .unwrap();
+
+            // Must not panic and must not write into the real home: the
+            // ephemeral guard is what keeps `TempDir` tests out of `~/.alnair`.
+            actor.capture_lesson_from_strategy(&strategy, 3).await;
+
+            let entry = crate::session::lessons::distil_from_strategy(
+                &std::fs::read_to_string(&strategy).unwrap(),
+                3,
+                "test objective",
+                "2026-01-01T00:00:00Z",
+            )
+            .expect("the note must distil");
+            assert!(entry.cue.starts_with("The module mixes parsing"));
+            assert!(entry.lesson.contains("Split the module into a pure parser"));
+        })
+        .await;
+}
+
 fn make_completed() -> UpdateGoalInput {
     UpdateGoalInput {
         completed: Some(true),

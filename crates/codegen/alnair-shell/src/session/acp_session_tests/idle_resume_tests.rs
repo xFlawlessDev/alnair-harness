@@ -191,6 +191,7 @@ async fn test_e2e_idle_resume_refreshes_model_metadata() {
                     backend_params: None,
                     initial_injection_config: Default::default(),
                     context_injected: std::sync::atomic::AtomicBool::new(false),
+                    lessons_injected: std::sync::atomic::AtomicBool::new(false),
                     flush_count: std::sync::atomic::AtomicU64::new(0),
                     last_flush_content: std::cell::RefCell::new(None),
                     flush_success_count: std::sync::atomic::AtomicU64::new(0),
@@ -269,6 +270,7 @@ async fn test_e2e_idle_resume_refreshes_model_metadata() {
                 goal_classifier_max_runs:
                     crate::session::goal_classifier::GOAL_CLASSIFIER_MAX_RUNS_DEFAULT,
                 goal_strategist_every: 5,
+                lessons_config: std::cell::RefCell::new(Default::default()),
                 goal_reverify_after: crate::session::acp_session::GOAL_REVERIFY_AFTER_DEFAULT,
                 goal_plan_reconciled: std::sync::atomic::AtomicBool::new(false),
                 pending_classifier_completions: parking_lot::Mutex::new(VecDeque::new()),

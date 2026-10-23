@@ -23,6 +23,11 @@ pub struct SessionMemory {
     /// this session segment. Cross-segment idempotency comes from
     /// `conversation_has_memory_context`, not this flag.
     pub context_injected: AtomicBool,
+    /// Per-process latch for the first-turn LESSON injection, mirroring
+    /// [`Self::context_injected`]. Cross-segment idempotency comes from
+    /// `conversation_has_lessons_context`; this only avoids re-reading a small
+    /// file on every turn-loop iteration.
+    pub lessons_injected: AtomicBool,
     pub flush_config: crate::config::MemoryFlushConfig,
     /// When `true`, auto-compact checks are suppressed during memory flush.
     pub is_flushing: AtomicBool,

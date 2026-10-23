@@ -963,6 +963,10 @@ pub(crate) async fn spawn_session_actor(
         .resolve_goal_strategist_every(goal_classifier_max_runs)
         .value;
     let goal_reverify_after = effective_config.resolve_goal_reverify_after().value;
+    // `[lessons]` is read here for the initial value and re-read on every
+    // config hot-reload event (`SessionCommand::ReloadLessons`), so an edit
+    // mid-run reaches a live session.
+    let lessons_config = effective_config.lessons.clone();
     let goal_use_current_model_only = effective_config.resolve_goal_use_current_model_only().value;
     let goal_role_models = {
         let planner = effective_config
@@ -1058,6 +1062,7 @@ pub(crate) async fn spawn_session_actor(
             backend_params: memory_backend_params_for_session,
             initial_injection_config: memory_initial_injection_config,
             context_injected: std::sync::atomic::AtomicBool::new(false),
+            lessons_injected: std::sync::atomic::AtomicBool::new(false),
             flush_count: std::sync::atomic::AtomicU64::new(0),
             last_flush_content: std::cell::RefCell::new(None),
             flush_success_count: std::sync::atomic::AtomicU64::new(0),
@@ -1149,6 +1154,7 @@ pub(crate) async fn spawn_session_actor(
         goal_use_current_model_only,
         goal_classifier_max_runs,
         goal_strategist_every,
+        lessons_config: std::cell::RefCell::new(lessons_config),
         goal_reverify_after,
         goal_plan_reconciled: std::sync::atomic::AtomicBool::new(false),
         pending_classifier_completions: parking_lot::Mutex::new(VecDeque::new()),

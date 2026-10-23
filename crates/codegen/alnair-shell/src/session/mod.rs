@@ -305,6 +305,7 @@ pub mod helpers;
 pub(crate) mod image_describe;
 pub(crate) mod image_normalize;
 pub mod inference_metrics;
+pub mod lessons;
 pub use alnair_shared::session::info;
 pub mod managed_mcp;
 pub(crate) mod mcp_descriptors;

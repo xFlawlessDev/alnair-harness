@@ -750,6 +750,14 @@ pub(crate) struct SessionActor {
     /// / 2)`; clamped to `>= 1` by the resolver. Read by the strategist
     /// trigger in `apply_classifier_outcome`.
     pub(crate) goal_strategist_every: u32,
+    /// Live `[lessons]` config. A `RefCell` because `/lessons` and the config
+    /// hot-reload both mutate it from `&Arc<SessionActor>`; the actor is
+    /// single-threaded on a `LocalSet`, the same reason `SessionMemory::storage`
+    /// is a `RefCell`.
+    ///
+    /// Read at capture time (the strategist fire) and at first-turn injection,
+    /// so a mid-run `[lessons]` edit takes effect without a new session.
+    pub(crate) lessons_config: std::cell::RefCell<crate::config::LessonsConfig>,
     /// Resolved refuted-goal round count before the continuation directive
     /// escalates to a forceful "re-verify now" block; cached at actor
     /// construction. Read by [`Self::prepare_goal_continuation`].
@@ -1543,6 +1551,9 @@ mod laziness_detector_tests;
 #[cfg(test)]
 #[path = "acp_session_tests/laziness/laziness_integration_tests.rs"]
 mod laziness_integration_tests;
+#[cfg(test)]
+#[path = "acp_session_tests/lessons_tests.rs"]
+mod lessons_tests;
 #[cfg(test)]
 #[path = "acp_session_tests/load_user_prompts_tests.rs"]
 mod load_user_prompts_tests;

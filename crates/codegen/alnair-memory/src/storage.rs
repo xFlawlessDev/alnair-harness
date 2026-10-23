@@ -57,13 +57,13 @@ impl MemoryStorage {
             .map(|p| p.to_path_buf())
             .unwrap_or_else(|| alnair_home().join("memory"));
         let workspace_dir = if use_workspace_hash {
-            let workspace_hash = compute_workspace_hash(cwd);
+            let workspace_hash = workspace_key(cwd);
             global_dir.join(&workspace_hash)
         } else {
             global_dir.clone()
         };
 
-        let ephemeral = use_workspace_hash && is_ephemeral_cwd(cwd);
+        let ephemeral = use_workspace_hash && is_ephemeral_workspace(cwd);
 
         Self {
             global_dir,
@@ -577,9 +577,13 @@ pub fn normalize_memory_content(raw: &str) -> String {
 /// Returns `true` if `cwd` resides under a system temp directory.
 ///
 /// Subagent worktrees and other transient processes use temp-dir paths
-/// like `/tmp/…` or `/var/folders/…/T/…`. Creating persistent workspace
-/// memory for these paths is wasteful and produces orphan directories.
-fn is_ephemeral_cwd(cwd: &Path) -> bool {
+/// like `/tmp/…` or `/var/folders/…/T/…`. Creating persistent per-workspace
+/// state for these paths is wasteful and produces orphan directories.
+///
+/// Public because every subsystem that keys durable state on a workspace
+/// must agree with memory about which workspaces deserve one. The lesson
+/// library (`alnair-shell`) is the second caller.
+pub fn is_ephemeral_workspace(cwd: &Path) -> bool {
     let canonical = dunce::canonicalize(cwd).unwrap_or_else(|_| cwd.to_path_buf());
     let s = canonical.to_string_lossy();
     let raw_s = cwd.to_string_lossy();
@@ -596,7 +600,11 @@ fn is_ephemeral_cwd(cwd: &Path) -> bool {
         || (s.contains("/private/var/folders/") && s.contains("/T/"))
 }
 
-/// Compute a human-friendly workspace directory name.
+/// The one workspace key: `{slug}-{hash8}`.
+///
+/// Public so the lesson library and memory can never disagree about which
+/// directory a repo owns. A second, hand-rolled scheme would key on something
+/// else and give one repository two directories depending on how it was opened.
 ///
 /// Format: `{slug}-{hash8}` where:
 /// - `slug` is the repo or directory name, slugified (max 40 chars)
@@ -604,10 +612,10 @@ fn is_ephemeral_cwd(cwd: &Path) -> bool {
 ///
 /// **Identity strategy:** Prefers git remote `org/repo` as the identity
 /// source — all clones, worktrees, and copies of the same repository
-/// resolve to the same memory directory regardless of filesystem path.
+/// resolve to the same directory regardless of filesystem path.
 /// Falls back to filesystem path when not inside a git repo or when
 /// no `origin` remote is configured.
-fn compute_workspace_hash(cwd: &Path) -> String {
+pub fn workspace_key(cwd: &Path) -> String {
     let identity = extract_repo_identity(cwd);
 
     let (slug, hash_input) = match identity {
@@ -754,15 +762,15 @@ mod tests {
     }
 
     #[test]
-    fn test_compute_workspace_hash_deterministic() {
-        let hash1 = compute_workspace_hash(Path::new("/some/workspace"));
-        let hash2 = compute_workspace_hash(Path::new("/some/workspace"));
+    fn test_workspace_key_deterministic() {
+        let hash1 = workspace_key(Path::new("/some/workspace"));
+        let hash2 = workspace_key(Path::new("/some/workspace"));
         assert_eq!(hash1, hash2);
     }
 
     #[test]
-    fn test_compute_workspace_hash_human_readable() {
-        let name = compute_workspace_hash(Path::new("/users/me/work/xai"));
+    fn test_workspace_key_human_readable() {
+        let name = workspace_key(Path::new("/users/me/work/xai"));
         assert!(
             name.starts_with("xai-"),
             "should start with project name slug, got: {name}"
@@ -781,17 +789,17 @@ mod tests {
     }
 
     #[test]
-    fn test_compute_workspace_hash_different_paths() {
-        let hash1 = compute_workspace_hash(Path::new("/workspace/a"));
-        let hash2 = compute_workspace_hash(Path::new("/workspace/b"));
+    fn test_workspace_key_different_paths() {
+        let hash1 = workspace_key(Path::new("/workspace/a"));
+        let hash2 = workspace_key(Path::new("/workspace/b"));
         assert_ne!(hash1, hash2);
     }
 
     #[test]
-    fn test_compute_workspace_hash_same_dirname_different_parent() {
+    fn test_workspace_key_same_dirname_different_parent() {
         // Two "app" dirs in different parents get different names (hash differs)
-        let name1 = compute_workspace_hash(Path::new("/users/alice/app"));
-        let name2 = compute_workspace_hash(Path::new("/users/bob/app"));
+        let name1 = workspace_key(Path::new("/users/alice/app"));
+        let name2 = workspace_key(Path::new("/users/bob/app"));
         assert!(name1.starts_with("app-"), "got: {name1}");
         assert!(name2.starts_with("app-"), "got: {name2}");
         assert_ne!(
@@ -1399,7 +1407,7 @@ mod tests {
     }
 
     #[test]
-    fn test_compute_workspace_hash_uses_repo_identity() {
+    fn test_workspace_key_uses_repo_identity() {
         // Two different paths in the same repo should produce the same hash.
         ensure_hermetic_git_on_path();
         let tmp = TempDir::new().unwrap();
@@ -1410,8 +1418,8 @@ mod tests {
         let subdir = tmp.path().join("subdir");
         std::fs::create_dir(&subdir).unwrap();
 
-        let hash1 = compute_workspace_hash(tmp.path());
-        let hash2 = compute_workspace_hash(&subdir);
+        let hash1 = workspace_key(tmp.path());
+        let hash2 = workspace_key(&subdir);
         assert_eq!(
             hash1, hash2,
             "different subdirs of same repo should share identity"
@@ -1419,51 +1427,100 @@ mod tests {
     }
 
     #[test]
-    fn test_compute_workspace_hash_non_git_falls_back() {
+    fn test_workspace_key_non_git_falls_back() {
         let tmp = TempDir::new().unwrap();
-        let hash = compute_workspace_hash(tmp.path());
+        let hash = workspace_key(tmp.path());
         // Should still produce a valid slug-hash format
         assert!(hash.contains('-'), "should have slug-hash format: {hash}");
         let parts: Vec<&str> = hash.rsplitn(2, '-').collect();
         assert_eq!(parts[0].len(), 8, "hash suffix should be 8 hex chars");
     }
 
-    // is_ephemeral_cwd tests
+    /// The key is shared with the lesson library (`alnair-shell`), so this
+    /// pins BOTH halves of the identity rule. Without an `origin` remote the
+    /// key is path-derived, and two subdirectories of one repo legitimately
+    /// get two different keys — a future "fix" that made the fallback stable
+    /// would silently merge unrelated workspaces, and one that made the
+    /// remote case path-derived would split one repo in two.
+    #[test]
+    fn test_workspace_key_identity_rule_is_pinned() {
+        ensure_hermetic_git_on_path();
+        let tmp = TempDir::new().unwrap();
+        let repo = git2::Repository::init(tmp.path()).unwrap();
+        let subdir = tmp.path().join("nested");
+        std::fs::create_dir(&subdir).unwrap();
+
+        // Without an origin: path-derived, so the two differ.
+        assert_ne!(
+            workspace_key(tmp.path()),
+            workspace_key(&subdir),
+            "no remote means the canonical path is the identity",
+        );
+
+        // With an origin: stable across subdirectories of the same repo.
+        repo.remote("origin", "https://github.com/example/demo.git")
+            .unwrap();
+        assert_eq!(
+            workspace_key(tmp.path()),
+            workspace_key(&subdir),
+            "a remote makes every subdirectory share one identity",
+        );
+    }
+
+    /// A different remote URL is a different workspace, even at the same path.
+    #[test]
+    fn test_workspace_key_differs_across_remotes() {
+        ensure_hermetic_git_on_path();
+        let a = TempDir::new().unwrap();
+        let b = TempDir::new().unwrap();
+        for (dir, url) in [
+            (a.path(), "https://github.com/example/one.git"),
+            (b.path(), "https://github.com/example/two.git"),
+        ] {
+            let repo = git2::Repository::init(dir).unwrap();
+            repo.remote("origin", url).unwrap();
+        }
+        assert_ne!(workspace_key(a.path()), workspace_key(b.path()));
+    }
+
+    // is_ephemeral_workspace tests
 
     #[test]
     fn test_ephemeral_linux_tmp() {
-        assert!(is_ephemeral_cwd(Path::new("/tmp/foo")));
-        assert!(is_ephemeral_cwd(Path::new("/tmp/subagent-worktree-123")));
+        assert!(is_ephemeral_workspace(Path::new("/tmp/foo")));
+        assert!(is_ephemeral_workspace(Path::new(
+            "/tmp/subagent-worktree-123"
+        )));
     }
 
     #[test]
     fn test_ephemeral_linux_var_tmp() {
-        assert!(is_ephemeral_cwd(Path::new("/var/tmp/bar")));
-        assert!(is_ephemeral_cwd(Path::new("/var/tmp/nested/deep")));
+        assert!(is_ephemeral_workspace(Path::new("/var/tmp/bar")));
+        assert!(is_ephemeral_workspace(Path::new("/var/tmp/nested/deep")));
     }
 
     #[test]
     fn test_ephemeral_macos_var_folders() {
-        assert!(is_ephemeral_cwd(Path::new(
+        assert!(is_ephemeral_workspace(Path::new(
             "/var/folders/xx/yyyyyyyy/T/tmpABCDEF"
         )));
-        assert!(is_ephemeral_cwd(Path::new(
+        assert!(is_ephemeral_workspace(Path::new(
             "/private/var/folders/xx/yyyyyyyy/T/tmpABCDEF"
         )));
     }
 
     #[test]
     fn test_ephemeral_macos_private_tmp() {
-        assert!(is_ephemeral_cwd(Path::new("/private/tmp/foo")));
-        assert!(is_ephemeral_cwd(Path::new("/private/var/tmp/bar")));
+        assert!(is_ephemeral_workspace(Path::new("/private/tmp/foo")));
+        assert!(is_ephemeral_workspace(Path::new("/private/var/tmp/bar")));
     }
 
     #[test]
     fn test_non_ephemeral_normal_paths() {
-        assert!(!is_ephemeral_cwd(Path::new("/home/user/project")));
-        assert!(!is_ephemeral_cwd(Path::new("/home/user/src")));
-        assert!(!is_ephemeral_cwd(Path::new("/Users/dev/work/repo")));
-        assert!(!is_ephemeral_cwd(Path::new("/opt/workspace")));
+        assert!(!is_ephemeral_workspace(Path::new("/home/user/project")));
+        assert!(!is_ephemeral_workspace(Path::new("/home/user/src")));
+        assert!(!is_ephemeral_workspace(Path::new("/Users/dev/work/repo")));
+        assert!(!is_ephemeral_workspace(Path::new("/opt/workspace")));
     }
 
     #[test]

@@ -662,6 +662,8 @@ pub(super) async fn run_session(
                    .send_available_commands_update(). await; } SessionCommand::ReloadSkills => {
                    let s = session.clone(); tokio::task::spawn_local(async move { s
                    .reload_skills_from_disk(). await; }); }
+                   SessionCommand::ReloadLessons => { session
+                   .reload_lessons_config_from_disk(); }
                    SessionCommand::ReloadProjectInstructions { cwd } => {
                    let s = session.clone(); tokio::task::spawn_local(async move { s
                    .reload_project_instructions(& cwd). await; }); }

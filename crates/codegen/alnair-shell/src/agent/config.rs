@@ -1149,6 +1149,13 @@ pub struct Config {
     pub subagents: crate::config::SubagentsConfig,
     #[serde(default, skip_serializing)]
     pub memory: crate::config::MemoryConfig,
+    /// `[lessons]` — the workspace lesson library.
+    ///
+    /// `skip_serializing`, NOT `skip`: a skipped field is invisible to
+    /// `serde_ignored`, so `deserialize_collecting_unrecognized` would report
+    /// `lessons` as an unknown key and every startup would warn.
+    #[serde(default, skip_serializing)]
+    pub lessons: crate::config::LessonsConfig,
     #[serde(default, skip_serializing)]
     pub compaction: CompactionConfig,
     /// `[auth]` alias — consumed by `expand_auth_alias` before serde.
@@ -1500,6 +1507,7 @@ impl Default for Config {
             disabled_mcp_tools: std::collections::HashMap::new(),
             subagents: crate::config::SubagentsConfig::default(),
             memory: crate::config::MemoryConfig::default(),
+            lessons: crate::config::LessonsConfig::default(),
             compaction: CompactionConfig::default(),
             auth: None,
             desktop: None,

@@ -281,6 +281,50 @@ impl SessionActor {
         true
     }
 
+    /// Re-read the `[lessons]` section from disk into the live actor config.
+    ///
+    /// Called by `SessionCommand::ReloadLessons` when the config watcher sees
+    /// the file change. Re-reads rather than accepting the watcher's parsed
+    /// payload because the effective value also depends on `ALNAIR_LESSONS`,
+    /// which only this load path resolves.
+    ///
+    /// Best-effort: a failed load keeps the last-known-good config, so a
+    /// half-written config.toml cannot silently disable capture mid-run.
+    pub(super) fn reload_lessons_config_from_disk(&self) {
+        let raw = match crate::config::load_effective_config() {
+            Ok(raw) => raw,
+            Err(e) => {
+                tracing::warn!(
+                    error = %e,
+                    "lessons: config reload failed, keeping last-known-good"
+                );
+                return;
+            }
+        };
+        self.apply_lessons_config_from_toml(&raw);
+    }
+
+    /// Apply a parsed config tree to the live actor config.
+    ///
+    /// Split out from [`Self::reload_lessons_config_from_disk`] so the reload
+    /// semantics — replace wholesale, log the resolved `enabled`, keep the
+    /// value when nothing changed — are testable without a real
+    /// `~/.alnair/config.toml` or an env mutation.
+    pub(super) fn apply_lessons_config_from_toml(&self, raw: &toml::Value) {
+        let next = crate::config::LessonsConfig::from_toml(raw);
+        let enabled = next.resolve_enabled();
+        let mut current = self.lessons_config.borrow_mut();
+        if *current == next {
+            return;
+        }
+        *current = next;
+        tracing::info!(
+            session_id = %self.session_info.id.0,
+            enabled,
+            "lessons: config reloaded from disk"
+        );
+    }
+
     /// Inject a queued project-instructions revision at a turn boundary.
     ///
     /// Called at the same safe points as [`Self::flush_pending_skill_reminders`]

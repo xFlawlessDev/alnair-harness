@@ -231,6 +231,20 @@ pub(super) const BUILTIN_COMMANDS: &[BuiltinCommand] = &[
         resolve: |_args| BuiltinAction::SessionInfo,
     },
     BuiltinCommand {
+        name: "lessons",
+        description: "Show or clear this workspace's captured harness lessons",
+        argument_hint: Some("list | clear"),
+        aliases: &[],
+        gate: BuiltinGate::AlwaysOn,
+        resolve: |args| match args.trim() {
+            "" | "list" => BuiltinAction::LessonsList,
+            "clear" => BuiltinAction::LessonsClear,
+            // Unknown subcommands list rather than error: an empty answer is
+            // more informative than a rejection, and the store may be empty.
+            _ => BuiltinAction::LessonsList,
+        },
+    },
+    BuiltinCommand {
         name: "feedback",
         description: "Send feedback about the current session",
         argument_hint: Some("feedback text"),
@@ -747,6 +761,8 @@ pub(super) enum BuiltinAction {
     GoalPause,
     GoalResume,
     GoalClear,
+    LessonsList,
+    LessonsClear,
     GraphSet {
         objective: String,
         token_budget: Option<i64>,
@@ -799,6 +815,7 @@ impl BuiltinAction {
             BuiltinAction::SwarmSet { .. }
             | BuiltinAction::SwarmToggle
             | BuiltinAction::SwarmTask { .. } => "swarm",
+            BuiltinAction::LessonsList | BuiltinAction::LessonsClear => "lessons",
         }
     }
 
@@ -839,6 +856,8 @@ impl BuiltinAction {
             | BuiltinAction::GraphClear => false,
             BuiltinAction::SwarmToggle => false,
             BuiltinAction::SwarmSet { .. } | BuiltinAction::SwarmTask { .. } => true,
+            BuiltinAction::LessonsList => false,
+            BuiltinAction::LessonsClear => true,
         }
     }
 }
@@ -1658,6 +1677,7 @@ mod tests {
                 "plugins",
                 "reload-plugins",
                 "session-info",
+                "lessons",
                 "feedback",
                 "goal",
                 "graph",
@@ -1997,7 +2017,13 @@ mod tests {
             );
         }
         // Always-on commands are still present.
-        for required in ["compact", "always-approve", "context", "session-info"] {
+        for required in [
+            "compact",
+            "always-approve",
+            "context",
+            "session-info",
+            "lessons",
+        ] {
             assert!(
                 names.iter().any(|n| n == required),
                 "{required} should be present, got: {names:?}",
@@ -2350,7 +2376,13 @@ mod tests {
                 "{forbidden} must not be advertised under default fail-closed availability, got: {names:?}",
             );
         }
-        for required in ["compact", "always-approve", "context", "session-info"] {
+        for required in [
+            "compact",
+            "always-approve",
+            "context",
+            "session-info",
+            "lessons",
+        ] {
             assert!(
                 names.iter().any(|n| n == required),
                 "AlwaysOn {required} must always be advertised, got: {names:?}",
@@ -2713,6 +2745,33 @@ mod tests {
             .command_name(),
             "goal"
         );
+    }
+
+    #[test]
+    fn lessons_resolves_each_form_to_its_own_action() {
+        let resolve = |args: &str| {
+            BUILTIN_COMMANDS
+                .iter()
+                .find(|c| c.name == "lessons")
+                .map(|c| (c.resolve)(args))
+        };
+        assert!(matches!(resolve(""), Some(BuiltinAction::LessonsList)));
+        assert!(matches!(resolve("list"), Some(BuiltinAction::LessonsList)));
+        assert!(matches!(
+            resolve("clear"),
+            Some(BuiltinAction::LessonsClear)
+        ));
+        // An unknown subcommand lists rather than erroring: an empty answer is
+        // informative, a rejection is not.
+        assert!(matches!(resolve("bogus"), Some(BuiltinAction::LessonsList)));
+    }
+
+    #[test]
+    fn lessons_command_name_and_args() {
+        assert_eq!(BuiltinAction::LessonsList.command_name(), "lessons");
+        assert_eq!(BuiltinAction::LessonsClear.command_name(), "lessons");
+        assert!(!BuiltinAction::LessonsList.args_provided());
+        assert!(BuiltinAction::LessonsClear.args_provided());
     }
 
     #[test]
