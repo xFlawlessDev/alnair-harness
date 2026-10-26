@@ -337,6 +337,7 @@ pub mod tool_index;
 pub(crate) mod turn_completion;
 pub mod unified_list;
 mod user_message;
+pub(crate) mod web_target;
 pub(crate) mod wire_tags;
 pub mod worktree;
 pub mod worktree_pool;

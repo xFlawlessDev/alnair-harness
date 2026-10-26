@@ -13,6 +13,26 @@ what the Alnair fork adds, changes, or removes.
 
 Nothing yet.
 
+## [0.1.4] — 2026-10-26
+
+### Changed
+
+- **`web_search` and `web_fetch` follow the active provider.** Both tools now
+  call the provider connection serving the session's current model —
+  `POST {base}/search` with `{query, max_results, model}` and
+  `POST {base}/web/fetch` with `{url}` — instead of being gated on a Kimi Code
+  OAuth session. The endpoint is resolved per request, so a `/model` switch
+  moves both tools to the new provider without a toolset rebuild. Kimi Code
+  keeps its own wire on the same paths. A provider without `/search` leaves
+  `web_search` unavailable with a clear message; `web_fetch` keeps its local
+  pipeline as the fallback. The tool names, arguments and result shape are
+  unchanged.
+
+### Fixed
+
+- `crates/codegen/alnair-bin/build.rs` is rustfmt-clean, so
+  `cargo fmt --all --check` passes again.
+
 ## [0.1.3] — 2026-10-23
 
 ### Added

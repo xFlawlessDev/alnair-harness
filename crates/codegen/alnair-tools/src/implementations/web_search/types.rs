@@ -1,22 +1,18 @@
 use indexmap::IndexMap;
 
-/// Configuration for the `web_search` tool (PRD F5).
+/// Configuration for the `web_search` tool.
 ///
-/// The Kimi search service exists only on the Kimi Code subscription channel
-/// (`POST {coding_base}/search`, kimi-cli `auth/platforms.py`:
-/// `search_url=f"{_kimi_code_base_url()}/search"`), so the shell enables this
-/// only for OAuth sessions — API-key-only sessions get `Disabled` and the
-/// tool is absent.
+/// This is the **enable gate**, not the endpoint: the endpoint is resolved per
+/// call from the session's [`crate::types::web_provider::WebTargetProvider`]
+/// (carried on `SessionContext`), because a session can switch providers
+/// mid-session and a captured URL would keep posting to the provider it started
+/// on. `Disabled` means the tool is not registered at all.
 #[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
 #[serde(tag = "status", rename_all = "snake_case")]
 pub enum WebSearchConfig {
     #[default]
     Disabled,
     Enabled {
-        search_url: String,
-        /// Initial bearer token; a live token from the api-key provider
-        /// (OAuth refresh) takes precedence per request.
-        api_key: String,
         #[serde(default, skip_serializing_if = "IndexMap::is_empty")]
         extra_headers: IndexMap<String, String>,
     },
@@ -27,21 +23,25 @@ impl WebSearchConfig {
         matches!(self, Self::Enabled { .. })
     }
 
-    /// A copy safe to return to clients, with `api_key` redacted.
-    pub fn redacted(&self) -> Self {
+    /// Extra headers for every search request, empty when disabled.
+    pub fn extra_headers(&self) -> &IndexMap<String, String> {
         match self {
-            Self::Disabled => Self::Disabled,
-            Self::Enabled {
-                search_url,
-                extra_headers,
-                ..
-            } => Self::Enabled {
-                search_url: search_url.clone(),
-                api_key: "***REDACTED***".to_string(),
-                extra_headers: extra_headers.clone(),
-            },
+            Self::Disabled => empty_headers(),
+            Self::Enabled { extra_headers } => extra_headers,
         }
     }
+
+    /// A copy safe to return to clients. Nothing credential-bearing lives here,
+    /// so this is the identity apart from normalizing `Disabled`.
+    pub fn redacted(&self) -> Self {
+        self.clone()
+    }
+}
+
+fn empty_headers() -> &'static IndexMap<String, String> {
+    static EMPTY: std::sync::LazyLock<IndexMap<String, String>> =
+        std::sync::LazyLock::new(IndexMap::new);
+    &EMPTY
 }
 
 #[cfg(test)]
@@ -52,40 +52,38 @@ mod tests {
     fn test_config_default_is_disabled() {
         let config = WebSearchConfig::default();
         assert!(!config.is_enabled());
-    }
-
-    #[test]
-    fn test_config_redacted() {
-        let mut headers = IndexMap::new();
-        headers.insert("X-Custom".to_string(), "value".to_string());
-        let config = WebSearchConfig::Enabled {
-            search_url: "https://api.kimi.com/coding/v1/search".to_string(),
-            api_key: "secret-key-12345".to_string(),
-            extra_headers: headers,
-        };
-        match config.redacted() {
-            WebSearchConfig::Enabled {
-                search_url,
-                api_key,
-                extra_headers,
-            } => {
-                assert_eq!(api_key, "***REDACTED***");
-                assert_eq!(search_url, "https://api.kimi.com/coding/v1/search");
-                assert_eq!(extra_headers.get("X-Custom").unwrap(), "value");
-            }
-            WebSearchConfig::Disabled => panic!("expected Enabled variant"),
-        }
+        assert!(config.extra_headers().is_empty());
     }
 
     #[test]
     fn test_config_serde_roundtrip() {
+        let mut headers = IndexMap::new();
+        headers.insert("X-Custom".to_string(), "value".to_string());
         let config = WebSearchConfig::Enabled {
-            search_url: "https://api.kimi.com/coding/v1/search".to_string(),
-            api_key: "key".to_string(),
-            extra_headers: IndexMap::new(),
+            extra_headers: headers,
         };
         let json = serde_json::to_string(&config).unwrap();
         let parsed: WebSearchConfig = serde_json::from_str(&json).unwrap();
         assert!(parsed.is_enabled());
+        assert_eq!(
+            parsed.extra_headers().get("X-Custom").map(String::as_str),
+            Some("value")
+        );
+    }
+
+    #[test]
+    fn redacted_keeps_headers_and_enablement() {
+        let mut headers = IndexMap::new();
+        headers.insert("X-Custom".to_string(), "value".to_string());
+        let config = WebSearchConfig::Enabled {
+            extra_headers: headers,
+        };
+        let redacted = config.redacted();
+        assert!(redacted.is_enabled());
+        assert_eq!(
+            redacted.extra_headers().get("X-Custom").map(String::as_str),
+            Some("value")
+        );
+        assert!(!WebSearchConfig::Disabled.redacted().is_enabled());
     }
 }

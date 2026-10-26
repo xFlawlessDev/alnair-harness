@@ -641,6 +641,7 @@ async fn file_toolset_override_e2e_to_finalized_toolset() {
         memory_backend: None,
         web_search_config: alnair_tools::implementations::web_search::WebSearchConfig::default(),
         web_fetch_config: Default::default(),
+        web_target: None,
         lsp: None,
         app_builder_deployer_config: alnair_tools::implementations::alnair::deploy_app::AppBuilderDeployerConfig::default(),
         api_key_provider: None,

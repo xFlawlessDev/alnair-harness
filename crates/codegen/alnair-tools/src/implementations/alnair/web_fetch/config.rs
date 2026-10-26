@@ -43,8 +43,13 @@ pub struct WebFetchParams {
     pub proxy_endpoint: Option<String>,
     /// Kimi fetch service endpoint (`POST {coding_base}/fetch`, PRD F5).
     /// Set by the shell for Kimi Code OAuth sessions; when present, the
-    /// tool tries the service first and falls back to the local pipeline
-    /// on any failure (kimi-cli `tools/web/fetch.py FetchURL.__call__`).
+    /// tool tries the service before the local pipeline and falls back on
+    /// any failure (kimi-cli `tools/web/fetch.py FetchURL.__call__`).
+    ///
+    /// The provider connection's own endpoint is NOT here: it is resolved per
+    /// call from the session's
+    /// [`WebTargetProvider`](crate::types::web_provider::WebTargetProvider),
+    /// because `/model` can move the session to another provider mid-session.
     #[serde(default)]
     pub service_url: Option<String>,
     /// Opt-in for loopback targets; off means no local access.

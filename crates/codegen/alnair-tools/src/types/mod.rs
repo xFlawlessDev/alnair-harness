@@ -21,6 +21,7 @@ pub mod tool;
 pub mod tool_index;
 pub mod tool_io;
 pub mod tool_metadata;
+pub mod web_provider;
 pub use api_key_provider::{ApiKeyProvider, SharedApiKeyProvider};
 pub use claude_alias::{alnair_names, alnair_names_for, claude_names_for, kind_for};
 pub use compat::{
@@ -35,3 +36,7 @@ pub use schema::AlnairIntegerSchema;
 pub use session_mode::SessionMode;
 pub use tool_index::{SearchSnapshot, ServerSummary, ToolIndex, ToolSearchIndex, ToolSearchResult};
 pub use tool_io::{MCPToolInput, ToolInput};
+pub use web_provider::{
+    SharedWebTargetProvider, WebAuthScheme, WebEndpoint, WebProviderTarget, WebTargetProvider,
+    WebWire,
+};

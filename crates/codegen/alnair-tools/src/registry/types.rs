@@ -251,6 +251,12 @@ pub struct SessionContext {
     /// is created and injected into `Resources` so the `web_fetch` tool can
     /// fetch URLs. When `Disabled` (default), the tool is not registered.
     pub web_fetch_config: crate::implementations::alnair::web_fetch::WebFetchConfig,
+    /// Resolves the web endpoints of the provider connection serving the
+    /// session's CURRENT model. Both web tools call through it per request, so
+    /// a `/model` switch to another provider is picked up without rebuilding
+    /// the toolset. `None` leaves `web_fetch` on its local pipeline and makes
+    /// `web_search` report that the provider serves no search.
+    pub web_target: Option<crate::types::web_provider::SharedWebTargetProvider>,
     /// Optional shared LSP handle — created once by the caller (shell),
     /// passed to every session. Same pattern as `fs` and `backend`.
     /// When `Some`, inserted into `Resources` so `LspTool` can use it.
@@ -959,10 +965,12 @@ impl ToolRegistryBuilder {
         if let Some(memory_backend) = ctx.memory_backend {
             resources.insert(memory_backend);
         }
-        if let Ok(client) = crate::implementations::web_search::client::WebSearchClient::new(
-            &ctx.web_search_config,
-            ctx.api_key_provider.clone(),
-        ) {
+        if let Some(target) = ctx.web_target.clone()
+            && let Ok(client) = crate::implementations::web_search::client::WebSearchClient::new(
+                &ctx.web_search_config,
+                target,
+            )
+        {
             let client = client.with_attribution_callback(ctx.attribution_callback.clone());
             resources.insert(client);
         }
@@ -972,9 +980,10 @@ impl ToolRegistryBuilder {
         if let crate::implementations::alnair::web_fetch::WebFetchConfig::Enabled { params } =
             &ctx.web_fetch_config
         {
-            match crate::implementations::alnair::web_fetch::WebFetchClient::new(
+            match crate::implementations::alnair::web_fetch::WebFetchClient::with_web_target(
                 params,
                 ctx.api_key_provider.clone(),
+                ctx.web_target.clone(),
             ) {
                 Ok(client) => {
                     resources.insert(client);
@@ -1941,6 +1950,7 @@ mod tests {
             memory_backend: None,
             web_search_config: crate::implementations::web_search::WebSearchConfig::default(),
             web_fetch_config: crate::implementations::alnair::web_fetch::WebFetchConfig::default(),
+            web_target: None,
             lsp: None,
             app_builder_deployer_config:
                 crate::implementations::alnair::deploy_app::AppBuilderDeployerConfig::default(),

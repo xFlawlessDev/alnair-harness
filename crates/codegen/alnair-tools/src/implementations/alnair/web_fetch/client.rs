@@ -15,6 +15,7 @@ use super::overflow::{OverflowHandler, RecoveryTools, inline_budget};
 use super::ssrf;
 use crate::implementations::alnair::storage::SessionFileWriter;
 use crate::types::output::{WebFetchContent, WebFetchOutput, WebFetchSourceArtifact};
+use crate::types::web_provider::{WebAuthScheme, WebEndpoint, WebWire};
 use scraper::{Html, Selector};
 
 const DEFAULT_DOWNLOAD_DIR: &str = "downloads";
@@ -31,6 +32,10 @@ pub struct WebFetchClient {
     overflow: OverflowHandler,
     /// Live-token source for the Kimi fetch service (OAuth refresh).
     api_key_provider: Option<crate::types::SharedApiKeyProvider>,
+    /// Resolves the provider connection's own fetch endpoint for the session's
+    /// CURRENT model. `None` for sessions without a provider target (tests, and
+    /// any caller that only wants the local pipeline).
+    web_target: Option<crate::types::web_provider::SharedWebTargetProvider>,
 }
 
 struct ProcessedText {
@@ -46,6 +51,16 @@ impl WebFetchClient {
     pub fn new(
         params: &WebFetchParams,
         api_key_provider: Option<crate::types::SharedApiKeyProvider>,
+    ) -> Result<Self, WebFetchError> {
+        Self::with_web_target(params, api_key_provider, None)
+    }
+
+    /// Build with a live provider-target resolver, so a provider connection's
+    /// own `/web/fetch` is tried before the local pipeline.
+    pub fn with_web_target(
+        params: &WebFetchParams,
+        api_key_provider: Option<crate::types::SharedApiKeyProvider>,
+        web_target: Option<crate::types::web_provider::SharedWebTargetProvider>,
     ) -> Result<Self, WebFetchError> {
         let converter = Arc::new(
             htmd::HtmlToMarkdown::builder()
@@ -68,51 +83,72 @@ impl WebFetchClient {
             video_writer: SessionFileWriter::new("videos", "mp4"),
             overflow: OverflowHandler::new(),
             api_key_provider,
+            web_target,
         })
     }
 
-    /// Fetch through the Kimi fetch service (kimi-cli `_fetch_with_service`):
-    /// `POST {service_url}` with `{"url": ...}`, `Accept: text/markdown`,
-    /// OAuth bearer, and `X-Msh-Tool-Call-Id`. The 200 body IS the extracted
-    /// markdown; it still runs through the overflow budget so a huge page
-    /// cannot flood the context.
+    /// Fetch through a provider-side fetch service.
+    ///
+    /// Two wires, distinguished by [`WebWire`]:
+    ///
+    /// - **Provider** — `POST {base}/web/fetch` with `{"url": ...}`. The
+    ///   response body is the page as the provider served it (usually HTML),
+    ///   so it runs through the same markdown conversion as a local fetch.
+    /// - **Kimi** — `POST {service_url}` with `{"url": ...}`,
+    ///   `Accept: text/markdown`, OAuth bearer and `X-Msh-Tool-Call-Id`; the
+    ///   200 body IS the extracted markdown (kimi-cli `_fetch_with_service`).
+    ///
+    /// Either way the result still runs through the overflow budget so a huge
+    /// page cannot flood the context.
     async fn fetch_via_service(
         &self,
-        service_url: &str,
+        endpoint: &WebEndpoint,
+        bearer: &str,
         url_str: &str,
         tool_call_id: &str,
         session_folder: Option<&Path>,
         tools: RecoveryTools<'_>,
     ) -> Result<WebFetchOutput, WebFetchError> {
-        let Some(bearer) =
-            crate::types::api_key_provider::resolve_bearer(self.api_key_provider.as_ref()).await
-        else {
-            return Err(WebFetchError::ServiceUnavailable(
-                "no live bearer token for the fetch service".to_string(),
-            ));
-        };
         let http = self.http.get_or_rebuild()?;
-        let response = http
-            .post(service_url)
-            .header("Authorization", format!("Bearer {bearer}"))
-            .header("Accept", "text/markdown")
-            .header("X-Msh-Tool-Call-Id", tool_call_id)
+        let mut request = match endpoint.auth_scheme {
+            WebAuthScheme::Bearer => http
+                .post(&endpoint.url)
+                .header("Authorization", format!("Bearer {bearer}")),
+            WebAuthScheme::XApiKey => http.post(&endpoint.url).header("x-api-key", bearer),
+        }
+        .header("Accept", "text/markdown");
+        if endpoint.wire == WebWire::Kimi {
+            request = request.header("X-Msh-Tool-Call-Id", tool_call_id);
+        }
+        let response = request
             .json(&serde_json::json!({ "url": url_str }))
             .send()
             .await
-            .map_err(|e| WebFetchError::ServiceUnavailable(e.to_string()))?;
+            .map_err(|e| WebFetchError::ServiceUnavailable(format!("{}: {e}", endpoint.url)))?;
         let status = response.status();
         if !status.is_success() {
             return Err(WebFetchError::ServiceUnavailable(format!(
-                "fetch service returned {status}"
+                "fetch service {} returned {status}",
+                endpoint.url
             )));
         }
+        // The Kimi service always answers markdown; a provider returns whatever
+        // the page was, so its own content type decides whether to convert.
+        let content_type = response
+            .headers()
+            .get(CONTENT_TYPE)
+            .and_then(|v| v.to_str().ok())
+            .map(str::to_owned)
+            .unwrap_or_else(|| match endpoint.wire {
+                WebWire::Kimi => "text/markdown".to_string(),
+                WebWire::Provider => "text/html".to_string(),
+            });
         let body = response
             .text()
             .await
-            .map_err(|e| WebFetchError::ServiceUnavailable(e.to_string()))?;
+            .map_err(|e| WebFetchError::ServiceUnavailable(format!("{}: {e}", endpoint.url)))?;
         let processed = self
-            .process_text_content(body.as_bytes(), "text/markdown", session_folder, tools)
+            .process_text_content(body.as_bytes(), &content_type, session_folder, tools)
             .await;
         Ok(WebFetchOutput::Content(WebFetchContent {
             url: url_str.to_string(),
@@ -126,6 +162,18 @@ impl WebFetchClient {
             inline_fallback: processed.inline_fallback,
             output_location: None,
         }))
+    }
+
+    /// The provider-side fetch endpoint, with its live credential resolved.
+    ///
+    /// Returns `None` when this session has no provider endpoint, or when the
+    /// endpoint needs a credential and none is available — a request without
+    /// one would only 401, so the local pipeline is the better answer.
+    async fn provider_fetch_endpoint(&self) -> Option<(WebEndpoint, String)> {
+        let target = self.web_target.as_ref()?.target().await;
+        let endpoint = target.fetch?;
+        let credential = target.credential?;
+        Some((endpoint, credential))
     }
 
     /// Fetch a URL and return its content as markdown.
@@ -158,12 +206,15 @@ impl WebFetchClient {
         // Before any egress: the service must not see this.
         ssrf::check_ssrf(&url, self.params.allow_local()).await?;
 
-        // Kimi fetch service first (OAuth sessions); local pipeline is the
-        // fallback on any service failure (kimi-cli fetch.py `__call__`).
-        if let Some(service_url) = self.params.service_url.clone() {
+        // Provider-side fetch first (the provider-agnostic path), then the
+        // Kimi service, then the local pipeline. Every service failure falls
+        // through: a provider that cannot reach a URL may still be reachable
+        // from here, and a fabricated empty success would be worse than both.
+        if let Some((endpoint, credential)) = self.provider_fetch_endpoint().await {
             match self
                 .fetch_via_service(
-                    &service_url,
+                    &endpoint,
+                    &credential,
                     &url_str,
                     tool_call_id,
                     session_folder,
@@ -180,8 +231,59 @@ impl WebFetchClient {
                     return Ok(output);
                 }
                 Err(e) => {
-                    tracing::warn!(error = %e, url = %url_str, "Kimi fetch service failed; falling back to local fetch");
+                    tracing::warn!(
+                        error = %e, url = %url_str, endpoint = %endpoint.url,
+                        "provider fetch service failed; trying the next source"
+                    );
                 }
+            }
+        }
+
+        // Kimi fetch service (OAuth sessions); local pipeline is the fallback
+        // on any service failure (kimi-cli fetch.py `__call__`).
+        if let Some(service_url) = self.params.service_url.clone() {
+            let live =
+                crate::types::api_key_provider::resolve_bearer(self.api_key_provider.as_ref())
+                    .await;
+            let endpoint = WebEndpoint {
+                url: service_url,
+                wire: WebWire::Kimi,
+                model: None,
+                auth_scheme: WebAuthScheme::Bearer,
+            };
+            match live {
+                None => {
+                    tracing::warn!(
+                        url = %url_str,
+                        "Kimi fetch service configured without a live bearer; using the local pipeline"
+                    );
+                }
+                Some(bearer) => match self
+                    .fetch_via_service(
+                        &endpoint,
+                        &bearer,
+                        &url_str,
+                        tool_call_id,
+                        session_folder,
+                        RecoveryTools {
+                            read: read_tool_name,
+                            execute: execute_tool_name,
+                        },
+                    )
+                    .await
+                {
+                    Ok(output) => {
+                        let mut cache = self.cache.write();
+                        cache.insert_text(url_str, output.clone(), false);
+                        return Ok(output);
+                    }
+                    Err(e) => {
+                        tracing::warn!(
+                            error = %e, url = %url_str,
+                            "Kimi fetch service failed; falling back to local fetch"
+                        );
+                    }
+                },
             }
         }
 
@@ -924,9 +1026,16 @@ mod tests {
         };
         let provider = crate::types::api_key_provider::test_support::fixed_provider("live-token");
         let client = WebFetchClient::new(&params, Some(provider)).unwrap();
+        let endpoint = WebEndpoint {
+            url: params.service_url.clone().unwrap(),
+            wire: WebWire::Kimi,
+            model: None,
+            auth_scheme: WebAuthScheme::Bearer,
+        };
         let output = client
             .fetch_via_service(
-                &params.service_url.clone().unwrap(),
+                &endpoint,
+                "live-token",
                 "https://docs.rs/serde",
                 "call-7",
                 None,
@@ -964,6 +1073,12 @@ mod tests {
             read: None,
             execute: None,
         };
+        let endpoint = WebEndpoint {
+            url: url.clone(),
+            wire: WebWire::Kimi,
+            model: None,
+            auth_scheme: WebAuthScheme::Bearer,
+        };
 
         // 503 from the service → ServiceUnavailable.
         let provider = crate::types::api_key_provider::test_support::fixed_provider("t");
@@ -973,18 +1088,22 @@ mod tests {
         };
         let client = WebFetchClient::new(&params, Some(provider)).unwrap();
         let err = client
-            .fetch_via_service(&url, "https://docs.rs/x", "c", None, tools())
+            .fetch_via_service(&endpoint, "t", "https://docs.rs/x", "c", None, tools())
             .await
             .unwrap_err();
         assert!(matches!(err, WebFetchError::ServiceUnavailable(_)), "{err}");
+        assert!(
+            err.to_string().contains("/fetch"),
+            "the error must name the endpoint that failed: {err}"
+        );
 
-        // No bearer available → ServiceUnavailable without any HTTP call.
+        // No credential at all → the local pipeline is chosen upstream, and a
+        // direct call still reports the endpoint rather than fabricating a hit.
         let client = WebFetchClient::new(&params, None).unwrap();
-        let err = client
-            .fetch_via_service(&url, "https://docs.rs/x", "c", None, tools())
-            .await
-            .unwrap_err();
-        assert!(matches!(err, WebFetchError::ServiceUnavailable(_)), "{err}");
+        assert!(
+            client.provider_fetch_endpoint().await.is_none(),
+            "an endpoint without a credential must not be attempted"
+        );
     }
 
     /// A blocked target must never reach the remote fetch service.

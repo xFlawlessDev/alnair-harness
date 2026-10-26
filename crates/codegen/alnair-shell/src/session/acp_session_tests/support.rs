@@ -92,6 +92,7 @@ async fn test_agent_from_config(
         memory_backend: None,
         web_search_config: Default::default(),
         web_fetch_config: Default::default(),
+        web_target: None,
         lsp: None,
         app_builder_deployer_config: Default::default(),
         api_key_provider: None,

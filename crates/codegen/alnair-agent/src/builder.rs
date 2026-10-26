@@ -92,6 +92,11 @@ pub struct AgentBuilder {
     /// registered as local Function tools.
     backend_search: bool,
     web_fetch_config: alnair_tools::implementations::alnair::web_fetch::WebFetchConfig,
+    /// Resolves the web endpoints of the provider connection serving the
+    /// session's current model (see [`alnair_tools::types::web_provider`]).
+    /// Both web tools call it per request, so a `/model` switch to another
+    /// provider is picked up without rebuilding the toolset.
+    web_target: Option<alnair_tools::types::web_provider::SharedWebTargetProvider>,
     lsp: Option<std::sync::Arc<dyn alnair_tools::implementations::lsp::LspBackend>>,
     app_builder_deployer_config:
         alnair_tools::implementations::alnair::deploy_app::AppBuilderDeployerConfig,
@@ -211,6 +216,7 @@ impl AgentBuilder {
             web_search_config: Default::default(),
             backend_search: false,
             web_fetch_config: Default::default(),
+            web_target: None,
             lsp: None,
             app_builder_deployer_config: Default::default(),
             write_file_enabled: true,
@@ -434,6 +440,18 @@ impl AgentBuilder {
         config: alnair_tools::implementations::alnair::web_fetch::WebFetchConfig,
     ) -> Self {
         self.web_fetch_config = config;
+        self
+    }
+    /// Set the live resolver for the provider connection's web endpoints.
+    ///
+    /// Both `web_search` and `web_fetch` call it per request, so a session that
+    /// switches providers mid-run reaches the new provider's `/search` and
+    /// `/web/fetch` without a toolset rebuild.
+    pub fn with_web_target(
+        mut self,
+        target: Option<alnair_tools::types::web_provider::SharedWebTargetProvider>,
+    ) -> Self {
+        self.web_target = target;
         self
     }
     pub fn with_lsp(
@@ -986,6 +1004,7 @@ impl AgentBuilder {
                 memory_backend: self.memory_backend,
                 web_search_config: self.web_search_config,
                 web_fetch_config: self.web_fetch_config,
+                web_target: self.web_target,
                 lsp: self.lsp,
                 app_builder_deployer_config: self.app_builder_deployer_config,
                 api_key_provider: self.api_key_provider,
@@ -2135,8 +2154,6 @@ mod tests {
         )
         .from_definition(definition)
         .with_web_search_config(WebSearchConfig::Enabled {
-            search_url: "https://api.kimi.example/coding/v1/search".into(),
-            api_key: "test-key".into(),
             extra_headers: Default::default(),
         })
         .with_web_fetch_config(WebFetchConfig::Enabled {
@@ -2259,8 +2276,6 @@ mod tests {
         use alnair_tools::notification::ToolNotificationHandle;
         let web_search_config = if web_search_enabled {
             WebSearchConfig::Enabled {
-                search_url: "https://api.kimi.example/coding/v1/search".into(),
-                api_key: "test-key".into(),
                 extra_headers: Default::default(),
             }
         } else {

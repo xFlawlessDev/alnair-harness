@@ -93,6 +93,10 @@ pub(crate) struct AgentRebuildSpec {
     pub web_search_config: WebSearchConfig,
     pub backend_search: bool,
     pub web_fetch_config: WebFetchConfig,
+    /// Live resolver for the provider connection's web endpoints. Rebuilt with
+    /// the harness so a provider switch keeps both web tools pointed at the
+    /// model the session now samples with.
+    pub web_target: Option<alnair_tools::types::web_provider::SharedWebTargetProvider>,
     pub app_builder_deployer_config: AppBuilderDeployerConfig,
     pub write_file_enabled: bool,
     pub subagents_enabled: bool,
@@ -185,6 +189,7 @@ impl AgentRebuildSpec {
             web_search_config,
             backend_search,
             web_fetch_config,
+            web_target,
             app_builder_deployer_config,
             write_file_enabled,
             subagents_enabled,
@@ -238,6 +243,7 @@ impl AgentRebuildSpec {
         .with_backend_search(*backend_search)
         .with_app_builder_deployer_config(app_builder_deployer_config.clone())
         .with_web_fetch_config(web_fetch_config.clone())
+        .with_web_target(web_target.clone())
         .with_write_file_enabled(*write_file_enabled)
         .with_fs(fs_backend.clone())
         .with_subagents_enabled(*subagents_enabled)
@@ -379,6 +385,7 @@ pub(crate) fn test_rebuild_spec_default() -> Arc<AgentRebuildSpec> {
         web_search_config: WebSearchConfig::default(),
         backend_search: false,
         web_fetch_config: WebFetchConfig::Disabled,
+        web_target: None,
         app_builder_deployer_config: AppBuilderDeployerConfig::default(),
         write_file_enabled: true,
         subagents_enabled: false,

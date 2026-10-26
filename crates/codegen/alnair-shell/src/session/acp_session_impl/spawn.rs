@@ -696,6 +696,17 @@ pub(crate) async fn spawn_session_actor(
         }
         Arc::new(TokioMutex::new(state))
     };
+    // The web tools resolve their provider connection per request, so the
+    // endpoints follow a `/model` switch without a toolset rebuild. Built here
+    // because the chat-state handle (the live model + credential) exists only
+    // from this point on. `web_fetch` alone is enough to need it: its provider
+    // endpoint is resolved through the same target.
+    let web_target = (web_search_config.is_enabled() || web_fetch_config.is_enabled()).then(|| {
+        crate::session::web_target::SessionWebTarget::from_parts(
+            models_manager.clone(),
+            chat_state_handle.clone(),
+        ) as alnair_tools::types::web_provider::SharedWebTargetProvider
+    });
     let rebuild_spec = std::sync::Arc::new(crate::session::agent_rebuild::AgentRebuildSpec {
         working_directory: tool_context.cwd.as_path().to_path_buf(),
         terminal_backend: terminal_backend.clone(),
@@ -717,6 +728,7 @@ pub(crate) async fn spawn_session_actor(
         web_search_config: web_search_config.clone(),
         backend_search: backend_tools_enabled,
         web_fetch_config: web_fetch_config.clone(),
+        web_target,
         app_builder_deployer_config: app_builder_deployer_config.clone(),
         write_file_enabled,
         subagents_enabled,

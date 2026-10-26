@@ -882,12 +882,16 @@ impl MvpAgent {
         use alnair_tools::implementations::alnair::deploy_app::AppBuilderDeployerConfig;
         AppBuilderDeployerConfig::Disabled
     }
-    /// Web search config (PRD F5). The Kimi search service exists only on
-    /// the Kimi Code subscription channel (`POST {coding_base}/search`,
-    /// kimi-cli `auth/platforms.py`), so this is `Enabled` only for OAuth
-    /// sessions — API-key-only sessions get `Disabled` and the tool is
-    /// absent. The live token is refreshed per request via the session
-    /// api-key provider; the config key is just the bootstrap value.
+    /// Web search enable gate.
+    ///
+    /// Search is no longer a Kimi Code service: every provider connection that
+    /// serves the OpenAI-compatible extension wire answers `{base}/search`, so
+    /// the tool is offered whenever the session has ANY provider credential.
+    /// The endpoint, wire and credential are resolved per request by
+    /// [`crate::session::web_target::SessionWebTarget`], because a `/model`
+    /// switch can move the session to a different provider mid-run.
+    ///
+    /// `--disable-web-search` is the kill switch; it also disables `web_fetch`.
     pub(super) fn prepare_web_search_config(
         &self,
     ) -> alnair_tools::implementations::WebSearchConfig {
@@ -895,14 +899,17 @@ impl MvpAgent {
         if self.cfg.borrow().disable_web_search {
             return WebSearchConfig::Disabled;
         }
-        let Some(auth) = self.current_or_buffered_auth().filter(|a| a.is_session_auth()) else {
-            tracing::info!("web_search disabled: no Kimi Code OAuth session");
+        let has_credential = self.current_or_buffered_auth().is_some()
+            || self
+                .models_manager
+                .models()
+                .values()
+                .any(|entry| entry.has_own_credentials());
+        if !has_credential {
+            tracing::info!("web_search disabled: no provider credential available");
             return WebSearchConfig::Disabled;
-        };
-        let base = self.cfg.borrow().endpoints.proxy_url();
+        }
         WebSearchConfig::Enabled {
-            search_url: format!("{}/search", base.trim_end_matches('/')),
-            api_key: auth.key,
             extra_headers: indexmap::IndexMap::new(),
         }
     }
@@ -958,20 +965,11 @@ impl MvpAgent {
             tracing::info!("web_fetch disabled: allowed_domains is explicitly empty");
             return WebFetchConfig::Disabled;
         }
-        // PRD F5: the Kimi fetch service exists only on the OAuth channel.
-        // TOML/env may pin their own service_url (dev override); otherwise
-        // OAuth sessions get `{coding_base}/fetch` and API-key sessions
-        // stay local-only.
-        if params.service_url.is_none()
-            && self
-                .current_or_buffered_auth()
-                .is_some_and(|a| a.is_session_auth())
-        {
-            params.service_url = Some(format!(
-                "{}/fetch",
-                cfg.endpoints.proxy_url().trim_end_matches('/')
-            ));
-        }
+        // The provider connection's own `/web/fetch` is NOT pinned here: it is
+        // resolved per request by the session's web target, which follows a
+        // `/model` switch and re-reads the credential. `service_url` remains for
+        // an explicit override; when it is unset the resolver's endpoint is the
+        // only service path, on every provider including Kimi Code.
         WebFetchConfig::Enabled { params }
     }
     /// Construct from pre-built components. Use when the caller needs the
