@@ -597,6 +597,12 @@ pub struct AppView {
     pub tabs: crate::app::tabs::SessionTabs,
     /// Hit rects from the last strip render, for mouse routing.
     pub tab_hit_rects: crate::views::tab_strip::TabStripRendered,
+    /// Pinned window start for the tab strip, or `None` to follow the active
+    /// chip. `None` is the resting state; only an explicit scroll of the strip
+    /// (wheel, or a click on a `‹` / `›` edge marker) pins it, and every
+    /// activation — tab click, `Ctrl+PageDown`, open, close, reopen — clears it
+    /// again, because after those the interesting chip IS the active one.
+    pub tab_scroll: Option<usize>,
     /// `[tabs] enabled` from config; false hides the strip entirely.
     pub tabs_enabled: bool,
     /// Which scope the shared store file was last read/written with.
@@ -1113,6 +1119,7 @@ impl AppView {
             agents: IndexMap::new(),
             tabs: crate::app::tabs::SessionTabs::new(),
             tab_hit_rects: crate::views::tab_strip::TabStripRendered::default(),
+            tab_scroll: None,
             tabs_enabled: true,
             tabs_scope: crate::app::tabs::store::TabScope::Global,
             tab_store_stamp: None,
@@ -1387,6 +1394,64 @@ impl AppView {
         }
         choice
     }
+    /// Whether the tab strip was painted at `(column, row)` on the last frame.
+    ///
+    /// Derived from the painted hit rects rather than from a stored row range:
+    /// the strip is carved off the top of the view area inside the draw closure,
+    /// so the last frame's rects are the only record of where it actually
+    /// landed. An empty chip row means nothing was painted.
+    fn tab_row_owning(&self, column: u16, row: u16) -> bool {
+        self.tab_hit_rects
+            .tabs
+            .iter()
+            .any(|hit| hit.rect.y == row && (hit.rect.x..hit.rect.right()).contains(&column))
+            || self
+                .tab_hit_rects
+                .new_session
+                .is_some_and(|r| r.y == row && (r.x..r.right()).contains(&column))
+            || self
+                .tab_hit_rects
+                .scroll_back
+                .is_some_and(|r| r.y == row && (r.x..r.right()).contains(&column))
+            || self
+                .tab_hit_rects
+                .scroll_forward
+                .is_some_and(|r| r.y == row && (r.x..r.right()).contains(&column))
+    }
+
+    /// Move the tab strip's window by one chip. Returns whether it moved.
+    ///
+    /// The step is relative to the window the last frame actually painted
+    /// (`tab_hit_rects.window`), not to the active chip: once the user is
+    /// browsing, "one more to the right" has to mean one more from what they can
+    /// see. Scroll to an end disarms the pin, so the strip falls back to
+    /// following the active chip on the next activation rather than staying
+    /// stuck at an edge.
+    pub(crate) fn scroll_tab_strip(&mut self, forward: bool) -> bool {
+        let total = self.tabs.len();
+        if total == 0 {
+            return false;
+        }
+        let window = &self.tab_hit_rects.window;
+        let current = self.tab_scroll.unwrap_or(window.start);
+        let next = if forward {
+            (current + 1).min(total - 1)
+        } else {
+            current.saturating_sub(1)
+        };
+        if next == current && self.tab_scroll.is_some() {
+            // Already at an end of the list: nothing to reveal, so let the strip
+            // go back to following the active chip.
+            self.tab_scroll = None;
+            return true;
+        }
+        if next == current {
+            return false;
+        }
+        self.tab_scroll = Some(next);
+        true
+    }
+
     /// Status of a tab, for the strip's glyph.
     ///
     /// Locally-hosted sessions answer from their own `AgentView` (the most
@@ -1895,6 +1960,21 @@ impl AppView {
         }
         if let Event::Mouse(mouse) = ev {
             self.last_mouse_pos = Some((mouse.column, mouse.row));
+            // A wheel over the tab row scrolls the strip rather than the view
+            // body underneath it: the row is chrome shared by every surface, and
+            // a user pointing at a half-visible chip expects the strip to move,
+            // not the transcript.
+            if matches!(
+                mouse.kind,
+                MouseEventKind::ScrollUp | MouseEventKind::ScrollDown
+            ) && self.tab_row_owning(mouse.column, mouse.row)
+            {
+                let forward = matches!(mouse.kind, MouseEventKind::ScrollDown);
+                return match self.scroll_tab_strip(forward) {
+                    true => InputOutcome::Changed,
+                    false => InputOutcome::Unchanged,
+                };
+            }
             // The tab strip is chrome shared by every surface, so it claims the
             // click before the view's own hit-testing sees it.
             if matches!(mouse.kind, MouseEventKind::Down(MouseButton::Left))
@@ -1910,6 +1990,12 @@ impl AppView {
                     }
                     TabHitTarget::CloseTab(session_id) => {
                         InputOutcome::Action(Action::CloseTabId(session_id))
+                    }
+                    TabHitTarget::ScrollTabs { forward } => {
+                        return match self.scroll_tab_strip(forward) {
+                            true => InputOutcome::Changed,
+                            false => InputOutcome::Unchanged,
+                        };
                     }
                 };
             }
@@ -3577,14 +3663,6 @@ impl AppView {
         }
         self.maybe_trigger_small_screen_tip();
         let compact = self.appearance.prompt.compact;
-        let (header_pad_left, header_pad_right, header_pad_top) = {
-            let layout_cfg = &self.appearance.scrollback.layout;
-            (
-                layout_cfg.eff_hpad_left(compact),
-                layout_cfg.eff_hpad_right(compact),
-                layout_cfg.eff_outer_vpad(compact),
-            )
-        };
         let scroll_debug_panel = self.scroll_debug_panel();
         let dev_fps_rows = self.dev_fps_rows();
         let fps_overlay = self.fps_hud.overlay(dev_fps_rows);
@@ -3616,6 +3694,7 @@ impl AppView {
             Vec::new()
         };
         let tab_active = self.tabs.active_index();
+        let tab_scroll = self.tab_scroll;
         let Self {
             active_view,
             agents,
@@ -3687,6 +3766,7 @@ impl AppView {
                     let params = crate::views::tab_strip::TabStripParams {
                         chips: &tab_chips,
                         active: tab_active,
+                        offset: tab_scroll,
                     };
                     *tab_hit_rects = crate::views::tab_strip::render_tab_strip(
                         strip,
@@ -3876,63 +3956,23 @@ impl AppView {
                         }
                         ActiveView::Agent(id) => {
                             let overlay_focused = false;
+                            // A session opened from the dashboard is an ordinary
+                            // agent view. It used to grow a `{i}/{n} [‹][›]
+                            // [Dashboard]` header band on top of the tab strip —
+                            // two navigators stacked, one of them with its own
+                            // idea of "which sessions count". The strip is the
+                            // navigator now, and `Ctrl+\` / a neutral Esc still
+                            // return to the dashboard, so the band is gone and
+                            // the agent gets the full view area.
                             let overlay_active = self
                                 .dashboard
                                 .as_ref()
                                 .is_some_and(|d| d.attached_agent == Some(id));
-                            let position: Option<(usize, usize)> = if overlay_active
-                                && let Some(d) = self.dashboard.as_ref()
-                            {
-                                let order = crate::views::dashboard::overlay_cycle_order(d, agents);
-                                order
-                                    .iter()
-                                    .position(|i| *i == id)
-                                    .map(|idx| (idx + 1, order.len()))
-                            } else {
-                                None
-                            };
-                            let (agent_area, header) = if overlay_active {
-                                let theme = crate::theme::Theme::current();
-                                let title = agents
-                                    .get(&id)
-                                    .map(crate::views::session_title::entry_title)
-                                    .unwrap_or_else(|| "(session)".to_string());
-                                let (hover_prev, hover_next, hover_close) = self
-                                    .dashboard
-                                    .as_ref()
-                                    .map(|d| {
-                                        (
-                                            d.overlay_prev_hit.hovered,
-                                            d.overlay_next_hit.hovered,
-                                            d.overlay_close_hit.hovered,
-                                        )
-                                    })
-                                    .unwrap_or((false, false, false));
-                                let header =
-                                    crate::views::dashboard::render_dashboard_session_header(
-                                        f.buffer_mut(),
-                                        view_area,
-                                        &theme,
-                                        &title,
-                                        position,
-                                        hover_prev,
-                                        hover_next,
-                                        hover_close,
-                                        header_pad_left,
-                                        header_pad_right,
-                                        header_pad_top,
-                                    );
-                                match header {
-                                    Some(chrome) => (chrome.content, Some(chrome)),
-                                    None => (view_area, None),
-                                }
-                            } else {
-                                (view_area, None)
-                            };
+                            let agent_area = view_area;
                             if let Some(d) = self.dashboard.as_mut() {
-                                d.overlay_close_hit.set(header.and_then(|c| c.close_rect));
-                                d.overlay_prev_hit.set(header.and_then(|c| c.prev_rect));
-                                d.overlay_next_hit.set(header.and_then(|c| c.next_rect));
+                                d.overlay_close_hit.set(None);
+                                d.overlay_prev_hit.set(None);
+                                d.overlay_next_hit.set(None);
                             }
                             if let Some(agent) = agents.get_mut(&id) {
                                 let show_session_tip =
@@ -4917,6 +4957,7 @@ pub(crate) mod tests {
             agents: indexmap::IndexMap::new(),
             tabs: crate::app::tabs::SessionTabs::new(),
             tab_hit_rects: crate::views::tab_strip::TabStripRendered::default(),
+            tab_scroll: None,
             tabs_enabled: true,
             tabs_scope: crate::app::tabs::store::TabScope::Global,
             tab_store_stamp: None,

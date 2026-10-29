@@ -207,6 +207,21 @@ that is not in front adds the chip **without** moving the cursor — a dashboard
 dispatch leaves the dashboard foregrounded, and stealing the active chip there
 would claim the user is looking at something they are not.
 
+Two corollaries, both learned from the same chip going missing:
+
+- **`switch_to_agent` registers the chip BEFORE its "already the active view"
+  early return.** The promise above ("a session becomes a tab exactly when it
+  becomes the view") is only true if the registration is not skipped when the
+  view was already assigned by someone else — which is exactly what
+  `dispatch_dashboard_attach` does. `register_tab` is idempotent, so the no-op
+  path costs one map lookup. The viewed watermark stays after the early return:
+  a no-op switch is not a new read.
+- **`handle_session_loaded` registers too, it does not only refresh.**
+  `refresh_tab` no-ops when the session is not already a chip, so a LOAD that
+  starts from an unbound placeholder — every dashboard attach of a roster row,
+  any picker resume — bound its id and then never got a tab. Register on the
+  bind, then refresh for the title.
+
 `~/.alnair/run/pager_tabs.json` follows `active_sessions.rs`: a `_in(root, …)`
 seam for tests, `lock_exclusive` held across the whole read-modify-write,
 `replace_file` for the commit, readers lock-free. `NotFound` reads as empty —
@@ -270,6 +285,28 @@ destructive chord read like the reversible one. Both use the same
 disarms both — a confirmation bound to a row that the cursor has left is a
 confirmation for the wrong row.
 
+**Delete works on roster rows too.** The dashboard's "Inactive" section is made
+of `DashboardRowId::Roster` rows — sessions that exist on disk but are not
+loaded in this pager — and their transcript is just as real as a local agent's.
+Restricting delete to `TopLevel` made the chord look like it only worked on
+active/idle sessions; the row kind has nothing to do with whether a transcript
+can be destroyed. A roster delete closes the tab (and marks it in
+`cancelled_tabs`), drops the row from `leader_roster`/`dashboard_local_sessions`
+so the list stops painting a session that is about to be gone, then emits the
+same `Effect::DeleteSession` with the entry's own `cwd`. Subagent rows stay
+refused — they belong to their parent's transcript.
+
+**Every session gets a row, including an empty one.** The dashboard is the
+session list, so it lists sessions it cannot name yet: `is_empty_top_level`
+answers a LABELLING question (`New session #<id>`) and no longer a visibility
+one. It used to hide no-real-turn sessions locally, and `append_roster_rows`
+did the same for untitled roster entries, on the theory that every pager launch
+leaves one behind. That traded quiet for an invisible orphan: `/new` then close
+leaves a real transcript on disk that no row names, so it could not be
+reopened, renamed, or deleted. Both filters are gone — do not reintroduce one
+to "declutter"; a session the user cannot see is a session they cannot clean
+up.
+
 Delete refuses the last session. `dispatch_sessions_confirm_close` refuses it
 too (there would be nothing left to render), and deleting the only transcript
 would leave the pager on Welcome with the agent still holding a handle to a
@@ -283,6 +320,54 @@ Tab chords are context-gated for the same reason `Ctrl+.` is: without the kitty
 keyboard protocol `Ctrl+Tab` arrives as a plain CR, which is `FocusPrompt` /
 `FocusScrollback`. `Ctrl+PageUp/Down` is the primary everywhere; the `Ctrl+Tab`
 variants are added only when `kitty_skip_reason()` is `None`.
+
+### The strip is a window, not a fixed row of five
+
+An overflowing strip used to drop chips off the right edge with no marker and no
+way to reach them. `render_tab_strip` now renders a *window* over the tab list,
+and `TabStripParams::offset` says where that window starts:
+
+- `None` (**resting**) derives the window so the ACTIVE chip is visible. Every
+  activation — tab click, `Ctrl+PageDown`, open, close, reopen, a foreground bind
+  — clears `AppView::tab_scroll`, so this is the state after any of them.
+- `Some(start)` (**scrolled**) is set only by an explicit gesture: a wheel over
+  the strip row, or a click on a `‹` / `›` edge marker. `AppView::scroll_tab_strip`
+  steps from `TabStripRendered::window.start` (what the last frame actually
+  painted), never from the active chip — "one more to the right" has to mean one
+  more from what the user can see. At an end of the list the pin is dropped so the
+  strip falls back to following the active chip.
+
+`TabStripRendered::window` is the painted range, and it is the seam that makes a
+wheel step continue from the last frame instead of re-deriving. `‹` / `›` are
+`TabHitTarget::ScrollTabs { forward }`.
+
+Marker columns come out of the chip budget in `fill_from` BEFORE any chip is
+placed — `SCROLL_MARKER_W` on the left when `start > 0`, on the right whenever a
+chip stays hidden — and the chip run starts after the back marker. Skipping that
+reservation is what lets a marker be painted over a chip and steal its click.
+
+### A session opened from the dashboard has no overlay header
+
+`dispatch_dashboard_attach` still sets `DashboardState::attached_agent` (it is
+what `Ctrl+\` uses to return to the dashboard), but the view no longer grows the
+old `{i}/{n} [‹][›] [Dashboard]` header band. That band and the tab strip were
+two navigators stacked on one screen, each with its own idea of which sessions
+count. `render_dashboard_session_header`, `render_dashboard_session_overlay`,
+`paint_session_title_bar` and `DashboardOverlayChrome` are gone; the attached
+agent draws into the full view area.
+
+**And its footer is the ordinary footer.** `AgentView::in_dashboard_overlay`
+is still set every frame, but only the graduated `Esc`/`Left` back-out reads
+it. It used to change three things in the footer — prepend
+`Ctrl+\:dashboard` / `Ctrl+[/]:agents` / `Ctrl+x:stop`, suppress the
+right-hand status line (branch, cwd, `agent:`, `ctx:`), and re-point the
+shortcuts chip at `Ctrl+.` so `Ctrl+X` was free for stop — and it also pushed
+`When::DashboardOverlay` into the cheatsheet's contexts. All of that was
+overlay chrome compensating for a header that no longer exists, so it is gone:
+a session attached from the dashboard renders byte-identically to one that is
+not. `attached_session_renders_the_same_frame_as_a_plain_one` pins that, and
+any future `in_dashboard_overlay` branch must answer "does this need the
+overlay's own header to make sense?" — if not, it belongs in both cases.
 
 The unread marker is server-authoritative. `Summary.viewed_at` merges
 monotonically, and `SummaryPatch::record_view` **skips the `updated_at` bump** —

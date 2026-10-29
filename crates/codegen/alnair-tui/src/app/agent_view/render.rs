@@ -37,12 +37,8 @@ impl AgentView {
     /// Built only in Rich chrome. Each item is already computed for the status
     /// bar or turn status, so this adds no new state and no new I/O; the branch
     /// read is the same lazy git cache the status bar uses.
-    fn footer_status_line(
-        &self,
-        theme: &Theme,
-        in_dashboard_overlay: bool,
-    ) -> Option<Line<'static>> {
-        if !crate::views::chrome::is_rich() || in_dashboard_overlay {
+    fn footer_status_line(&self, theme: &Theme) -> Option<Line<'static>> {
+        if !crate::views::chrome::is_rich() {
             return None;
         }
         let dim = Style::default().fg(theme.gray_dim).bg(theme.bg_base);
@@ -718,12 +714,11 @@ impl AgentView {
     #[allow(clippy::too_many_arguments)]
     /// Render the agent into `area`.
     ///
-    /// `in_dashboard_overlay` is `true` when this view is being
-    /// rendered inside the dashboard's session-overlay; it appends
-    /// `Ctrl+\\:dashboard` and `Ctrl+[/]:agents` hints to the bottom shortcuts
-    /// bar so the user can discover the keyboard back-out and
-    /// agent-navigation shortcuts from inside the agent view itself
-    /// (not just from the overlay's top header).
+    /// `overlay_focused` is `true` when this view is the session attached from
+    /// the dashboard (`DashboardState::attached_agent`). It is recorded on the
+    /// view for the graduated `Esc`/`Left` back-out and does NOT alter the
+    /// footer or the shortcut hints: a session opened from the dashboard is an
+    /// ordinary session and renders the same chrome.
     #[allow(clippy::too_many_arguments)]
     pub fn draw(
         &mut self,
@@ -3172,42 +3167,18 @@ impl AgentView {
                 .with_pending(pending_hint)
                 .render(layout.shortcuts, buf);
         } else {
-            let mut hints = self.normal_pane_hints(registry);
-            if in_dashboard_overlay {
-                use crate::views::shortcuts_bar::HintItem;
-                hints.insert(
-                    0,
-                    HintItem::new(
-                        registry
-                            .find(ActionId::DashboardOverlayStop)
-                            .map(|def| def.default_key)
-                            .unwrap_or(key!('x', CONTROL)),
-                        "stop",
-                    ),
-                );
-                hints.insert(
-                    0,
-                    HintItem {
-                        keys: vec![key!('[', CONTROL), key!(']', CONTROL)],
-                        label: "agents".into(),
-                        custom_display: Some("Ctrl+[/]"),
-                        description: None,
-                        pinned: false,
-                    },
-                );
-                hints.insert(0, HintItem::new(key!('\\', CONTROL), "dashboard"));
-            }
-            let help_hint = registry.find(ActionId::ShortcutsHelp).map(|def| {
-                let mut hint = def.hint();
-                if in_dashboard_overlay
-                    && def.default_key == key!('x', CONTROL)
-                    && let Some(alt) = def.alt_keys.first()
-                {
-                    hint.keys = vec![*alt];
-                }
-                hint
-            });
-            let right_status = self.footer_status_line(&theme, in_dashboard_overlay);
+            // The attached-from-dashboard case used to prepend three extra
+            // chips here (`Ctrl+\:dashboard`, `Ctrl+[/]:agents`, `Ctrl+x:stop`)
+            // and suppress the right-hand status line. All of that was the
+            // session-overlay chrome's footer: the overlay had its own top
+            // header for navigation, so its footer advertised the same verbs
+            // twice and dropped the status line to make room. The header is
+            // gone and the tab strip is the navigator, so a session opened from
+            // the dashboard renders exactly the footer it would have without
+            // one — same hints, same right status.
+            let hints = self.normal_pane_hints(registry);
+            let help_hint = registry.find(ActionId::ShortcutsHelp).map(|def| def.hint());
+            let right_status = self.footer_status_line(&theme);
             ShortcutsBar::new(&hints)
                 .compact(5, help_hint)
                 .with_pending(pending_hint)
@@ -4226,6 +4197,83 @@ mod selection_state_tests {
         assert!(agent.last_scrollback_selection_boundaries.is_empty());
     }
 }
+#[cfg(test)]
+mod footer_parity_tests {
+    use super::super::test_fixtures::make_agent;
+    use crate::actions::ActionRegistry;
+    use crate::app::bundle::BundleState;
+    use crate::scrollback::render::ScratchBuffer;
+    use ratatui::buffer::Buffer;
+    use ratatui::layout::Rect;
+
+    /// Render one frame and return it as text (row per line).
+    ///
+    /// `attached` drives the `in_dashboard_overlay` flag, which is the only
+    /// input that used to make the footer differ.
+    fn frame(attached: bool) -> String {
+        let mut agent = make_agent();
+        let area = Rect::new(0, 0, 140, 30);
+        let mut buf = Buffer::empty(area);
+        let mut scratch = ScratchBuffer::new();
+        let bundle = BundleState::default();
+        agent.draw(
+            area,
+            &mut buf,
+            &ActionRegistry::defaults(),
+            &mut scratch,
+            None,
+            false,
+            0,
+            None,
+            &bundle,
+            attached,
+            &mut Vec::new(),
+        );
+        (0..area.height)
+            .map(|y| {
+                (0..area.width)
+                    .filter_map(|x| buf.cell((x, y)).map(|c| c.symbol().to_string()))
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    /// A session opened from the dashboard renders the SAME frame as one that
+    /// was not — in particular the same footer.
+    ///
+    /// It used to differ in three ways, all inherited from the session-overlay
+    /// chrome: `Ctrl+\:dashboard` / `Ctrl+[/]:agents` / `Ctrl+x:stop` were
+    /// prepended to the hints, the right-hand status line (branch, cwd, agent
+    /// state, ctx) was suppressed, and the shortcuts chip re-pointed at
+    /// `Ctrl+.` to free `Ctrl+X`. The overlay header that justified all three
+    /// is gone, so the footer must not keep them.
+    #[test]
+    fn attached_session_renders_the_same_frame_as_a_plain_one() {
+        crate::appearance::cache::set_chrome_style(crate::appearance::ChromeStyle::Rich);
+        let plain = frame(false);
+        let attached = frame(true);
+
+        assert_eq!(
+            attached, plain,
+            "a session attached from the dashboard must render identically\n\
+             plain:\n{plain}\nattached:\n{attached}",
+        );
+        assert!(
+            !attached.contains("Ctrl+\\"),
+            "the old overlay `Ctrl+\\:dashboard` chip must be gone:\n{attached}",
+        );
+        assert!(
+            !attached.contains("Ctrl+[/]"),
+            "the old overlay `Ctrl+[/]:agents` chip must be gone:\n{attached}",
+        );
+        assert!(
+            attached.contains("agent:"),
+            "the right-hand status line must survive an attach:\n{attached}",
+        );
+    }
+}
+
 #[cfg(test)]
 mod overlay_post_flush_tests {
     use super::super::test_fixtures::make_agent;

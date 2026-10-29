@@ -251,6 +251,12 @@ pub(super) fn dispatch_dashboard_attach(
                 d.attached_agent = Some(agent_id);
             }
             app.active_view = ActiveView::Agent(agent_id);
+            // Attaching IS a view switch, so the session must own a chip. This
+            // path assigns `active_view` directly instead of routing through
+            // `switch_to_agent`, which is the funnel that registers a tab — so
+            // without this line a session opened from the dashboard never
+            // appeared in the strip. Idempotent for one that already has one.
+            super::tabs::register_agent_tab(app, agent_id);
             surface_yolo_launch_block_notice(app, agent_id);
         }
         DashboardRowId::Subagent {
@@ -1847,14 +1853,42 @@ pub(super) fn dispatch_dashboard_delete(app: &mut AppView) -> Vec<Effect> {
         return vec![];
     };
 
-    let DashboardRowId::TopLevel(id) = sel else {
-        // Subagent rows belong to their parent's transcript (deleting one in
-        // isolation would leave the parent's history referring to a session
-        // that no longer exists) and roster rows are hosted elsewhere.
-        if let Some(d) = app.dashboard.as_mut() {
-            d.set_error_toast("Only top-level sessions can be deleted");
+    // Two kinds of row name a transcript this client can delete: a locally
+    // hosted top-level agent, and a roster row — an on-disk session this pager
+    // has NOT loaded (the dashboard's "Inactive" section, and every row of the
+    // non-leader local list). The transcript is on disk either way, so delete
+    // has nothing to do with "is the agent running here"; refusing the roster
+    // rows is what made delete look like it only worked on active/idle
+    // sessions.
+    //
+    // Subagent rows are still refused: they belong to their parent's
+    // transcript, and deleting one in isolation would leave the parent's
+    // history referring to a session that no longer exists.
+    let (row_id, roster_entry) = match sel {
+        DashboardRowId::TopLevel(id) => (DashboardRowId::TopLevel(id), None),
+        DashboardRowId::Roster { ref session_id } => {
+            let entry = app
+                .leader_roster
+                .iter()
+                .chain(app.dashboard_local_sessions.iter())
+                .find(|e| &e.session_id == session_id)
+                .cloned();
+            let Some(entry) = entry else {
+                if let Some(d) = app.dashboard.as_mut() {
+                    d.delete_confirm = None;
+                    d.set_error_toast("Session no longer exists");
+                }
+                return vec![];
+            };
+            (sel.clone(), Some(entry))
         }
-        return vec![];
+        DashboardRowId::Subagent { .. } => {
+            if let Some(d) = app.dashboard.as_mut() {
+                d.delete_confirm = None;
+                d.set_error_toast("Subagents are deleted with their parent session");
+            }
+            return vec![];
+        }
     };
 
     let now = Instant::now();
@@ -1863,8 +1897,7 @@ pub(super) fn dispatch_dashboard_delete(app: &mut AppView) -> Vec<Effect> {
         .as_ref()
         .and_then(|d| d.delete_confirm.as_ref())
         .is_some_and(|(prev, t)| {
-            *prev == DashboardRowId::TopLevel(id)
-                && t.elapsed() < crate::views::dashboard::state::STOP_CONFIRM_WINDOW
+            *prev == row_id && t.elapsed() < crate::views::dashboard::state::STOP_CONFIRM_WINDOW
         });
 
     if !already_confirming {
@@ -1873,61 +1906,105 @@ pub(super) fn dispatch_dashboard_delete(app: &mut AppView) -> Vec<Effect> {
         // user wait through a cancel round trip before the destructive action
         // they just asked for.
         if let Some(d) = app.dashboard.as_mut() {
-            d.delete_confirm = Some((DashboardRowId::TopLevel(id), now));
+            d.delete_confirm = Some((row_id, now));
         }
         return vec![];
     }
 
-    let Some(agent) = app.agents.get(&id) else {
-        if let Some(d) = app.dashboard.as_mut() {
-            d.delete_confirm = None;
-            d.set_error_toast("Session no longer exists");
+    // Resolve the (session id, cwd) pair the shell needs. A roster row carries
+    // both on the wire; a local row reads them from its agent.
+    let (session_id, cwd) = match roster_entry {
+        Some(entry) => (entry.session_id.clone(), entry.cwd.clone()),
+        None => {
+            let DashboardRowId::TopLevel(id) = row_id else {
+                return vec![];
+            };
+            let Some(agent) = app.agents.get(&id) else {
+                if let Some(d) = app.dashboard.as_mut() {
+                    d.delete_confirm = None;
+                    d.set_error_toast("Session no longer exists");
+                }
+                return vec![];
+            };
+            let Some(session_id) = agent.session.session_id.clone() else {
+                if let Some(d) = app.dashboard.as_mut() {
+                    d.delete_confirm = None;
+                    d.set_error_toast("Session has no id yet — try again in a moment");
+                }
+                return vec![];
+            };
+            (
+                session_id.0.to_string(),
+                agent.session.cwd.display().to_string(),
+            )
         }
-        return vec![];
     };
-    let Some(session_id) = agent.session.session_id.clone() else {
-        if let Some(d) = app.dashboard.as_mut() {
-            d.delete_confirm = None;
-            d.set_error_toast("Session has no id yet — try again in a moment");
-        }
-        return vec![];
-    };
-    let cwd = agent.session.cwd.display().to_string();
 
     // Pick the cursor's next home BEFORE the row vanishes, so the selection
     // lands on the neighbour rather than going stale.
-    let neighbor = dashboard_neighbor_row(app, &DashboardRowId::TopLevel(id));
+    let neighbor = dashboard_neighbor_row(app, &row_id);
     if let Some(d) = app.dashboard.as_mut() {
         d.delete_confirm = None;
     }
 
-    // Close the agent view first. `dispatch_sessions_confirm_close` refuses to
-    // close the LAST session (there would be nothing left to render), which is
-    // exactly the case where deleting must also be refused — deleting the only
-    // session would leave the pager on a Welcome screen with the agent still
-    // holding a handle to a transcript that no longer exists.
-    if app.agents.len() == 1 {
-        if let Some(d) = app.dashboard.as_mut() {
-            d.set_error_toast("Cannot delete the only session");
+    let mut effects = Vec::new();
+    // A locally hosted session must be let go first: the agent-side handler
+    // shuts down any live actor for the id, and leaving a row pointing at a
+    // transcript that is gone would paint a session that can never load.
+    //
+    // `dispatch_sessions_confirm_close` refuses to close the LAST session
+    // (there would be nothing left to render) — and refusing the delete there
+    // matches, because the transcript would outlive the view that owns it.
+    if matches!(row_id, DashboardRowId::TopLevel(_)) {
+        let DashboardRowId::TopLevel(id) = row_id else {
+            unreachable!("guarded above")
+        };
+        if app.agents.len() == 1 {
+            if let Some(d) = app.dashboard.as_mut() {
+                d.set_error_toast("Cannot delete the only session");
+            }
+            return vec![];
         }
-        return vec![];
+        effects = dispatch_sessions_confirm_close(app, id);
+        if app.agents.contains_key(&id) {
+            // The close was refused; stay put rather than deleting under it.
+            return effects;
+        }
+    } else {
+        // A roster row has no local agent, but it may still own the transcript
+        // the pager is currently showing — refuse to delete the only thing this
+        // client can render, mirroring the local rule.
+        if app.agents.is_empty() && !app.tabs.tabs().iter().any(|t| t.session_id != session_id) {
+            if let Some(d) = app.dashboard.as_mut() {
+                d.set_error_toast("Cannot delete the only session");
+            }
+            return effects;
+        }
+        // Drop the chip: its transcript is about to be gone.
+        if app.tabs.close_id(&session_id).is_some() {
+            app.cancelled_tabs.insert(session_id.clone());
+            super::tabs::persist(app);
+        }
+        // And the row itself, so the list stops painting it before the round
+        // trip answers. The roster refetch would do it too, but only after the
+        // request comes back.
+        app.leader_roster.retain(|e| e.session_id != session_id);
+        app.dashboard_local_sessions
+            .retain(|e| e.session_id != session_id);
     }
 
-    let mut effects = dispatch_sessions_confirm_close(app, id);
-    if !app.agents.contains_key(&id) {
-        if let Some(d) = app.dashboard.as_mut() {
-            match neighbor {
-                Some(n) => d.focus_row(n),
-                None => d.focus_new_agent_button(),
-            }
+    if let Some(d) = app.dashboard.as_mut() {
+        match neighbor {
+            Some(n) => d.focus_row(n),
+            None => d.focus_new_agent_button(),
         }
-        app.show_toast("Deleting session\u{2026}");
-        effects.push(Effect::DeleteSession {
-            source: "local".to_string(),
-            session_id: session_id.0.to_string(),
-            cwd,
-        });
     }
+    app.show_toast("Deleting session\u{2026}");
+    effects.push(Effect::DeleteSession {
+        source: "local".to_string(),
+        session_id,
+        cwd,
+    });
     effects
 }
 

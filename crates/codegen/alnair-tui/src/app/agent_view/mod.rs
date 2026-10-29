@@ -1138,10 +1138,15 @@ pub struct AgentView {
     /// mirroring `AgentSession.deferred_model_switch`.
     pub(crate) deferred_session_mode: Option<alnair_tools::types::SessionMode>,
     pub(crate) pending_extensions_fetch: bool,
-    /// Whether this view was last rendered inside the dashboard's session
-    /// overlay. Updated every frame by `draw`; read when building the
-    /// shortcuts cheatsheet so the overlay-scoped shortcuts
-    /// (`When::DashboardOverlay`) are lit in the overlay and dimmed elsewhere.
+    /// Whether this view was last rendered as the session attached from the
+    /// dashboard (`DashboardState::attached_agent`). Updated every frame by
+    /// `draw`; read only by the graduated back-out (`overlay_esc_backs_out`
+    /// and friends), which lets `Esc`/`Left` return to the dashboard instead
+    /// of dead-ending.
+    ///
+    /// It no longer changes the footer or the cheatsheet: those used to be
+    /// overlay-scoped chrome, and the overlay header that justified them is
+    /// gone.
     pub(crate) in_dashboard_overlay: bool,
     /// MCP server init progress. Set when the shell starts connecting
     /// MCP servers, cleared when `alnair/mcp_initialized` arrives.

@@ -70,6 +70,7 @@ fn test_app() -> AppView {
         agents: IndexMap::new(),
         tabs: crate::app::tabs::SessionTabs::new(),
         tab_hit_rects: crate::views::tab_strip::TabStripRendered::default(),
+        tab_scroll: None,
         tabs_enabled: true,
         tabs_scope: crate::app::tabs::store::TabScope::Global,
         tab_store_stamp: None,

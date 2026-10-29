@@ -1053,10 +1053,12 @@ impl AgentView {
             ActionId::ShortcutsHelp => {
                 use crate::views::shortcuts_help;
                 let reg = crate::actions::ActionRegistry::defaults();
-                let mut contexts = active_contexts_for_pane(self.active_pane);
-                if self.in_dashboard_overlay {
-                    contexts.push(crate::actions::When::DashboardOverlay);
-                }
+                // The attached-from-dashboard case used to append
+                // `When::DashboardOverlay` here so the cheatsheet listed the
+                // overlay's own stop/cycle verbs. The strip is the navigator
+                // now and those verbs are ordinary session verbs, so the
+                // cheatsheet shows the same set it shows without an attach.
+                let contexts = active_contexts_for_pane(self.active_pane);
                 let entries = shortcuts_help::build_entries(&contexts, &reg, self.vim_mode);
                 let state = shortcuts_help::build_initial_picker_state(&entries);
                 self.active_modal = Some(crate::views::modal::ActiveModal::ShortcutsHelp {

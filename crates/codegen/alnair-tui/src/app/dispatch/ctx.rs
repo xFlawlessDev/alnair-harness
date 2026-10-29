@@ -194,22 +194,33 @@ pub(crate) fn switch_to_agent(app: &mut AppView, target: AgentId, _cause: Switch
     if !app.agents.contains_key(&target) {
         return;
     }
-    if matches!(app.active_view, ActiveView::Agent(current) if current == target) {
-        return;
-    }
-    app.active_view = ActiveView::Agent(target);
-    // Tab registration: this is the single funnel for every `ActiveView::Agent`
-    // assignment, so a session becomes a tab exactly when it becomes the view.
-    // Subagent views are not tabs — they are reached through the parent block.
+    // Register the chip BEFORE the "already the active view" early return.
+    // `switch_to_agent` is documented as the funnel where "a session becomes a
+    // tab exactly when it becomes the view", but the early return broke that
+    // promise for any caller that had already assigned `ActiveView::Agent`
+    // itself: the session was the view yet never got a chip. Registering first
+    // keeps the invariant true either way, and `register_tab` is idempotent —
+    // an existing chip is refreshed in place, not duplicated.
     if let Some(agent) = app.agents.get(&target)
         && let Some(sid) = agent.session.session_id.as_ref()
     {
         let sid = sid.0.to_string();
         let cwd = agent.session.cwd.clone();
         super::tabs::register_tab(app, &sid, cwd);
-        // A tab becoming active is a read: queue the server-side watermark so
-        // the `●` clears for every client, not just this one.
-        app.pending_view_mark = Some(sid);
+    }
+    if matches!(app.active_view, ActiveView::Agent(current) if current == target) {
+        return;
+    }
+    app.active_view = ActiveView::Agent(target);
+    // A tab becoming active is a read: queue the server-side watermark so the
+    // `●` clears for every client, not just this one. Deliberately after the
+    // early return — a no-op switch is not a new read.
+    if let Some(sid) = app
+        .agents
+        .get(&target)
+        .and_then(|a| a.session.session_id.as_ref())
+    {
+        app.pending_view_mark = Some(sid.0.to_string());
     }
     // Re-anchor the global permission-mode mirror to the now-active agent so the
     // cycle's `sync_active_auto_flag` (which derives from the global) can't copy a

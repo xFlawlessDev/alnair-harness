@@ -710,13 +710,12 @@ impl AgentView {
                             PaletteCommand::KeyboardShortcuts => {
                                 use crate::views::shortcuts_help;
                                 let reg = crate::actions::ActionRegistry::defaults();
-                                let mut contexts = active_contexts_for_pane(self.active_pane);
-                                // Same overlay-context push as the Ctrl+.
-                                // path (`handle_agent_action`,
-                                // `ActionId::ShortcutsHelp`).
-                                if self.in_dashboard_overlay {
-                                    contexts.push(crate::actions::When::DashboardOverlay);
-                                }
+                                // Same context set as the Ctrl+. path
+                                // (`handle_agent_action`, `ActionId::ShortcutsHelp`):
+                                // the cheatsheet must not depend on how it was
+                                // opened, and an attached-from-dashboard session
+                                // shows the ordinary session verbs.
+                                let contexts = active_contexts_for_pane(self.active_pane);
                                 let entries =
                                     shortcuts_help::build_entries(&contexts, &reg, self.vim_mode);
                                 let state = shortcuts_help::build_initial_picker_state(&entries);

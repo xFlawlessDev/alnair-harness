@@ -985,6 +985,14 @@ pub(in crate::app::dispatch) fn handle_session_loaded(
         });
         notify_session_ready(&app.notification_service, agent);
         crate::memory_release::release_retained_memory_with("session-load-replay");
+        // The bind above is the first moment this session has an id, so it is
+        // the first moment it can own a chip. `refresh_tab` alone was not
+        // enough: it no-ops when the id is not already a tab, and a load that
+        // starts from a fresh placeholder — a dashboard attach of a roster row
+        // — reaches here with no chip yet, so the session never appeared in the
+        // strip. `register_agent_tab` is idempotent, so a re-load of a session
+        // that already has one is unaffected.
+        super::super::tabs::register_agent_tab(app, agent_id);
         if let Some((sid, title, cwd)) = tab_refresh {
             super::super::tabs::refresh_tab(app, &sid, Some(title), Some(cwd));
         }
@@ -1136,6 +1144,9 @@ pub(in crate::app::dispatch) fn handle_session_restored(
             "Session restored. Loading {local_session_id}..."
         )));
     }
+    // Same reason as `handle_session_loaded`: the id exists only after the bind
+    // above, so this is the first moment the session can own a chip.
+    super::super::tabs::register_agent_tab(app, agent_id);
     let cwd = app.cwd.clone();
     vec![Effect::LoadSession {
         agent_id,

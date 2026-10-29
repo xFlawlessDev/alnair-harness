@@ -13,6 +13,48 @@ what the Alnair fork adds, changes, or removes.
 
 Nothing yet.
 
+## [0.1.5] — 2026-10-29
+
+### Added
+
+- **Scrolling session tabs.** The `F2` strip used to render only the chips that
+  fit and silently drop the rest. It now renders a window over the tab list with
+  `‹` / `›` edge markers that are clickable and participate in hit testing, and
+  a mouse wheel over the strip row scrolls it. The window follows the active
+  chip by default, so every activation brings its tab into view; an explicit
+  scroll pins the window and steps from what the last frame actually painted.
+  Reaching either end releases the pin.
+
+### Changed
+
+- **A session opened from the dashboard renders like any other session.** The
+  extra `1/2 [‹][›] [Dashboard]` header band is gone, and with it the footer
+  differences it justified: the overlay footer no longer prepends navigation
+  hints, no longer suppresses the right-hand status line, and no longer
+  re-points the shortcuts chip away from `Ctrl+X`. An attached session and a
+  plain one now draw byte-identical frames.
+
+### Fixed
+
+- **Delete works on every session row.** Tying deletion to `TopLevel` rows meant
+  only active and idle sessions could be deleted; sessions the dashboard lists
+  from disk (shown as `Inactive`) were refused. Both row kinds share the same
+  confirm window and the same transcript deletion, so a roster row can now be
+  deleted. Subagent rows stay refused, since they belong to their parent's
+  transcript.
+- **Sessions no longer disappear from the dashboard.** Two filters — one hiding
+  local sessions with no conversation, one hiding untitled roster entries — made
+  a session created and closed without a first message unreachable: it existed
+  on disk but no row named it, so it could not be reopened, renamed or deleted.
+  Both filters are removed. An untitled session is labelled
+  `New session #<id>` and stays listed.
+- **Opening a session from the dashboard creates its tab.** Three paths skipped
+  tab registration: attaching assigned the view directly, `switch_to_agent`
+  returned early before registering when the target was already the active
+  view, and a load that started from an unbound placeholder refreshed a chip
+  that did not exist yet. All three now register, and a background bind adds the
+  chip without moving the active one.
+
 ## [0.1.4] — 2026-10-26
 
 ### Changed

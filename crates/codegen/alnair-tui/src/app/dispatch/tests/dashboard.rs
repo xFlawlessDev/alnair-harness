@@ -2179,6 +2179,79 @@ fn dashboard_attach_top_level_switches_to_agent_view() {
     );
 }
 
+/// Attaching a session from the dashboard gives it a tab.
+///
+/// The attach path assigns `ActiveView::Agent` directly instead of routing
+/// through `switch_to_agent` — the funnel that registers a tab — so a session
+/// opened from the dashboard never reached the strip. Clearing the tab list
+/// first reproduces exactly that state (an agent that is a real session but not
+/// a chip), which is what a roster row loaded from disk looks like.
+#[serial_test::serial(ALNAIR_AGENT_DASHBOARD)]
+#[test]
+fn dashboard_attach_registers_a_tab() {
+    let mut app = test_app_with_agent();
+    let id = AgentId(0);
+    app.tabs = crate::app::tabs::SessionTabs::new();
+    assert!(app.tabs.is_empty(), "precondition: no chip yet");
+
+    open_dashboard(&mut app);
+    let _ = dispatch_dashboard_attach(
+        &mut app,
+        crate::views::dashboard::DashboardRowId::TopLevel(id),
+    );
+
+    assert_eq!(
+        app.tabs.session_ids(),
+        vec!["test-session".to_string()],
+        "attaching must register the session as a tab",
+    );
+    assert_eq!(
+        app.tabs.active().map(|t| t.session_id.as_str()),
+        Some("test-session"),
+        "the attached session must become the active chip",
+    );
+}
+
+/// A session loaded into a fresh placeholder gets a tab when its id binds.
+///
+/// This is the second half of the same bug: a roster row (or any resume that
+/// starts from an unbound placeholder) has no id when `switch_to_agent` runs, so
+/// that funnel cannot register a chip. The bind in `handle_session_loaded` is
+/// the first moment an id exists — and it only called `refresh_tab`, which
+/// no-ops when the session is not already a tab. So the chip was never created.
+#[serial_test::serial(ALNAIR_AGENT_DASHBOARD)]
+#[test]
+fn handle_session_loaded_registers_a_tab_for_a_fresh_placeholder() {
+    use crate::app::dispatch::session::load::handle_session_loaded;
+
+    let mut app = test_app_with_agent();
+    let id = AgentId(0);
+    app.tabs = crate::app::tabs::SessionTabs::new();
+    // Unbind the agent: this is what a placeholder created by
+    // `dispatch_load_session` looks like before the shell answers.
+    if let Some(a) = app.agents.get_mut(&id) {
+        a.session.session_id = None;
+    }
+    app.active_view = ActiveView::Agent(id);
+
+    let _ = handle_session_loaded(
+        &mut app,
+        id,
+        "loaded-session".to_string().into(),
+        None,
+        false,
+        None,
+        None,
+        None,
+    );
+
+    assert_eq!(
+        app.tabs.session_ids(),
+        vec!["loaded-session".to_string()],
+        "the bind must register the chip, not just refresh a missing one",
+    );
+}
+
 /// Attach routes through `focus_row`, so any selected section header
 /// is cleared — the row and section cursors stay mutually exclusive.
 #[serial_test::serial(ALNAIR_AGENT_DASHBOARD)]
@@ -3294,12 +3367,25 @@ fn dashboard_overlay_cycle_non_overlay_noop_when_current_agent_hidden() {
     app.active_view = ActiveView::Agent(current);
 
     ensure_dashboard_state(&mut app);
+    // Hide the current agent from the visible order. This used to happen by
+    // accident — an empty session was filtered out — but empty sessions are
+    // listed now, so the test has to hide it deliberately. A state filter is
+    // the honest way: the current agent is idle, the other two are working.
+    if let Some(d) = app.dashboard.as_mut() {
+        d.filter =
+            crate::views::dashboard::Filter::State(crate::views::dashboard::RowState::Working);
+    }
+    for id in [id1, id2] {
+        if let Some(a) = app.agents.get_mut(&id) {
+            a.session.state = AgentState::TurnRunning;
+        }
+    }
     let order =
         crate::views::dashboard::overlay_cycle_order(app.dashboard.as_ref().unwrap(), &app.agents);
     assert_eq!(
         order,
         vec![id2, id1],
-        "precondition: the empty current agent is hidden from the visible order",
+        "precondition: the filtered-out current agent is absent from the visible order",
     );
 
     let _ = dispatch_dashboard_overlay_cycle(&mut app, 1);
@@ -3871,9 +3957,18 @@ fn dashboard_focus_new_agent_button_action_clears_selection() {
 fn dashboard_up_arrow_from_first_row_focuses_button() {
     let mut app = test_app_with_agent();
     let id = AgentId(0);
+    // The fixture agent is empty; give it a title so the row is a real,
+    // visible one. Empty sessions are listed too, but with state grouping a
+    // single row still sits under an "Idle" header, and Up would land on that
+    // header first — which is the two-tier navigation, not this test's
+    // subject. Directory grouping suppresses the state headers so the row is
+    // genuinely the first focusable.
+    if let Some(a) = app.agents.get_mut(&id) {
+        a.generated_session_title = Some("Only".into());
+    }
     open_dashboard(&mut app);
-    // Plant selection on the first (and only) row.
     if let Some(d) = app.dashboard.as_mut() {
+        d.grouping = crate::views::dashboard::Grouping::Directory;
         d.focus_row(crate::views::dashboard::DashboardRowId::TopLevel(id));
     }
     let _ = dispatch(Action::DashboardSelectPrev, &mut app);
@@ -4881,11 +4976,14 @@ fn dashboard_peek_box_grows_for_multiline_reply() {
     );
 }
 
-/// Empty (no-real-turn) local sessions are hidden from the dashboard:
-/// `test_app_with_agent` builds an untitled, message-less, idle agent —
-/// exactly the "New session" created on every pager launch.
+/// An empty (no-real-turn) local session is LISTED on the dashboard.
+///
+/// `test_app_with_agent` builds an untitled, message-less, idle agent — the
+/// "New session" `/new` leaves behind when the user closes it without sending
+/// anything. It used to be filtered out, which made the transcript
+/// unreachable: no row to reopen, rename, or delete.
 #[test]
-fn build_rows_hides_empty_idle_local_session() {
+fn build_rows_lists_empty_idle_local_session() {
     use crate::views::dashboard::build_rows;
     let app = test_app_with_agent();
     let rows = build_rows(
@@ -4897,7 +4995,11 @@ fn build_rows_hides_empty_idle_local_session() {
         &crate::views::dashboard::Filter::None,
         None,
     );
-    assert!(rows.is_empty(), "an empty idle session must not render");
+    assert_eq!(
+        rows.len(),
+        1,
+        "an empty idle session must still get a row, got {rows:?}",
+    );
 }
 
 /// An empty session that is actively working stays visible — its first
@@ -5220,6 +5322,97 @@ fn dashboard_stop_confirm_does_not_authorize_delete() {
             .iter()
             .any(|effect| matches!(effect, Effect::DeleteSession { .. })),
         "a stop confirm must never authorize a delete, got {effects:?}",
+    );
+}
+
+/// A roster row — a session on disk that this pager has NOT loaded, which is
+/// what the dashboard's "Inactive" section is made of — is deletable too.
+///
+/// The transcript is on disk whether or not an agent is holding it, so delete
+/// has nothing to do with "is this session running here". Refusing roster rows
+/// made the chord look like it only worked on active/idle sessions.
+#[test]
+fn dashboard_delete_removes_a_roster_row() {
+    use crate::app::roster::{RosterActivity, RosterEntry, RosterOrigin};
+    use crate::views::dashboard::DashboardRowId;
+
+    let mut app = test_app_with_agent();
+    let only = AgentId(0);
+    app.active_view = ActiveView::AgentDashboard;
+    ensure_dashboard_state(&mut app);
+    app.dashboard_local_sessions = vec![RosterEntry {
+        session_id: "dormant-session".into(),
+        title: Some("Dormant".into()),
+        cwd: "/tmp/dormant".into(),
+        is_worktree: false,
+        model_id: None,
+        yolo: false,
+        activity: RosterActivity::Dormant,
+        resident: false,
+        last_change_unix_ms: 0,
+        viewed_at: None,
+        origin: RosterOrigin::default(),
+    }];
+    if let Some(d) = app.dashboard.as_mut() {
+        d.focus_row(DashboardRowId::Roster {
+            session_id: "dormant-session".into(),
+        });
+    }
+
+    // First press arms, second fires.
+    assert!(dispatch(Action::DashboardDelete, &mut app).is_empty());
+    let effects = dispatch(Action::DashboardDelete, &mut app);
+
+    assert!(
+        effects.iter().any(|effect| matches!(
+            effect,
+            Effect::DeleteSession { session_id, cwd, .. }
+                if session_id == "dormant-session" && cwd == "/tmp/dormant"
+        )),
+        "a roster row must emit DeleteSession with its own cwd, got {effects:?}",
+    );
+    assert!(
+        !app.dashboard_local_sessions
+            .iter()
+            .any(|e| e.session_id == "dormant-session"),
+        "the row must leave the list before the round trip answers",
+    );
+    assert!(
+        app.agents.contains_key(&only),
+        "deleting a dormant session must not touch the live one",
+    );
+}
+
+/// A subagent row is refused: it belongs to its parent's transcript, so
+/// deleting it in isolation would leave the parent referring to a session that
+/// no longer exists. The refusal names that reason instead of the old, wrong
+/// "only top-level sessions" wording.
+#[test]
+fn dashboard_delete_refuses_a_subagent_row() {
+    use crate::views::dashboard::DashboardRowId;
+
+    let mut app = test_app_with_agent();
+    app.active_view = ActiveView::AgentDashboard;
+    ensure_dashboard_state(&mut app);
+    if let Some(d) = app.dashboard.as_mut() {
+        d.focus_row(DashboardRowId::Subagent {
+            parent: AgentId(0),
+            child_session_id: "child".into(),
+        });
+    }
+
+    let effects = dispatch(Action::DashboardDelete, &mut app);
+
+    assert!(
+        effects.is_empty(),
+        "a subagent row must not delete anything, got {effects:?}",
+    );
+    assert!(
+        app.dashboard
+            .as_ref()
+            .and_then(|d| d.error_toast.as_deref())
+            .is_some_and(|t| t.contains("parent session")),
+        "the refusal must explain WHY a subagent cannot be deleted alone",
     );
 }
 

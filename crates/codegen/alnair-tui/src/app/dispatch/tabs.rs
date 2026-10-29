@@ -16,7 +16,7 @@ use crate::app::app_view::{ActiveView, AppView};
 use crate::app::tabs::store;
 
 /// Persist the current tab list under the active scope.
-fn persist(app: &AppView) {
+pub(in crate::app::dispatch) fn persist(app: &AppView) {
     let scope = app.tabs_scope;
     let cwd_key = app.cwd.to_string_lossy().into_owned();
     let tabs = app.tabs.tabs().to_vec();
@@ -75,6 +75,10 @@ fn dispatch_activate_session(
     session_id: &str,
     cwd: &std::path::Path,
 ) -> Vec<Effect> {
+    // Activation makes the chip the user wants to see the ACTIVE one, so the
+    // strip goes back to following it — an explicit scroll was about a different
+    // chip, and staying pinned there would hide the tab just opened.
+    app.tab_scroll = None;
     if let Some(agent_id) = find_agent_id_by_session_id(&app.agents, session_id) {
         switch_to_agent(app, agent_id, SwitchCause::Picker);
         app.tabs.set_active_id(session_id);
@@ -310,6 +314,9 @@ pub(crate) fn register_tab(app: &mut AppView, session_id: &str, cwd: std::path::
     }
     app.tabs
         .open(crate::app::tabs::TabEntry::new(session_id, cwd));
+    // A new chip may sit past the window's right edge; un-pin so the strip
+    // follows it into view instead of leaving it silently hidden.
+    app.tab_scroll = None;
     persist(app);
 }
 
@@ -349,6 +356,9 @@ pub(in crate::app::dispatch) fn register_agent_tab(
         .open(crate::app::tabs::TabEntry::new(session_id, cwd));
     if !foreground && let Some(previous) = previous {
         app.tabs.set_active_id(&previous);
+    } else {
+        // Foreground bind: the strip follows the chip that just came to front.
+        app.tab_scroll = None;
     }
     persist(app);
 }

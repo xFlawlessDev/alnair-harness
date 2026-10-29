@@ -176,15 +176,6 @@ fn build_local_rows(
     let mut rows = Vec::new();
     for (id, agent) in agents.iter() {
         let top_id = DashboardRowId::TopLevel(*id);
-        if is_empty_top_level(agent)
-            && !pinned.contains(&top_id)
-            && !matches!(
-                classify_top_level(agent),
-                RowState::Working | RowState::NeedsInput
-            )
-        {
-            continue;
-        }
         let row = top_level_row(
             *id,
             agent,
@@ -283,18 +274,6 @@ fn append_roster_rows(
         let id = DashboardRowId::Roster {
             session_id: entry.session_id.clone(),
         };
-        let has_title = entry
-            .title
-            .as_deref()
-            .map(str::trim)
-            .is_some_and(|t| !t.is_empty());
-        let active = matches!(
-            entry.activity,
-            RosterActivity::Working | RosterActivity::NeedsInput
-        );
-        if !has_title && !active && !pinned.contains(&id) {
-            continue;
-        }
         let cwd = PathBuf::from(&entry.cwd);
         let label = entry
             .title
@@ -462,34 +441,6 @@ pub fn classify_subagent(info: &SubagentInfo) -> RowState {
 /// embedded escape sequences in the ratatui buffer.
 fn sanitize(s: &str) -> String {
     crate::views::session_title::sanitize_display_text(s).into_owned()
-}
-/// Whether a top-level agent has no real conversation yet: no display name, no
-/// generated title, no queued prompt, and no user-typed message in scrollback.
-///
-/// These are the exact conditions under which [`top_level_label`] falls back to
-/// `New session #<id>`. A session created on pager launch carries only the
-/// system prompt plus injected `<system-reminder>` context (which are not real
-/// user turns and never render as `UserPrompt` blocks), so it reads as empty
-/// here until the user actually sends something. Used by [`build_local_rows`]
-/// to keep such sessions off the dashboard.
-fn is_empty_top_level(agent: &AgentView) -> bool {
-    let has_text = |s: Option<&str>| s.map(str::trim).is_some_and(|t| !t.is_empty());
-    if has_text(agent.display_name.as_deref()) {
-        return false;
-    }
-    if has_text(agent.generated_session_title.as_deref()) {
-        return false;
-    }
-    if !agent.session.pending_prompts.is_empty() {
-        return false;
-    }
-    if !agent.subagent_sessions.is_empty() || !agent.session.bg_tasks.is_empty() {
-        return false;
-    }
-    if super::peek::extract_first_user_message(agent).is_some() {
-        return false;
-    }
-    true
 }
 fn top_level_label(agent: &AgentView) -> String {
     if let Some(name) = agent.display_name.as_deref() {
@@ -1593,10 +1544,15 @@ mod tests {
         append_roster_rows(&mut rows, entries, &IndexMap::new(), pinned, None);
         rows
     }
-    /// An untitled, inactive roster session is the "New session" noise the
-    /// dashboard hides — every pager launch leaves one behind.
+    /// An untitled roster session is LISTED, not hidden.
+    ///
+    /// The dashboard is the session list. An untitled session is a real
+    /// transcript on disk — `/new` then close leaves one behind — and hiding it
+    /// made it unreachable: no row to reopen, rename, or delete. It used to be
+    /// filtered out here on the theory that pager launches leave one behind,
+    /// which traded an invisible orphan for a little quiet.
     #[test]
-    fn append_roster_rows_hides_untitled_idle_entry() {
+    fn append_roster_rows_lists_untitled_entry() {
         let empty = std::collections::BTreeSet::new();
         for activity in [
             RosterActivity::Idle,
@@ -1605,11 +1561,22 @@ mod tests {
             RosterActivity::Dead,
         ] {
             let rows = collect_roster(&[roster_entry_with("e", None, activity)], &empty);
-            assert!(
-                rows.is_empty(),
-                "untitled {activity:?} entry must be hidden"
+            assert_eq!(
+                rows.len(),
+                1,
+                "untitled {activity:?} entry must still be listed",
             );
         }
+    }
+    /// A blank/whitespace title is just an untitled session — still listed.
+    #[test]
+    fn append_roster_rows_lists_blank_titled_entry() {
+        let empty = std::collections::BTreeSet::new();
+        let rows = collect_roster(
+            &[roster_entry_with("b", Some("   "), RosterActivity::Idle)],
+            &empty,
+        );
+        assert_eq!(rows.len(), 1, "blank-title entry must still be listed");
     }
     /// An untitled session that is actively working / awaiting input stays
     /// visible: its title hasn't been generated yet but it is doing real work.
@@ -1634,29 +1601,6 @@ mod tests {
             &empty,
         );
         assert_eq!(rows.len(), 1, "titled entries are kept");
-    }
-    /// A blank/whitespace title is treated as no title.
-    #[test]
-    fn append_roster_rows_hides_blank_titled_idle_entry() {
-        let empty = std::collections::BTreeSet::new();
-        let rows = collect_roster(
-            &[roster_entry_with("b", Some("   "), RosterActivity::Idle)],
-            &empty,
-        );
-        assert!(rows.is_empty(), "blank-title idle entry must be hidden");
-    }
-    /// A user-pinned row is always shown, even untitled + idle.
-    #[test]
-    fn append_roster_rows_keeps_pinned_untitled_entry() {
-        let mut pinned = std::collections::BTreeSet::new();
-        pinned.insert(DashboardRowId::Roster {
-            session_id: "p".to_string(),
-        });
-        let rows = collect_roster(
-            &[roster_entry_with("p", None, RosterActivity::Idle)],
-            &pinned,
-        );
-        assert_eq!(rows.len(), 1, "pinned untitled entries are kept");
     }
     /// A roster session with a known model surfaces it on the otherwise
     /// blank second line (the wire carries no last-message preview, so
@@ -1735,6 +1679,38 @@ mod tests {
             created_via_new: false,
         };
         AgentView::new(session, ScrollbackState::new())
+    }
+    /// A local agent with NO conversation yet is still a dashboard row.
+    ///
+    /// This is the regression that made sessions disappear: `/new` creates a
+    /// real session on disk, and closing it without sending a message used to
+    /// leave a transcript no row named — unreachable and undeletable. The
+    /// dashboard is the session list, so it lists it, labelled
+    /// `New session #<id>`.
+    #[test]
+    fn build_local_rows_lists_an_empty_session() {
+        let agent = make_idle_agent_with_model(None);
+        let mut agents = IndexMap::new();
+        agents.insert(AgentId(0), agent);
+
+        let rows = build_local_rows(
+            &agents,
+            &std::collections::BTreeSet::new(),
+            None,
+            None,
+            false,
+        );
+
+        assert_eq!(
+            rows.len(),
+            1,
+            "an empty session must still get a row, got {rows:?}",
+        );
+        assert!(
+            rows[0].label.starts_with(NEW_SESSION_LABEL),
+            "an untitled session reads `{NEW_SESSION_LABEL} #<id>`, got {:?}",
+            rows[0].label,
+        );
     }
     /// An idle local agent with no last message has a BLANK second line —
     /// the model appears in the peek panel's bottom-border badge for the

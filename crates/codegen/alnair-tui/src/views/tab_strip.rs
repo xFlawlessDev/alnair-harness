@@ -12,6 +12,16 @@
 //! The repo label (`repo ⎇ branch`) appears only when the strip spans more than
 //! one repository. With a single repo it is pure noise; with several it is the
 //! only thing that says which chip lives where.
+//!
+//! ## More tabs than columns
+//!
+//! The strip is a *window* over the tab list, not a fixed set of five. The
+//! window follows the active chip while the user is working (activation, open,
+//! close, `Ctrl+PageDown`), and it can be scrolled explicitly — wheel over the
+//! row, or click an edge marker — when the user is browsing chips that are not
+//! the active one. `‹` / `›` mark the hidden side; the window's start is owned by
+//! the caller (`AppView::tab_scroll`) so a wheel step continues from the last
+//! painted frame instead of re-deriving from the active chip every tick.
 
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
@@ -28,6 +38,10 @@ const MIN_CHIP: u16 = 6;
 const MIN_ACTIVE_CHIP: u16 = 8;
 /// Cap on a chip's label, before the repo detail is appended.
 const MAX_LABEL: usize = 40;
+/// Columns an edge scroll marker owns (`‹ ` / ` ›`). Reserved out of the chip
+/// budget as soon as anything is hidden on that side, so a marker can never
+/// overrun a chip it is supposed to announce.
+const SCROLL_MARKER_W: u16 = 2;
 
 /// Per-tab activity, derived by the caller from local agent state or the
 /// leader roster.
@@ -73,6 +87,12 @@ pub enum TabHitTarget {
     NewSession,
     /// A chip's `×` affordance: close that tab (never the session).
     CloseTab(String),
+    /// An edge scroll marker (`‹` / `›`): the strip holds more tabs in that
+    /// direction than fit, so move one step that way. Cheap and honest — the
+    /// marker's own meaning is "there is another tab past here".
+    ScrollTabs {
+        forward: bool,
+    },
 }
 
 /// One chip's data, gathered by the caller.
@@ -96,6 +116,16 @@ pub struct TabChipInput {
 pub struct TabStripParams<'a> {
     pub chips: &'a [TabChipInput],
     pub active: Option<usize>,
+    /// Pinned window start, or `None` to follow `active`.
+    ///
+    /// `None` is the resting state: the window is derived so the active chip is
+    /// visible, which is what cycling (`Ctrl+PageDown`), opening, closing, and
+    /// restoring all want for free. `Some` exists only for an explicit scroll of
+    /// the strip (wheel, or a click on an edge marker), where the user is
+    /// browsing chips that are not the active one — respecting their scroll is
+    /// the whole point of the gesture, so the active chip may sit outside the
+    /// window until something activates a tab again.
+    pub offset: Option<usize>,
 }
 
 /// Rendered strip areas.
@@ -103,8 +133,15 @@ pub struct TabStripParams<'a> {
 pub struct TabStripRendered {
     pub tabs: Vec<TabHit>,
     pub new_session: Option<Rect>,
-    /// True when chips were dropped and the overflow markers are shown.
+    /// True when at least one chip is outside the window.
     pub overflow: bool,
+    /// `‹` marker: chips exist before the window. Click scrolls back.
+    pub scroll_back: Option<Rect>,
+    /// `›` marker: chips exist after the window. Click scrolls forward.
+    pub scroll_forward: Option<Rect>,
+    /// The chip indexes actually painted. The caller pins its scroll offset to
+    /// this so a wheel step continues from where the last frame landed.
+    pub window: std::ops::Range<usize>,
 }
 
 impl TabStripRendered {
@@ -121,6 +158,12 @@ impl TabStripRendered {
             if hit.rect.contains(point) {
                 return Some(TabHitTarget::Tab(hit.session_id.clone()));
             }
+        }
+        if self.scroll_back.is_some_and(|r| r.contains(point)) {
+            return Some(TabHitTarget::ScrollTabs { forward: false });
+        }
+        if self.scroll_forward.is_some_and(|r| r.contains(point)) {
+            return Some(TabHitTarget::ScrollTabs { forward: true });
         }
         if self.new_session.is_some_and(|r| r.contains(point)) {
             return Some(TabHitTarget::NewSession);
@@ -191,15 +234,24 @@ pub fn render_tab_strip(
         .map(|(i, chip)| chip_label(chip, i, active == Some(i), multi_repo))
         .collect();
 
+    // A chip wider than the budget could never be painted, so it is a hard cut
+    // for the window rather than another scrolling step.
     let widths = fit_widths(
         &labels,
         chip_budget.saturating_sub(left_inset),
         active,
         close_suffix,
     );
-    let mut x = area.x + left_inset;
+    let window = choose_window(&widths, chip_budget, params.offset, active);
+
+    // A back marker owns the first columns of the row, so the chips it precedes
+    // start after it — the same columns `fill_from` already charged to the
+    // budget, which is why the last chip still fits.
+    let back_marker_w = if window.start > 0 { SCROLL_MARKER_W } else { 0 };
+    let mut x = area.x + left_inset + back_marker_w;
     let mut shown = 0usize;
-    for (i, _) in labels.iter().enumerate() {
+    let mut painted_end = window.start;
+    for i in window.clone() {
         let Some(w) = widths.get(i).copied().flatten() else {
             continue;
         };
@@ -319,8 +371,10 @@ pub fn render_tab_strip(
         });
         x = chip_x.saturating_add(chip_w);
         shown += 1;
+        painted_end = i + 1;
     }
-    out.overflow = shown < chips.len();
+    out.window = window.start..painted_end.max(window.start);
+    out.overflow = out.window.len() < chips.len();
 
     if rich {
         // `+` follows the last chip instead of floating at the right edge.
@@ -341,13 +395,156 @@ pub fn render_tab_strip(
             );
             out.new_session = Some(plus_rect);
         }
+        paint_scroll_markers(buf, area, theme, &mut out, chips.len());
         return out;
     }
 
     let x = area.x + area.width.saturating_sub(buttons_w + gutter);
     let (add, _close_rect) = place_buttons(buf, area, theme, x, plus, show_close.then_some(close));
     out.new_session = Some(add);
+    paint_scroll_markers(buf, area, theme, &mut out, chips.len());
     out
+}
+
+/// Paint the `‹` / `›` edge markers for whatever the window left out.
+///
+/// They are drawn last, over the tail of the chip row, because the budget they
+/// announce was reserved before any chip was painted (`choose_window` keeps
+/// [`SCROLL_MARKER_W`] free whenever a side has hidden chips). So an edge marker
+/// only ever lands on padding or on the trailing gap — never on a chip it would
+/// cover. They are the only affordance on the strip that can move the window,
+/// which is what makes an overflowing strip navigable by mouse as well as by
+/// `Ctrl+PageDown`.
+fn paint_scroll_markers(
+    buf: &mut Buffer,
+    area: Rect,
+    theme: &Theme,
+    out: &mut TabStripRendered,
+    total: usize,
+) {
+    let style = Style::default()
+        .fg(theme.gray)
+        .bg(theme.bg_base)
+        .add_modifier(Modifier::BOLD);
+    // The forward marker is anchored to the RIGHT edge of the last painted chip
+    // rather than to the row width: `↔` a marker that claims unused space far
+    // from the tabs it refers to reads as noise.
+    let left_inset = if crate::views::chrome::is_rich() {
+        1
+    } else {
+        0
+    };
+    if out.window.start > 0 {
+        let label = format!("{} ", crate::glyphs::chevron_left());
+        let x = area.x + left_inset;
+        let rect = Rect::new(x, area.y, SCROLL_MARKER_W, 1);
+        if rect.right() <= area.right() {
+            buf.set_span_safe(x, area.y, &Span::styled(label, style), SCROLL_MARKER_W);
+            out.scroll_back = Some(rect);
+        }
+    }
+    let hidden_after = out.window.end < total;
+    let last_right = out.tabs.last().map(|t| t.rect.right());
+    if let (true, Some(right)) = (hidden_after, last_right) {
+        let x = right.saturating_add(1);
+        let rect = Rect::new(x, area.y, SCROLL_MARKER_W, 1);
+        if rect.right() <= area.right() {
+            let label = format!(" {}", crate::glyphs::chevron());
+            buf.set_span_safe(x, area.y, &Span::styled(label, style), SCROLL_MARKER_W);
+            out.scroll_forward = Some(rect);
+        }
+    }
+}
+
+/// Pick the window of chips the strip shows.
+///
+/// Two modes, distinguished by what the caller passes:
+///
+/// - `offset = None` (**resting**): the window is derived so the ACTIVE chip is
+///   visible. Opening, closing, and activating a tab all land here, so the chip
+///   the user is looking at never hides itself.
+/// - `offset = Some(start)` (**scrolled**): the user has explicitly moved the
+///   strip (wheel or an edge marker) and is browsing chips that are not the
+///   active one. Their position is honoured as given — snapping back to the
+///   active chip on the next frame would undo the gesture — and the caller
+///   clears the pin as soon as something activates a tab.
+///
+/// `widths[i] == None` means that chip cannot be painted at any width; it is
+/// skipped rather than ending the window, so one pathological title cannot hide
+/// every tab after it.
+fn choose_window(
+    widths: &[Option<u16>],
+    budget: u16,
+    offset: Option<usize>,
+    active: Option<usize>,
+) -> std::ops::Range<usize> {
+    let total = widths.len();
+    if let Some(start) = offset {
+        let start = start.min(total.saturating_sub(1));
+        return start..fill_from(widths, start, budget, total).max(start + 1);
+    }
+    // Resting mode: widest prefix that fits, then slide right so the active
+    // chip is inside it. Fitting from the front first is what keeps the strip
+    // stable while it still fits (no twitch as the cursor moves over a row of
+    // short titles).
+    let end = fill_from(widths, 0, budget, total);
+    if let Some(a) = active
+        && a >= end
+        && end > 0
+    {
+        // The active chip is off the right edge: walk the start forward until
+        // it is inside, keeping the window as full as `budget` allows.
+        let mut start = end - 1;
+        while start + 1 < a.min(total) {
+            let candidate = start + 1;
+            if a >= fill_from(widths, candidate, budget, total) {
+                start = candidate;
+            } else {
+                break;
+            }
+        }
+        let end = fill_from(widths, start, budget, total);
+        return start..end.max(start + 1);
+    }
+    if end == 0 {
+        // Nothing fits from the front (one very wide chip): show at least that
+        // one, truncated downstream, rather than an empty strip.
+        return 0..total.min(1);
+    }
+    0..end
+}
+
+/// Index one past the last chip that fits starting at `start`.
+///
+/// The budget it spends already excludes whatever markers the window will need:
+/// [`SCROLL_MARKER_W`] on the left when `start > 0` (the back marker owns the
+/// first columns of the row, so the first chip must begin after it) and on the
+/// right whenever a chip stays hidden. That reservation is what keeps a marker
+/// from being painted over a chip — and from stealing its click.
+fn fill_from(widths: &[Option<u16>], start: usize, budget: u16, total: usize) -> usize {
+    let mut used = if start > 0 { SCROLL_MARKER_W } else { 0 };
+    let mut end = start;
+    for (i, slot) in widths.iter().enumerate().skip(start) {
+        let Some(w) = *slot else {
+            end = i + 1;
+            continue;
+        };
+        let gap = if end > start { 1 } else { 0 };
+        // Everything after this chip is still hidden, so a forward marker will be
+        // painted and it must come out of the same budget.
+        let marker = if i + 1 < total { SCROLL_MARKER_W } else { 0 };
+        if used
+            .saturating_add(gap)
+            .saturating_add(w)
+            .saturating_add(marker)
+            > budget
+        {
+            break;
+        }
+        used += gap + w;
+        end = i + 1;
+    }
+    end
 }
 
 /// Paint the right-hand affordances right-aligned at `x`.
@@ -501,8 +698,21 @@ mod tests {
         chips: &[TabChipInput],
         active: Option<usize>,
     ) -> (Buffer, TabStripRendered) {
+        draw_at(area, chips, active, None)
+    }
+
+    fn draw_at(
+        area: Rect,
+        chips: &[TabChipInput],
+        active: Option<usize>,
+        offset: Option<usize>,
+    ) -> (Buffer, TabStripRendered) {
         let mut buf = Buffer::empty(area);
-        let params = TabStripParams { chips, active };
+        let params = TabStripParams {
+            chips,
+            active,
+            offset,
+        };
         let rendered = render_tab_strip(area, &mut buf, &theme(), &params);
         (buf, rendered)
     }
@@ -600,6 +810,118 @@ mod tests {
             rendered.tabs[0].session_id, "a",
             "chips are dropped from the right, so the leftmost survives"
         );
+    }
+
+    /// The strip is a window, not a fixed five: a chip past the right edge is
+    /// reachable by scrolling instead of being lost. Before this the extra tabs
+    /// simply never rendered — no marker, no way to reach them.
+    #[test]
+    fn overflowing_strip_reports_a_window_and_a_forward_marker() {
+        let c = chips(&["a", "b", "c", "d", "e", "f"]);
+        let area = Rect::new(0, 0, 40, 1);
+        let (_, rendered) = draw(area, &c, Some(0));
+
+        assert!(rendered.overflow);
+        assert_eq!(
+            rendered.window.start, 0,
+            "resting window starts at the left"
+        );
+        assert!(
+            rendered.window.end < c.len(),
+            "window must stop before the end: {:?}",
+            rendered.window
+        );
+        assert!(
+            rendered.scroll_forward.is_some(),
+            "a hidden right side needs a `>` marker"
+        );
+        assert!(
+            rendered.scroll_back.is_none(),
+            "nothing is hidden on the left at offset 0"
+        );
+    }
+
+    /// A pinned offset shows the chips from there, and both markers appear when
+    /// something is hidden on both sides.
+    #[test]
+    fn pinned_offset_scrolls_the_window() {
+        let c = chips(&["a", "b", "c", "d", "e", "f"]);
+        let area = Rect::new(0, 0, 40, 1);
+        let (_, rendered) = draw_at(area, &c, Some(0), Some(2));
+
+        assert_eq!(rendered.window.start, 2, "window honours the pinned offset");
+        assert_eq!(
+            rendered.tabs.first().map(|h| h.session_id.as_str()),
+            Some("c"),
+            "the first painted chip is the one at the offset"
+        );
+        assert!(rendered.scroll_back.is_some(), "left side is hidden now");
+        assert!(rendered.scroll_forward.is_some(), "right side still is");
+    }
+
+    /// Resting mode follows the ACTIVE chip: activating a tab past the right
+    /// edge scrolls it into view instead of hiding it. That is what makes
+    /// `Ctrl+PageDown` usable with more tabs than columns.
+    #[test]
+    fn resting_window_follows_the_active_chip() {
+        let c = chips(&["a", "b", "c", "d", "e", "f"]);
+        let area = Rect::new(0, 0, 40, 1);
+        let (_, rendered) = draw(area, &c, Some(5));
+
+        assert!(
+            rendered.window.contains(&5),
+            "active chip must be inside the window: {:?}",
+            rendered.window
+        );
+        assert!(
+            rendered.scroll_back.is_some(),
+            "following the active chip leaves the left side hidden"
+        );
+        assert!(
+            rendered
+                .tabs
+                .iter()
+                .any(|h| h.session_id == "f" && h.rect.width > 0),
+            "the active chip must actually be painted"
+        );
+    }
+
+    /// Edge markers are clickable, so an overflowing strip is reachable with the
+    /// mouse as well as with `Ctrl+PageDown`.
+    #[test]
+    fn edge_markers_are_hit_testable() {
+        let c = chips(&["a", "b", "c", "d", "e", "f"]);
+        let area = Rect::new(0, 0, 40, 1);
+        let (_, rendered) = draw_at(area, &c, Some(2), Some(2));
+
+        let back = rendered.scroll_back.expect("back marker");
+        assert_eq!(
+            rendered.hit(back.x, 0),
+            Some(TabHitTarget::ScrollTabs { forward: false })
+        );
+        let forward = rendered.scroll_forward.expect("forward marker");
+        assert_eq!(
+            rendered.hit(forward.x, 0),
+            Some(TabHitTarget::ScrollTabs { forward: true })
+        );
+    }
+
+    /// A marker must never be painted on top of a chip it would cover — the
+    /// budget reserves its columns before any chip is placed.
+    #[test]
+    fn markers_never_overlap_a_chip() {
+        let c = chips(&["a", "b", "c", "d", "e", "f", "g"]);
+        let area = Rect::new(0, 0, 40, 1);
+        let (_, rendered) = draw_at(area, &c, Some(1), Some(1));
+
+        let marker = rendered.scroll_forward.expect("forward marker");
+        for hit in &rendered.tabs {
+            assert!(
+                !hit.rect.intersects(marker),
+                "marker {marker:?} overlaps chip {:?}",
+                hit.rect
+            );
+        }
     }
 
     #[test]
