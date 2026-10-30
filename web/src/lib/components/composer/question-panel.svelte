@@ -50,7 +50,10 @@
 	/**
 	 * The draft starts empty and is reset by the `{#key}` wrapper in the page:
 	 * a new tool call id remounts the panel, so no effect is needed to clear it.
+	 * Reading `request.questions` here is therefore deliberate — the initial
+	 * value IS the value, and a derived draft would fight the reader's typing.
 	 */
+	// svelte-ignore state_referenced_locally
 	let draft = $state<QuestionDraft>(emptyDraft(request.questions));
 	let index = $state(0);
 

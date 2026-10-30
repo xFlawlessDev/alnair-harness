@@ -1,8 +1,11 @@
 <script lang="ts">
 	import ArrowUpIcon from '@lucide/svelte/icons/arrow-up';
-	import PlusIcon from '@lucide/svelte/icons/plus';
+	import FileTextIcon from '@lucide/svelte/icons/file-text';
+	import PaperclipIcon from '@lucide/svelte/icons/paperclip';
 	import SquareIcon from '@lucide/svelte/icons/square';
+	import XIcon from '@lucide/svelte/icons/x';
 	import { tick } from 'svelte';
+	import * as Attachment from '#lib/components/ui/attachment/index.js';
 	import * as Tooltip from '#lib/components/ui/tooltip/index.js';
 	import type {
 		AccessMode,
@@ -16,12 +19,22 @@
 		WorktreeEntry
 	} from '#lib/harness/types.js';
 	import {
+		attachmentFromFile,
+		attachmentMeta,
+		nextAttachmentId,
+		pastedName,
+		promptBlocks,
+		shouldAttachText,
+		type Attachment as ComposerAttachment
+	} from '#lib/harness/attachments.js';
+	import {
 		filterCommands,
 		filterEntries,
 		insertEntry,
 		triggerAt,
 		type Trigger
 	} from '#lib/harness/mentions.js';
+	import { formatBytes } from '#lib/harness/format.js';
 	import AccessPicker from './access-picker.svelte';
 	import CheckoutBar from './checkout-bar.svelte';
 	import CommandMenu from './command-menu.svelte';
@@ -48,6 +61,10 @@
 		worktrees,
 		busy,
 		commands = [],
+		enterToSend = true,
+		mentionMenu = true,
+		commandMenu = true,
+		thresholdPercent,
 		onsend,
 		oncancel,
 		onmodel,
@@ -72,7 +89,22 @@
 		busy: boolean;
 		/** Commands the agent advertised; empty until it does. */
 		commands?: SlashCommand[];
-		onsend: (text: string) => void;
+		/** Whether Enter submits, or inserts a newline (Ctrl/Cmd+Enter still sends). */
+		enterToSend?: boolean;
+		/** Whether `@` opens the file menu. */
+		mentionMenu?: boolean;
+		/** Whether `/` opens the command menu. */
+		commandMenu?: boolean;
+		/** Where the context meter turns amber; the settings dialog's value. */
+		thresholdPercent?: number;
+		/**
+		 * Send the draft and its attachments.
+		 *
+		 * `blocks` is already in wire shape (`text`, `image`, `resource`), built
+		 * by `promptBlocks` so the ordering rule lives in one tested place. A
+		 * transport that only speaks text ignores it and uses `text`.
+		 */
+		onsend: (text: string, blocks?: unknown[]) => void;
 		oncancel: () => void;
 		onmodel: (id: string) => void;
 		oneffort: (effort: string) => void;
@@ -111,6 +143,17 @@
 	let draft = $state('');
 	let form: HTMLFormElement | null = $state(null);
 	let textarea: HTMLTextAreaElement | null = $state(null);
+	let fileInput: HTMLInputElement | null = $state(null);
+
+	/**
+	 * Pasted or dropped material, held until the prompt is sent.
+	 *
+	 * A long log or a screenshot is not a good fit for the textarea: the first
+	 * buries the question under its own data, and the second cannot be typed at
+	 * all. Both become blocks on the wire instead (`attachments.ts`), and this
+	 * list is what the reader sees and can remove before sending.
+	 */
+	let attachments = $state<ComposerAttachment[]>([]);
 
 	/** Which menu is open, what filters it, and which row is highlighted. */
 	let trigger = $state<Trigger>(null);
@@ -145,7 +188,7 @@
 	/** Guards against an older query's reply overwriting a newer one. */
 	let searchSeq = 0;
 
-	const canSend = $derived(draft.trim().length > 0 && !busy);
+	const canSend = $derived((draft.trim().length > 0 || attachments.length > 0) && !busy);
 
 	const options = $derived.by(() => {
 		if (trigger?.kind === 'command') return filterCommands(commands, trigger.query);
@@ -166,17 +209,28 @@
 			return;
 		}
 		const next = triggerAt(textarea.value, textarea.selectionStart);
+		/**
+		 * A disabled menu is not a closed menu: the token stays as plain text
+		 * and nothing is inserted on Enter, so `/model` or `@src/x.ts` typed
+		 * with the menus off is sent literally — which is what a reader who
+		 * turned them off asked for.
+		 */
+		const allowed =
+			next === null ||
+			(next.kind === 'command' && commandMenu) ||
+			(next.kind === 'mention' && mentionMenu);
+		const usable = allowed ? next : null;
 		// A closed menu reopens only on a fresh trigger, so Escape is sticky
 		// until the reader edits the token again.
-		if (next?.kind !== trigger?.kind || next?.start !== trigger?.start) active = 0;
-		trigger = next;
-		if (next?.kind === 'mention') {
+		if (usable?.kind !== trigger?.kind || usable?.start !== trigger?.start) active = 0;
+		trigger = usable;
+		if (usable?.kind === 'mention') {
 			// The first `@` of a session has nothing to show yet: the listing is
 			// an RPC, and `files` only carries whatever the page seeded. Ask for
 			// the workspace root once, lazily, so opening the menu is not a
 			// startup cost.
 			if (browsing === undefined && listing.length === 0) void loadRoot();
-			void refreshMatches(next.query);
+			void refreshMatches(usable.query);
 		}
 	}
 
@@ -279,10 +333,125 @@
 	function submit(event: SubmitEvent) {
 		event.preventDefault();
 		if (!canSend) return;
-		onsend(draft);
+		onsend(draft, promptBlocks(draft, attachments));
+		releasePreviews();
 		draft = '';
+		attachments = [];
 		close();
 		void tick().then(() => textarea?.focus());
+	}
+
+	/**
+	 * A paste that is a picture, or a chunk of a file, becomes an attachment.
+	 *
+	 * The clipboard's `text/plain` and `files` are both inspected, and files
+	 * win: a screenshot copied out of a browser carries the image AND a
+	 * `text/html` caption, and inserting the caption as text beside the
+	 * picture is noise. `preventDefault` only fires when something was
+	 * consumed, so an ordinary sentence paste still goes through the browser's
+	 * own insertion (undo stack, caret handling and all).
+	 */
+	async function onpaste(event: ClipboardEvent) {
+		const data = event.clipboardData;
+		if (!data) return;
+
+		const files = [...data.files].filter((file) => file.size > 0);
+		const text = data.getData('text/plain');
+		// A pasted path is a mention the reader wants in the text, not a file
+		// to attach: `@`-style drops come through `drop`, and a bare path from
+		// the terminal is something the agent resolves itself.
+		const looksLikePath = /^\s*(?:file:\/\/|(?:[A-Za-z]:)?[\\/]|\.\.?[\\/])/.test(text);
+
+		if (files.length > 0) {
+			event.preventDefault();
+			for (const file of files) await attachFile(file);
+			return;
+		}
+
+		if (text.length > 0 && !looksLikePath && shouldAttachText(text)) {
+			event.preventDefault();
+			addAttachment({
+				id: nextAttachmentId(attachments),
+				kind: 'text',
+				name: pastedName(attachments),
+				data: text,
+				bytes: new Blob([text]).size
+			});
+			return;
+		}
+
+		// Everything else is the browser's own paste. Re-sync so a `/` or `@`
+		// the insert introduced opens its menu; the input event is what
+		// normally does that, and `preventDefault` was not called here.
+		void tick().then(sync);
+	}
+
+	/** Drop files or text from the OS; a directory drop is refused quietly. */
+	async function ondrop(event: DragEvent) {
+		const files = [...(event.dataTransfer?.files ?? [])];
+		if (files.length === 0) return;
+		event.preventDefault();
+		for (const file of files) await attachFile(file);
+	}
+
+	function ondragover(event: DragEvent) {
+		// Only claim the drop when files are actually offered, so dragging
+		// selected text inside the textarea keeps working.
+		if (event.dataTransfer?.types.includes('Files')) event.preventDefault();
+	}
+
+	/**
+	 * Read a `File` (a paste or a drop) into an attachment.
+	 *
+	 * `attachmentFromFile` is the harness-side decoder (image vs text, base64,
+	 * thresholds); this only adds the per-draft identity it cannot know.
+	 */
+	async function attachFile(file: File) {
+		const attachment = await attachmentFromFile(file);
+		if (!attachment) return;
+		// A dropped/pasted file has no stable id of its own; the terminator in
+		// `nextAttachmentId` is what keeps two same-named drops apart.
+		addAttachment({
+			...attachment,
+			id: nextAttachmentId(attachments),
+			name: uniqueName(attachment.name, attachments)
+		});
+	}
+
+	function uniqueName(name: string, existing: ComposerAttachment[]): string {
+		if (!existing.some((attachment) => attachment.name === name)) return name;
+		const dot = name.lastIndexOf('.');
+		const stem = dot > 0 ? name.slice(0, dot) : name;
+		const ext = dot > 0 ? name.slice(dot) : '';
+		let index = 2;
+		while (existing.some((attachment) => attachment.name === `${stem}-${index}${ext}`)) index += 1;
+		return `${stem}-${index}${ext}`;
+	}
+
+	function addAttachment(attachment: ComposerAttachment) {
+		attachments = [...attachments, attachment];
+		void tick().then(() => textarea?.focus());
+	}
+
+	function removeAttachment(id: string) {
+		const target = attachments.find((attachment) => attachment.id === id);
+		if (target?.preview) URL.revokeObjectURL(target.preview);
+		attachments = attachments.filter((attachment) => attachment.id !== id);
+		void tick().then(() => textarea?.focus());
+	}
+
+	/** Data URLs are cheap; blob URLs from a drop are not and must be freed. */
+	function releasePreviews() {
+		for (const attachment of attachments) {
+			if (attachment.preview?.startsWith('blob:')) URL.revokeObjectURL(attachment.preview);
+		}
+	}
+
+	function pickFiles(event: Event) {
+		const input = event.currentTarget as HTMLInputElement;
+		const files = [...(input.files ?? [])];
+		input.value = '';
+		void Promise.all(files.map((file) => attachFile(file)));
 	}
 
 	function onkeydown(event: KeyboardEvent) {
@@ -309,10 +478,36 @@
 			}
 		}
 
-		if (event.key === 'Enter' && !event.shiftKey && !event.isComposing) {
+		// Backspace on an empty draft removes the last attachment, the same
+		// gesture every chat composer uses. Guarded on an empty draft so it
+		// never eats a character the reader is deleting.
+		if (
+			event.key === 'Backspace' &&
+			draft.length === 0 &&
+			attachments.length > 0 &&
+			!event.isComposing
+		) {
 			event.preventDefault();
-			form?.requestSubmit();
+			removeAttachment(attachments[attachments.length - 1].id);
+			return;
 		}
+
+		if (event.key !== 'Enter' || event.isComposing) return;
+
+		/**
+		 * Shift+Enter always inserts a newline; Enter's meaning is a setting.
+		 *
+		 * `enter_to_send = false` makes Enter a newline too, which is what a
+		 * reader who writes multi-paragraph prompts wants — and then the only
+		 * way to send is the button (or Ctrl/Cmd+Enter, which always sends).
+		 * Without that modifier the setting would leave a reader with no
+		 * keyboard path to send at all.
+		 */
+		if (event.shiftKey) return;
+		if (!enterToSend && !(event.ctrlKey || event.metaKey)) return;
+
+		event.preventDefault();
+		form?.requestSubmit();
 	}
 
 	/** Grow with the text, up to a ceiling, then scroll. */
@@ -333,6 +528,10 @@
 	<form bind:this={form} onsubmit={submit}>
 		<div
 			class="relative rounded-xl border border-line-strong bg-paper-raised shadow-[0_1px_0_rgba(0,0,0,0.04)] transition-colors focus-within:border-olive/60"
+			role="group"
+			aria-label="Message composer"
+			{ondrop}
+			{ondragover}
 		>
 			<!--
 				The menus sit above the card, anchored to its top edge. They are
@@ -366,6 +565,7 @@
 				use:autosize
 				bind:value={draft}
 				{onkeydown}
+				{onpaste}
 				oninput={onedit}
 				onclick={sync}
 				onkeyup={sync}
@@ -375,7 +575,62 @@
 				class="block max-h-52 w-full resize-none bg-transparent px-3.5 pt-3 pb-1 text-[13.5px] leading-relaxed text-ink outline-none placeholder:text-ink-tertiary/80"
 			></textarea>
 
+			{#if attachments.length > 0}
+				<!--
+					The strip goes UNDER the field and inside the card: it is part
+					of the draft, and a chip floating above the composer would read
+					as belonging to the thread.
+				-->
+				<div class="flex flex-wrap gap-1.5 px-3 pt-2 pb-1">
+					{#each attachments as attachment (attachment.id)}
+						<Attachment.Root size="xs" class="border-line bg-paper">
+							<Attachment.Media
+								variant={attachment.kind === 'image' ? 'image' : 'icon'}
+								class="bg-paper-card"
+							>
+								{#if attachment.kind === 'image' && attachment.preview}
+									<img src={attachment.preview} alt={attachment.name} />
+								{:else}
+									<FileTextIcon class="text-ink-tertiary" />
+								{/if}
+							</Attachment.Media>
+							<Attachment.Content>
+								<Attachment.Title class="text-[11.5px]">{attachment.name}</Attachment.Title>
+								<Attachment.Description class="text-[10px]">
+									{attachmentMeta(attachment)}
+									·
+									{formatBytes(attachment.bytes)}
+								</Attachment.Description>
+							</Attachment.Content>
+							<Attachment.Actions>
+								<Attachment.Action
+									aria-label={`Remove ${attachment.name}`}
+									onclick={() => removeAttachment(attachment.id)}
+								>
+									<XIcon class="size-3" />
+								</Attachment.Action>
+							</Attachment.Actions>
+						</Attachment.Root>
+					{/each}
+				</div>
+			{/if}
+
 			<div class="flex items-center gap-1 px-2 pt-1 pb-2">
+				<!--
+					The picker is a real file input: `<input type="file">` is the
+					one control that reaches the reader's disk without a native
+					dialog in the server, and its value is cleared after every
+					pick so the same file can be attached twice in a row.
+				-->
+				<input
+					bind:this={fileInput}
+					type="file"
+					multiple
+					class="hidden"
+					onchange={pickFiles}
+					aria-hidden="true"
+					tabindex="-1"
+				/>
 				<Tooltip.Root>
 					<Tooltip.Trigger>
 						{#snippet child({ props })}
@@ -383,13 +638,16 @@
 								{...props}
 								type="button"
 								class="flex size-7 shrink-0 items-center justify-center rounded-md text-ink-secondary transition-colors hover:bg-paper-card hover:text-ink"
-								aria-label="Attach"
+								aria-label="Attach files"
+								onclick={() => fileInput?.click()}
 							>
-								<PlusIcon class="size-4" />
+								<PaperclipIcon class="size-4" />
 							</button>
 						{/snippet}
 					</Tooltip.Trigger>
-					<Tooltip.Content><p>Attach (mock)</p></Tooltip.Content>
+					<Tooltip.Content>
+						<p>Attach files · or paste an image or a long log</p>
+					</Tooltip.Content>
 				</Tooltip.Root>
 
 				<AccessPicker access={context.access} onchange={onaccess} />
@@ -397,7 +655,7 @@
 				<div class="ml-auto flex items-center gap-1.5">
 					<ModelPicker {models} {model} {effort} {onmodel} {oneffort} />
 
-					<ContextMeter {usage} onopen={() => onrefreshcontext?.()} />
+					<ContextMeter {usage} {thresholdPercent} onopen={() => onrefreshcontext?.()} />
 
 					{#if busy}
 						<Tooltip.Root>

@@ -23,11 +23,14 @@
 	 */
 	let {
 		usage,
-		onopen
+		onopen,
+		/** Where the meter turns amber; the dialog's own setting. */
+		thresholdPercent
 	}: {
 		usage: ContextUsage;
 		/** Re-read the exact snapshot; called when the panel opens. */
 		onopen?: () => void;
+		thresholdPercent?: number;
 	} = $props();
 
 	/**
@@ -40,19 +43,27 @@
 	const known = $derived(usage.limit > 0);
 
 	const percent = $derived(usage.limit === 0 ? 0 : (usage.used / usage.limit) * 100);
+
+	/**
+	 * The warning point.
+	 *
+	 * Two different numbers, and both matter: `autoCompactThresholdPercent` is
+	 * where the AGENT will compact (reported by the wire), while the setting is
+	 * where the READER wants to be warned. The meter colours at whichever comes
+	 * first, so raising the agent's threshold cannot silently remove the
+	 * warning, and lowering the reader's can warn earlier than the agent acts.
+	 */
+	const warnAt = $derived(
+		thresholdPercent === undefined
+			? usage.autoCompactThresholdPercent
+			: Math.min(thresholdPercent, usage.autoCompactThresholdPercent)
+	);
+
 	const tone = $derived(
-		percent > 90
-			? 'text-error'
-			: percent > usage.autoCompactThresholdPercent
-				? 'text-plan'
-				: 'text-ink-secondary'
+		percent > 90 ? 'text-error' : percent > warnAt ? 'text-plan' : 'text-ink-secondary'
 	);
 	const stroke = $derived(
-		percent > 90
-			? 'stroke-error'
-			: percent > usage.autoCompactThresholdPercent
-				? 'stroke-plan'
-				: 'stroke-running'
+		percent > 90 ? 'stroke-error' : percent > warnAt ? 'stroke-plan' : 'stroke-running'
 	);
 	const remaining = $derived(Math.max(0, usage.limit - usage.used));
 
@@ -74,6 +85,8 @@
 	 */
 	const cells = $derived(contextCells(usage, rows));
 
+	/** What the agent will act on; the label says "auto-compact", so it is
+	 *  the agent's figure, not the reader's warning point. */
 	const threshold = $derived(usage.autoCompactThresholdPercent);
 </script>
 
@@ -141,7 +154,7 @@
 							'ml-auto rounded-sm px-1.5 py-0.5 font-mono text-[11px]',
 							percent > 90
 								? 'bg-error/10 text-error'
-								: percent > threshold
+								: percent > warnAt
 									? 'bg-plan/10 text-plan'
 									: 'bg-paper-card text-ink-secondary'
 						]}
