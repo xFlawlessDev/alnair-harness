@@ -7,7 +7,11 @@
 	import type { DiffLine, FileEditPart } from '#lib/harness/types.js';
 	import { traceStatus } from './status.js';
 
-	let { part }: { part: FileEditPart } = $props();
+	let {
+		part,
+		/** Whether the diff starts folded; the dialog's `collapse_edits`. */
+		collapse = true
+	}: { part: FileEditPart; collapse?: boolean } = $props();
 
 	const status = $derived(traceStatus(part.status));
 	const failed = $derived(part.status === 'error');
@@ -76,7 +80,7 @@
 	{#if part.hunks.length === 0}
 		{@render line()}
 	{:else}
-		<Trace.Collapsible>
+		<Trace.Collapsible open={!collapse}>
 			<Trace.CollapsibleTrigger>{@render line()}</Trace.CollapsibleTrigger>
 			<Trace.CollapsibleContent class="border-line/80">
 				<CodeBlock.Root size="sm" class="bg-code-surface">

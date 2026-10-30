@@ -8,14 +8,31 @@
 	import ImageReadRow from './image-read-row.svelte';
 	import ReasoningRow from './reasoning-row.svelte';
 	import SubagentRow from './subagent-row.svelte';
+	import SystemRow from './system-row.svelte';
 	import TerminalRow from './terminal-row.svelte';
 	import ToolRow from './tool-row.svelte';
 
-	let { part }: { part: TurnPart } = $props();
+	let {
+		part,
+		turnClosed = false,
+		collapseEdits = true
+	}: {
+		part: TurnPart;
+		/**
+		 * Whether the owning turn has finished.
+		 *
+		 * Only the reasoning row uses it: a thought inside a closed turn is over
+		 * by definition, and saying "Thinking" there would be a claim about a
+		 * finished turn that the reader can see is false.
+		 */
+		turnClosed?: boolean;
+		/** Whether a diff starts folded; the `collapse_edits` setting. */
+		collapseEdits?: boolean;
+	} = $props();
 </script>
 
 {#if part.kind === 'reasoning'}
-	<ReasoningRow {part} />
+	<ReasoningRow {part} {turnClosed} />
 {:else if part.kind === 'tool'}
 	<ToolRow {part} />
 {:else if part.kind === 'file-read'}
@@ -23,7 +40,7 @@
 {:else if part.kind === 'file-write'}
 	<FileWriteRow {part} />
 {:else if part.kind === 'file-edit'}
-	<FileEditRow {part} />
+	<FileEditRow {part} collapse={collapseEdits} />
 {:else if part.kind === 'image-read'}
 	<ImageReadRow {part} />
 {:else if part.kind === 'terminal'}
@@ -34,4 +51,6 @@
 	<DiffRow {part} />
 {:else if part.kind === 'error'}
 	<ErrorRow {part} />
+{:else if part.kind === 'system'}
+	<SystemRow {part} />
 {/if}

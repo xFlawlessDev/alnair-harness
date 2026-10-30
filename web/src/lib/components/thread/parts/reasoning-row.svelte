@@ -6,11 +6,33 @@
 	import type { ReasoningPart } from '#lib/harness/types.js';
 	import { traceStatus } from './status.js';
 
-	let { part }: { part: ReasoningPart } = $props();
+	/**
+	 * One thought, as a collapsible row.
+	 *
+	 * The label is the whole point: `Thinking` while the model is thinking,
+	 * `Thought` once it is done. The status comes from the reducer, which
+	 * closes a reasoning part the moment any other part arrives — the wire has
+	 * no `thought_completed` update, so a row that only listened for one stayed
+	 * `Thinking` for the rest of the turn and left a spinner over a finished
+	 * thought.
+	 *
+	 * It also falls back on its own: a part whose turn has already closed is
+	 * finished by definition, whatever the part's own status says. That covers
+	 * a transcript replayed from before the reducer learned to settle, and a
+	 * turn closed by `turn_completed` between two chunks.
+	 */
+	let {
+		part,
+		turnClosed = false
+	}: {
+		part: ReasoningPart;
+		/** The owning turn is no longer streaming. */
+		turnClosed?: boolean;
+	} = $props();
 
-	const running = $derived(part.status === 'running' || part.status === 'pending');
+	const running = $derived(!turnClosed && (part.status === 'running' || part.status === 'pending'));
 	const label = $derived(running ? 'Thinking' : 'Thought');
-	const status = $derived(traceStatus(part.status));
+	const status = $derived(traceStatus(running ? 'running' : 'complete'));
 
 	// The reader's choice wins; until they click, it follows the run.
 	let chosen = $state<boolean | undefined>(undefined);
