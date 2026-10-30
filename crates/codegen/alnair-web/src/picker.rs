@@ -95,35 +95,93 @@ impl ChooserCommand {
 
 /// The first candidate for this platform.
 ///
-/// On Linux there are two, and the second is only tried when the first is not
-/// installed — see [`run_chooser`].
+/// Windows and Linux each have two, and the second is only tried when the first
+/// is not installed — see [`run_chooser`].
 fn candidates() -> Vec<ChooserCommand> {
     if cfg!(target_os = "windows") {
         // `-EncodedCommand` sidesteps every layer of quoting between here and
         // PowerShell: the script travels as UTF-16LE base64, so a title or a
         // path with quotes cannot break the command line.
+        //
+        // The owner form is what makes the dialog reachable at all. Without
+        // one, WinForms opens the picker BEHIND the browser window that
+        // triggered it: the page spins, the reader sees nothing, and the
+        // action reads as broken. A hidden, topmost owner keeps the modal in
+        // front without leaving a stray window behind.
+        //
+        // EVERY optional property is guarded, and `$ErrorActionPreference` is
+        // `Continue` rather than `Stop`. Both are load-bearing: on the .NET
+        // Framework build of WinForms that ships with Windows PowerShell,
+        // `FolderBrowserDialog` has no `UseDescriptionForTitle`, so assigning
+        // it raised a terminating error, the script exited 1, and the caller
+        // read that as "the user cancelled" — a button that only ever blinked.
+        // A property that does not exist must cost nothing, and the one that
+        // does must still set the title.
         let script = r#"
-$ErrorActionPreference = 'Stop'
+$ErrorActionPreference = 'Continue'
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 Add-Type -AssemblyName System.Windows.Forms | Out-Null
+$owner = $null
+try {
+    $owner = New-Object System.Windows.Forms.Form
+    $owner.TopMost = $true
+    $owner.ShowInTaskbar = $false
+    $owner.FormBorderStyle = 'None'
+    $owner.Size = New-Object System.Drawing.Size(1, 1)
+    $owner.StartPosition = 'CenterScreen'
+    $owner.Show()
+    $owner.Activate()
+} catch {
+    if ($owner) { try { $owner.Dispose() } catch {} }
+    $owner = $null
+}
 $dialog = New-Object System.Windows.Forms.FolderBrowserDialog
-$dialog.Description = 'Select a workspace directory'
-$dialog.UseDescriptionForTitle = $true
-$dialog.ShowNewFolderButton = $true
-if ($dialog.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {
-    [Console]::Out.WriteLine($dialog.SelectedPath)
+try { $dialog.Description = 'Select a workspace directory' } catch {}
+try { $dialog.UseDescriptionForTitle = $true } catch {}
+try { $dialog.ShowNewFolderButton = $true } catch {}
+try {
+    $result = if ($owner) { $dialog.ShowDialog($owner) } else { $dialog.ShowDialog() }
+    if ($result -eq [System.Windows.Forms.DialogResult]::OK) {
+        [Console]::Out.WriteLine($dialog.SelectedPath)
+    }
+} catch {
+    # A dialog that cannot open is a failure the caller should SEE, not a
+    # silent cancel: write the reason to stderr and exit non-zero so the
+    # endpoint reports "the folder picker failed" instead of doing nothing.
+    [Console]::Error.WriteLine($_.Exception.Message)
+    exit 2
+} finally {
+    if ($owner) {
+        try { $owner.Close() } catch {}
+        try { $owner.Dispose() } catch {}
+    }
 }
 "#;
-        return vec![ChooserCommand::new(
-            "powershell",
-            vec![
-                "-NoProfile".into(),
-                // Required: WinForms' folder dialog is a COM STA object.
-                "-STA".into(),
-                "-EncodedCommand".into(),
-                encode_powershell(script),
-            ],
-        )];
+        return vec![
+            ChooserCommand::new(
+                "powershell",
+                vec![
+                    "-NoProfile".into(),
+                    // Required: WinForms' folder dialog is a COM STA object.
+                    "-STA".into(),
+                    "-EncodedCommand".into(),
+                    encode_powershell(script),
+                ],
+            ),
+            // Windows PowerShell ships with the OS, but a locked-down image can
+            // remove it while leaving PowerShell 7 installed. `run_chooser`
+            // tries each candidate in turn, so this is the second chance rather
+            // than a second dialog.
+            ChooserCommand::new(
+                "pwsh",
+                vec![
+                    "-NoProfile".into(),
+                    "-STA".into(),
+                    "-EncodedCommand".into(),
+                    encode_powershell(script),
+                ],
+            ),
+        ];
     }
 
     if cfg!(target_os = "macos") {
@@ -217,9 +275,15 @@ enum SpawnFailure {
 
 /// Start one chooser, wait for it, and interpret the result.
 ///
-/// Cancellation and failure are the same observable here — a non-zero exit with
-/// no output — because every platform signals "the user closed the dialog" that
-/// way, and an empty path is not a usable answer either.
+/// Cancellation and failure are mostly the same observable — a non-zero exit
+/// with no output — because `osascript` and `zenity` both signal "the user
+/// closed the dialog" that way, and an empty path is not a usable answer
+/// either.
+///
+/// **stderr breaks the tie.** A chooser that exits non-zero AND writes to
+/// stderr did not cancel; it broke. That distinction is the whole reason the
+/// Windows script routes its exceptions to stderr: treating a crash as a cancel
+/// is what made "add workspace" look like a button that does nothing.
 async fn spawn(spec: &ChooserCommand) -> Result<Option<String>, SpawnFailure> {
     debug!(program = %spec.program, "web: opening the native folder picker");
 
@@ -228,7 +292,10 @@ async fn spawn(spec: &ChooserCommand) -> Result<Option<String>, SpawnFailure> {
         .args(&spec.args)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
-        .stderr(Stdio::null())
+        // Piped, not null: a chooser that fails explains itself here, and that
+        // explanation is the difference between a reported failure and a
+        // silent cancel.
+        .stderr(Stdio::piped())
         // The dialog is its own window; it must not be tied to the server's
         // lifetime in a way that would kill it mid-interaction.
         .kill_on_drop(true);
@@ -253,9 +320,15 @@ async fn spawn(spec: &ChooserCommand) -> Result<Option<String>, SpawnFailure> {
     };
 
     if !output.status.success() {
-        // A cancelled dialog exits non-zero on every platform. That is not an
-        // error the user needs to see.
-        return Ok(None);
+        // A cancel and a crash both exit non-zero. stderr is what tells them
+        // apart, and the Windows script is written to put a failure there:
+        // without this, a chooser that never opened was reported as "the user
+        // cancelled" and the button looked dead.
+        let reason = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        if reason.is_empty() {
+            return Ok(None);
+        }
+        return Err(SpawnFailure::Other(reason));
     }
 
     let raw = String::from_utf8_lossy(&output.stdout);
@@ -323,6 +396,107 @@ mod tests {
         assert!(spec.args.iter().any(|arg| arg == "-EncodedCommand"));
         // The script must ask for a FOLDER, not a file.
         assert!(spec.args.iter().any(|arg| arg == "-NoProfile"));
+    }
+
+    #[test]
+    fn windows_has_a_pwsh_fallback() {
+        // A locked-down image can remove Windows PowerShell while leaving
+        // PowerShell 7 installed. The second candidate is only tried when the
+        // first is missing, so this cannot open two dialogs.
+        let specs = candidates();
+        assert!(specs.len() >= 2, "windows needs a fallback chooser");
+        assert_eq!(specs[1].program, "pwsh");
+        assert!(specs[1].args.iter().any(|arg| arg == "-STA"));
+        assert!(specs[1].args.iter().any(|arg| arg == "-EncodedCommand"));
+    }
+
+    #[test]
+    fn windows_script_owns_the_dialog_and_survives_no_desktop() {
+        // Two properties the script has to keep, both learned from a real
+        // report of "the + button does nothing":
+        //
+        // - The dialog needs an OWNER, or WinForms draws it behind the browser
+        //   window and the reader never sees it.
+        // - Creating that owner must be optional. A session with no desktop
+        //   cannot make a window, and `$ErrorActionPreference = 'Stop'` would
+        //   turn that into a non-zero exit the caller reads as a cancel.
+        let specs = candidates();
+        let encoded = specs[0]
+            .args
+            .iter()
+            .position(|arg| arg == "-EncodedCommand")
+            .and_then(|index| specs[0].args.get(index + 1))
+            .expect("the script travels as -EncodedCommand");
+        let script = decode_powershell(encoded);
+        assert!(script.contains("ShowDialog($owner)"), "{script}");
+        assert!(script.contains("try {"), "{script}");
+        assert!(script.contains("$owner = $null"), "{script}");
+    }
+
+    #[test]
+    fn windows_script_guards_optional_dialog_properties() {
+        // The regression that made the picker a button that only blinked.
+        //
+        // `FolderBrowserDialog.UseDescriptionForTitle` does not exist on the
+        // .NET Framework build that ships with Windows PowerShell. Under
+        // `$ErrorActionPreference = 'Stop'` that assignment was a terminating
+        // error: the script exited 1 with no stdout, and the caller read "exit
+        // non-zero and nothing printed" as "the user cancelled".
+        //
+        // Two things keep that from recurring: the preference is `Continue`,
+        // and each optional property is assigned inside its own `try`.
+        let specs = candidates();
+        let encoded = specs[0]
+            .args
+            .iter()
+            .position(|arg| arg == "-EncodedCommand")
+            .and_then(|index| specs[0].args.get(index + 1))
+            .expect("the script travels as -EncodedCommand");
+        let script = decode_powershell(encoded);
+
+        assert!(
+            script.contains("$ErrorActionPreference = 'Continue'"),
+            "a terminating preference turns an optional property into a dead button: {script}"
+        );
+        for property in ["Description", "UseDescriptionForTitle", "ShowNewFolderButton"] {
+            let guarded = format!("try {{ $dialog.{property} =");
+            assert!(
+                script.contains(&guarded),
+                "`{property}` must be assigned inside its own try, or a build without it aborts the script: {script}"
+            );
+        }
+        // A dialog that cannot open must SAY so, not exit quietly.
+        assert!(
+            script.contains("[Console]::Error.WriteLine"),
+            "a failure has to reach stderr, which is what distinguishes it from a cancel: {script}"
+        );
+    }
+
+    /// The inverse of [`encode_powershell`], for asserting on the script.
+    fn decode_powershell(encoded: &str) -> String {
+        const ALPHABET: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+        let mut bits = 0u32;
+        let mut bit_count = 0u32;
+        let mut bytes = Vec::new();
+        for byte in encoded.bytes() {
+            if byte == b'=' {
+                break;
+            }
+            let Some(value) = ALPHABET.iter().position(|entry| *entry == byte) else {
+                continue;
+            };
+            bits = (bits << 6) | value as u32;
+            bit_count += 6;
+            if bit_count >= 8 {
+                bit_count -= 8;
+                bytes.push((bits >> bit_count) as u8);
+            }
+        }
+        let units: Vec<u16> = bytes
+            .chunks_exact(2)
+            .map(|pair| u16::from_le_bytes([pair[0], pair[1]]))
+            .collect();
+        String::from_utf16_lossy(&units)
     }
 
     #[test]
