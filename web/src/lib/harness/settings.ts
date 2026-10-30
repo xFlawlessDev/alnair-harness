@@ -134,7 +134,7 @@ export const SETTINGS: SettingMeta[] = [
 		key: 'collapse_edits',
 		category: 'conversation',
 		label: 'Collapse file edits',
-		description: 'Start file edits collapsed instead of expanded.',
+		description: 'Start a file diff folded, so a long edit does not bury the reply.',
 		keywords: ['diff', 'edit', 'collapse'],
 		kind: { kind: 'bool' }
 	},
@@ -215,13 +215,19 @@ export const SETTINGS: SettingMeta[] = [
 	}
 ];
 
-/** The values the client starts with. */
+/**
+ * The values the client starts with.
+ *
+ * `collapse_edits` defaults to `true` because that is what the thread already
+ * did: a diff opened folded. A default of `false` would have made the setting's
+ * first effect a visual regression for everyone who never touched it.
+ */
 export const DEFAULT_SETTINGS: SettingsState = {
 	theme: 'system',
 	show_timestamps: true,
 	density: 'comfortable',
 	show_thinking: true,
-	collapse_edits: false,
+	collapse_edits: true,
 	render_mermaid: false,
 	context_threshold_percent: 85,
 	enter_to_send: true,
