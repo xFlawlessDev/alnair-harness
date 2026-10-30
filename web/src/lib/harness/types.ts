@@ -191,6 +191,25 @@ export interface NoticePart {
 }
 
 /**
+ * A `<system-reminder>` the agent injected into the conversation.
+ *
+ * These reach the wire as an ordinary `user_message_chunk`, because the shell
+ * stores them as a synthetic USER message (`ConversationItem::system_reminder`)
+ * so the model treats them as context. Rendering one as a prompt bubble is
+ * therefore a lie twice over: the user did not write it, and the agent did not
+ * answer it. It is system chrome — a background task finished, a skill was
+ * announced, a lesson applied — so it gets its own row and its own role.
+ */
+export interface SystemPart {
+	kind: 'system';
+	id: string;
+	/** The wrapper that was stripped: `system-reminder`, `memory-context`, … */
+	tag: string;
+	/** The body, wrapper removed. */
+	body: string;
+}
+
+/**
  * A blocking permission request. The turn is parked until it is answered, so
  * this part lives in the thread next to the tool call it gates.
  */
@@ -245,6 +264,7 @@ export type TurnPart =
 	| DiffPart
 	| ErrorPart
 	| NoticePart
+	| SystemPart
 	| PermissionPart
 	| QuestionPart
 	| FileReadPart
@@ -258,6 +278,16 @@ export interface Turn {
 	status: TurnStatus;
 	/** ISO timestamp. */
 	at: string;
+	/**
+	 * Epoch millis when the work behind this turn actually began.
+	 *
+	 * For an assistant turn that is the PROMPT it answers, not `at`: a turn is
+	 * created by its first part, which lands after the model has been thinking,
+	 * so measuring from it silently dropped every second before the first
+	 * token. Absent on turns replayed from a transcript that predates the
+	 * field; `durationMs` is then measured from `at`.
+	 */
+	startedAt?: number;
 	/** Catalog key of the model that ran this turn. */
 	modelId?: string;
 	effort?: string;
@@ -265,6 +295,30 @@ export interface Turn {
 	/** The `promptId` the agent reported in `turn_completed`. */
 	promptId?: string;
 	parts: TurnPart[];
+}
+
+/* ------------------------------------------------------------- view prefs */
+
+/**
+ * The settings a transcript row needs.
+ *
+ * Passed down from the page rather than read from the store inside each row:
+ * the thread is prop-driven, and a row reaching for context would make every
+ * one of them untestable without a store. These four are the only settings the
+ * thread itself renders differently — everything else is chrome.
+ */
+export interface ViewPrefs {
+	/** Clock time under a user message. */
+	timestamps: boolean;
+	/** Reasoning rows. Off hides them entirely, which is what the TUI's
+	 *  `/thinking` toggle does. */
+	thinking: boolean;
+	/** File edits start collapsed instead of expanded. */
+	collapseEdits: boolean;
+	/** Row spacing: `compact` tightens the thread's gaps. */
+	density: 'comfortable' | 'compact';
+	/** Draw Mermaid fences instead of showing their source. */
+	mermaid: boolean;
 }
 
 /* ----------------------------------------------------------------- session */
