@@ -1,6 +1,7 @@
 import Actions from './code-block-actions.svelte';
 import Content from './code-block-content.svelte';
 import CopyButton from './code-block-copy-button.svelte';
+import DownloadButton from './code-block-download-button.svelte';
 import Footer from './code-block-footer.svelte';
 import Header from './code-block-header.svelte';
 import Title from './code-block-title.svelte';
@@ -21,6 +22,7 @@ export {
 	Title,
 	Actions,
 	CopyButton,
+	DownloadButton,
 	Content,
 	Line,
 	Footer,
@@ -36,6 +38,7 @@ export {
 	Title as CodeBlockTitle,
 	Actions as CodeBlockActions,
 	CopyButton as CodeBlockCopyButton,
+	DownloadButton as CodeBlockDownloadButton,
 	Content as CodeBlockContent,
 	Line as CodeBlockLine,
 	Footer as CodeBlockFooter

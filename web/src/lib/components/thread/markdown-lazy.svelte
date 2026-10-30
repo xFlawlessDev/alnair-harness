@@ -8,14 +8,16 @@
 	let {
 		content,
 		class: className,
-		streaming = false
-	}: { content: string; class?: string; streaming?: boolean } = $props();
+		streaming = false,
+		/** Draw Mermaid fences instead of showing their source. */
+		mermaid = false
+	}: { content: string; class?: string; streaming?: boolean; mermaid?: boolean } = $props();
 </script>
 
 {#await markdown}
 	<p class={['text-sm leading-relaxed whitespace-pre-wrap', className]}>{content}</p>
 {:then { default: Markdown }}
-	<Markdown {content} {streaming} class={className} />
+	<Markdown {content} {streaming} {mermaid} class={className} />
 {:catch}
 	<p class={['text-sm leading-relaxed whitespace-pre-wrap', className]}>{content}</p>
 {/await}
