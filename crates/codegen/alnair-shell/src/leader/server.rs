@@ -547,12 +547,20 @@ fn inject_capabilities_into_session_new(
         .default_model
         .as_ref()
         .is_some_and(|m| !m.is_empty());
-    let method = json.get("method").and_then(|m| m.as_str()).unwrap_or("");
+    let method = method_of(json).unwrap_or("");
     let is_session_new = method == AGENT_METHOD_NAMES.session_new;
     let is_session_load = method == AGENT_METHOD_NAMES.session_load;
     // A PTY created by this client must carry its leader key back on every
     // notification. Without it the leader falls back to `last_active_client`,
     // so with two pagers attached one of them receives the other's output.
+    //
+    // Matched through `method_of`, NOT the raw top-level method: a browser
+    // client sends ext requests `_`-prefixed (`_alnair/terminal/pty/create`),
+    // and a raw compare missed them. The PTY then carried no leader key, its
+    // output fell back to `last_active_client` — which is the TUI when both are
+    // attached — and the browser's pane sat with a blinking cursor and no
+    // prompt. `is_machine_wide_broadcast_notification` normalizes for the same
+    // reason.
     let is_pty_create = method == "alnair/terminal/pty/create";
     let is_pty_load = method == "alnair/terminal/pty/load";
     // PTY requests carry no capability fields, so the capability gate below
