@@ -43,6 +43,7 @@ import type { ScriptedTurn } from './fixtures.js';
 import type { ExtSessionUpdate } from './types/ext.js';
 import { DEFAULT_SETTINGS } from './settings.js';
 import type { SettingsState, SettingValue } from './settings.js';
+import { loadHidden, loadSettings, saveHidden, saveSettings } from './preferences.js';
 import type { AskUserQuestionRequest, AskUserQuestionResponse } from './types/ext.js';
 import type { SessionUpdate } from './types/acp.js';
 import type {
@@ -68,6 +69,7 @@ import type {
 	WorktreeEntry
 } from './types.js';
 import { fromTranscript, mergeSubagents, sortSubagents } from './subagents.js';
+import { webCommands } from './commands.js';
 import { workspaceView, type WorkspaceView } from './workspace-view.js';
 import { admit, beginReplay, endReplay, eventIdOf, liveGate, type GateState } from './dedup.js';
 import { applyRosterDelta, isExtMethod, lastSegment, relativeTo, totalTokensOf } from './wire.js';
@@ -80,10 +82,18 @@ export interface IncomingFrame {
 
 export interface Transport {
 	/**
-	 * Start a turn. Frames arrive through `onFrame` until `stop` is called or
-	 * the transport reports the turn closed.
+	 * Start a turn.
+	 *
+	 * The fixture transport pushes its scripted frames through `onFrame`; the
+	 * socket transport ignores that callback and delivers through the sink it
+	 * registered with `onFrame(sink)`, because the leader broadcasts to every
+	 * client rather than answering this one call.
+	 *
+	 * `blocks` is the prompt already in ACP shape (`text`, `image`,
+	 * `resource`), built by the composer when the draft carries attachments.
+	 * A transport that cannot carry them may ignore it and use `prompt`.
 	 */
-	send(prompt: string, onFrame: (frame: IncomingFrame) => void): void;
+	send(prompt: string, onFrame?: (frame: IncomingFrame) => void, blocks?: unknown[]): void;
 	/** Stop the live turn; the transport must not emit more frames. */
 	stop(): void;
 	/** Answer a parked permission request. */
@@ -122,6 +132,24 @@ export interface Transport {
 	sessionContext?(sessionId: string): Promise<ContextUsage | undefined>;
 	/** One directory of the workspace (`alnair/fs/list`). */
 	fsList?(path: string, sessionId: string): Promise<FileEntry[]>;
+	/**
+	 * One file's contents (`alnair/fs/read_file`).
+	 *
+	 * The inspector's preview reads through this rather than through the
+	 * transcript: it must show what is on disk now, which is not what the agent
+	 * saw when it last opened the file.
+	 */
+	fsRead?(path: string, sessionId: string): Promise<FilePreview | undefined>;
+	/**
+	 * Write one file (`alnair/fs/write_file`).
+	 *
+	 * The same handler the agent's own write tool uses, so an edit made in the
+	 * inspector lands exactly as the agent's would. Called only from an explicit
+	 * Save, never from a keystroke.
+	 */
+	fsWrite?(path: string, content: string, sessionId: string): Promise<void>;
+	/** The working tree (`alnair/git/status`), for the source-control panel. */
+	gitStatus?(sessionId: string): Promise<unknown>;
 	/** Fuzzy path search across the workspace (`alnair/fs/search`). */
 	fsSearch?(request: {
 		sessionId: string;
@@ -187,9 +215,98 @@ export interface Transport {
 	onFrame?(sink: (sessionId: string, frame: IncomingFrame) => void): void;
 	/** The leader relaunched and the transport re-handshook; reload state. */
 	onReconnected?(sink: () => void): void;
+	/** The socket's health, for the reconnect indicator. */
+	onConnection?(sink: (state: 'live' | 'reconnecting' | 'offline') => void): void;
+	/**
+	 * The socket's own health, for the "reconnecting" indicator.
+	 *
+	 * Distinct from `onReconnected`: that fires once the leader answers again,
+	 * while this reports the attempts in between. A page that silently retries
+	 * for ten seconds reads as frozen; the indicator is the difference.
+	 */
+	onConnection?(sink: (state: 'live' | 'reconnecting' | 'offline') => void): void;
+
+	// --- interactive terminal -------------------------------------------------
+	//
+	// A real PTY, not a mirror of the agent's tool output. The leader stamps
+	// `_meta["alnair/leaderClientId"]` onto `pty/create` and `pty/load`, so the
+	// output notifications route back to THIS client instead of falling back to
+	// `last_active_client` — which is the TUI whenever both are attached.
+
+	/** `alnair/terminal/pty/create`: spawn a shell and return its id. */
+	ptyCreate?(request: {
+		sessionId: string;
+		cwd?: string;
+		rows: number;
+		cols: number;
+	}): Promise<string>;
+	/**
+	 * `alnair/terminal/pty/load`: re-attach to an existing PTY.
+	 *
+	 * The server replays its whole ring buffer with `isReplay: true`, so the
+	 * emulator must be reset before feeding it — otherwise a reopen appends the
+	 * buffer to what the pane already showed.
+	 */
+	ptyLoad?(terminalId: string): Promise<{
+		rows: number;
+		cols: number;
+		exited: boolean;
+		exitCode?: number;
+	}>;
+	/** `alnair/terminal/pty/input`: keystrokes, base64-encoded bytes. */
+	ptyInput?(terminalId: string, data: string): void;
+	/** `alnair/terminal/pty/resize`. */
+	ptyResize?(terminalId: string, rows: number, cols: number): void;
+	/** `alnair/terminal/kill`: end the shell and drop the PTY. */
+	ptyClose?(terminalId: string): void;
+	/** Output, exit and busy transitions for a PTY this client owns. */
+	onPtyEvent?(sink: (terminalId: string, event: Record<string, unknown>) => void): void;
 }
 
 export type PlanOutcome = 'approved' | 'cancelled' | 'abandoned';
+
+/**
+ * The interactive terminal, as the bottom panel's Terminal tab drives it.
+ *
+ * The pane owns the emulator; the store owns the transport. Each method is a
+ * thin pass-through that also resolves the session's cwd, because a PTY has to
+ * start in the directory the agent is working in — a shell in the page's own
+ * origin directory would be looking at a different tree.
+ *
+ * `unavailable` is the reason a shell cannot be offered at all (the fixture
+ * transport has no PTY support), so the pane can say why instead of showing a
+ * spawn button that throws.
+ */
+export interface TerminalBridge {
+	/** Why no shell can be spawned, or `undefined` when one can. */
+	readonly unavailable: string | undefined;
+	/** Spawn a shell and return its id. */
+	spawn(request: { rows: number; cols: number }): Promise<string>;
+	/** Re-attach, replaying the ring buffer. */
+	attach(
+		terminalId: string
+	): Promise<{ rows: number; cols: number; exited: boolean; exitCode?: number }>;
+	/** Forward keystrokes (already base64). */
+	input(terminalId: string, data: string): void;
+	/** Resize the PTY. */
+	resize(terminalId: string, rows: number, cols: number): void;
+	/** End the shell. */
+	close(terminalId: string): void;
+	/** Subscribe to output / exit / busy notifications. Returns an unsubscribe. */
+	onevent(sink: (terminalId: string, event: Record<string, unknown>) => void): () => void;
+}
+
+/** One file as `alnair/fs/read_file` returns it. */
+export interface FilePreview {
+	/** The text, when the read produced text. */
+	text?: string;
+	/** Base64 bytes, for a binary or ranged read. */
+	base64?: string;
+	/** `text`, `binary`, … — the handler's own classification. */
+	contentType: string;
+	size: number;
+	lineCount?: number;
+}
 
 /** What `session/load` reported about the session it opened. */
 export interface SessionOpenResult {
@@ -228,6 +345,23 @@ export interface SessionStore {
 	readonly phase: StorePhase;
 	/** Why `phase` is `error`, when it is. */
 	readonly phaseDetail: string | undefined;
+	/**
+	 * Whether the active session's transcript is still arriving.
+	 *
+	 * `openSession` clears the accumulator and opens a replay window, so between
+	 * the click and the flush the thread is genuinely empty — not "a session
+	 * with no messages". A reader who clicks a session and sees a blank pane
+	 * cannot tell the two apart, so this drives a skeleton instead.
+	 */
+	readonly loading: boolean;
+	/**
+	 * Whether the socket is currently healthy.
+	 *
+	 * `reconnecting` is the state that matters for a browser-only reader: the
+	 * page keeps working, the transport keeps retrying, and this is what says
+	 * so instead of leaving a frozen-looking UI.
+	 */
+	readonly connection: 'live' | 'reconnecting' | 'offline';
 	readonly workspace: WorkspaceInfo;
 	readonly sessions: Session[];
 	/** Conversations nested under their workspace; what the sidebar renders. */
@@ -271,7 +405,7 @@ export interface SessionStore {
 	setAccess(mode: AccessMode): void;
 	/** Change one setting; the adapter forwards it to `alnair/settings/update`. */
 	setSetting(key: string, value: SettingValue): void;
-	send(text: string): void;
+	send(text: string, blocks?: unknown[]): void;
 	cancel(): void;
 	clear(): void;
 	/** Answer the parked permission request. */
@@ -302,6 +436,49 @@ export interface SessionStore {
 	 * Empty when the transport cannot search files.
 	 */
 	searchFiles(query: string, dirs?: boolean): Promise<FileEntry[]>;
+	/**
+	 * Read one file, for the inspector's preview and its editor.
+	 *
+	 * `undefined` when the transport cannot read files, or when the file is
+	 * gone — a preview of a deleted file is an empty pane with a reason, not an
+	 * error the page has to survive.
+	 */
+	readFile(path: string): Promise<FilePreview | undefined>;
+	/**
+	 * Save one file from the inspector's editor.
+	 *
+	 * Explicit, and never wired to a keystroke: a side panel that wrote on
+	 * every character would race the agent's own edits to the same path.
+	 */
+	writeFile(path: string, content: string): Promise<void>;
+	/**
+	 * Scroll the thread to the row a part produced.
+	 *
+	 * The panel's "show in thread" jumps to a tool call; the thread owns the
+	 * scroll container, so this is a request it answers, not a scroll the
+	 * store can perform.
+	 */
+	revealPart(id: string): void;
+	/** The part id a reveal is pending for, consumed by the thread. */
+	readonly revealId: string | undefined;
+	/** Clear a consumed reveal, so the same row can be revealed twice. */
+	clearReveal(): void;
+	/**
+	 * The working tree for the source-control panel.
+	 *
+	 * Returned raw and parsed by the panel, because the wire shape is git's own
+	 * (staged/unstaged lists of `GitFileChange`) and re-typing it here would put
+	 * a second description of it in the store.
+	 */
+	readGitStatus(): Promise<unknown>;
+	/**
+	 * The interactive terminal, as the bottom panel's Terminal tab drives it.
+	 *
+	 * A bridge rather than five store methods: the pane owns the PTY's whole
+	 * lifecycle — spawn, keys, resize, close — and nothing else in the app has
+	 * an opinion about it.
+	 */
+	readonly terminal: TerminalBridge;
 
 	// --- workspace administration -------------------------------------------
 
@@ -331,9 +508,15 @@ export interface SessionStore {
 	 * about, so "add a workspace" IS "start a session in this directory" —
 	 * anything else would be a list entry that disappears on reload.
 	 *
+	 * `path` skips the native dialog. The caller passes it when the dialog is
+	 * unavailable — a headless server, a refused gate, a platform with no
+	 * chooser — because a typed absolute path is the one answer that always
+	 * exists, and without it "add a workspace" would be an action that can
+	 * silently do nothing.
+	 *
 	 * Resolves to the chosen path, or `undefined` when the user cancelled.
 	 */
-	addWorkspace(): Promise<string | undefined>;
+	addWorkspace(path?: string): Promise<string | undefined>;
 	/**
 	 * Put a workspace away.
 	 *
@@ -363,11 +546,40 @@ export interface SessionStore {
 
 const STREAM_TICK_MS = 24;
 
+/** Whether a path is rooted (POSIX, Windows drive, or UNC). */
+function isAbsolutePath(path: string): boolean {
+	return /^([A-Za-z]:[\\/]|[\\/]{1,2})/.test(path);
+}
+
+/**
+ * Join a relative path onto a base, keeping the base's separator convention.
+ *
+ * Deliberately not `path.join`: this module has no Node built-ins, and the two
+ * separators are all either the transcript or the agent ever sends.
+ */
+function joinPath(base: string, path: string): string {
+	if (!base) return path;
+	const separator = base.includes('\\') && !base.includes('/') ? '\\' : '/';
+	const trimmed = base.replace(/[\\/]+$/, '');
+	return `${trimmed}${separator}${path.replace(/^[\\/]+/, '')}`;
+}
+
+/**
+ * How many content blocks a prompt carries that are not text.
+ *
+ * The store only needs the count (to decide whether an attachment-only prompt
+ * is sendable and what the optimistic bubble says), so this counts blocks it
+ * does not otherwise interpret rather than pulling the ACP types down here.
+ */
+function attachmentCount(blocks: unknown[] | undefined): number {
+	if (!blocks) return 0;
+	return blocks.filter((block) => (block as { type?: string }).type !== 'text').length;
+}
+
 /**
  * Point mode-watcher at the chosen theme. `system` clears the stored
  * preference so the OS decides, which is what the toggle used to do.
- */
-function applyTheme(theme: string) {
+ */ function applyTheme(theme: string) {
 	if (theme === 'system') setMode('system');
 	else if (theme === 'dark') setMode('dark');
 	else setMode('light');
@@ -441,6 +653,24 @@ export class HarnessStore implements SessionStore {
 	phase = $state<StorePhase>('ready');
 	/** Why `phase` is `error`, when it is. */
 	phaseDetail = $state<string | undefined>(undefined);
+
+	/**
+	 * Whether a session's transcript is still arriving.
+	 *
+	 * Set by `beginSessionLoad`, cleared when the replay is folded. The thread
+	 * renders a skeleton in between: an empty transcript and a transcript that
+	 * has not arrived look identical otherwise.
+	 */
+	loading = $state(false);
+
+	/**
+	 * The socket's health, for the reconnect indicator.
+	 *
+	 * Starts `live`: the fixture transport has no socket to lose, and the
+	 * socket transport reports its first failure through `onConnection` rather
+	 * than pre-declaring one.
+	 */
+	connection = $state<'live' | 'reconnecting' | 'offline'>('live');
 
 	workspace = $state(workspace);
 	sessions = $state<Session[]>(sessions);
@@ -526,7 +756,13 @@ export class HarnessStore implements SessionStore {
 	 */
 	private addedWorkspaces = $state<string[]>([]);
 
-	/** Workspaces the reader put away, by display name. */
+	/**
+	 * Workspaces the reader put away, by display name.
+	 *
+	 * Persisted: it is a view preference with no backend concept behind it, and
+	 * a reload that resurrected a workspace the reader had hidden would be the
+	 * page arguing with them.
+	 */
 	private hidden = $state<string[]>([]);
 
 	get groups(): WorkspaceGroup[] {
@@ -563,6 +799,12 @@ export class HarnessStore implements SessionStore {
 	constructor(private transport: Transport = new FixtureTransport()) {
 		this.live = typeof transport.connect === 'function';
 
+		// Preferences come from the browser before anything renders, so the
+		// first paint is already in the reader's theme and density. The fixture
+		// transport skips this: a scripted demo should look the same for
+		// everyone, and a test must not inherit a developer's localStorage.
+		if (this.live) this.restorePreferences();
+
 		if (this.live) {
 			// Nothing is known yet. Every value the fixtures supplied is cleared
 			// so a component cannot mistake scripted data for the user's.
@@ -588,6 +830,9 @@ export class HarnessStore implements SessionStore {
 		// the session it was started for).
 		this.transport.onFrame?.((sessionId, frame) => this.receive(sessionId, frame));
 		this.transport.onReconnected?.(() => this.reloadAfterReconnect());
+		// A reconnect that shows nothing for ten seconds reads as frozen. The
+		// indicator is what makes the retry visible.
+		this.transport.onConnection?.((state) => (this.connection = state));
 		// The roster is machine-wide and arrives unsolicited; the sidebar must
 		// follow it without polling.
 		this.transport.onRosterChanged?.((delta) => {
@@ -631,6 +876,19 @@ export class HarnessStore implements SessionStore {
 		const session = this.sessions.find((candidate) => candidate.id === sessionId);
 		this.beginSessionLoad(sessionId);
 		const result = await this.transport.openSession(sessionId, session?.cwd);
+
+		// The load is finished, whichever signal arrived first.
+		//
+		// The socket transport emits a `session/load:result` frame and flushes
+		// there; a transport that resolves without one (a test double, or a
+		// future adapter) would otherwise leave the transcript buffered and show
+		// an empty thread. `flushReplay` deletes its buffer, so the second call
+		// is a no-op.
+		this.flushReplay(sessionId);
+		this.gates = { ...this.gates, [sessionId]: endReplay(this.gateFor(sessionId)) };
+		// Cleared HERE, not inside `flushReplay`: a session with no stored frames
+		// returns early from there, and the skeleton would outlive the load.
+		this.loading = false;
 
 		if (result) {
 			if (result.models.length > 0) {
@@ -779,8 +1037,15 @@ export class HarnessStore implements SessionStore {
 		this.planToolCallId = undefined;
 	}
 
+	/**
+	 * The commands the composer may offer.
+	 *
+	 * Filtered, not passed through: the agent advertises one catalog for every
+	 * client, and the pager's own local commands would be dead rows here (see
+	 * `commands.ts`). A skill and every server-side builtin survive the filter.
+	 */
 	get commands(): AvailableCommand[] {
-		return this.acc.commands ?? [];
+		return webCommands(this.acc.commands ?? []);
 	}
 
 	selectSession(id: string) {
@@ -848,6 +1113,52 @@ export class HarnessStore implements SessionStore {
 			this.access = value as AccessMode;
 		}
 		if (key === 'theme') applyTheme(String(value));
+		// Persisted on every change: the dialog has no Save button, so the
+		// stored value must follow the control rather than wait for one.
+		if (this.live) saveSettings(this.settings);
+		this.applySettingEffects();
+	}
+
+	/**
+	 * Push the settings that are not read by a component.
+	 *
+	 * `density` sets a root attribute the layout CSS keys on, so every spacing
+	 * token follows without threading the value through the tree. The rest are
+	 * read where they are used.
+	 */
+	private applySettingEffects() {
+		if (typeof document === 'undefined') return;
+		const density = String(this.settings.density ?? 'comfortable');
+		document.documentElement.dataset.density = density;
+	}
+
+	/**
+	 * Restore the reader's preferences before the first paint.
+	 *
+	 * Theme, density and settings come back from `localStorage`; without this
+	 * every reload re-themed the page and reset the dialog. A stored value that
+	 * no longer validates is replaced by its default in `loadSettings`, so an
+	 * older build's data cannot reach a component as an unexpected type.
+	 */
+	private restorePreferences() {
+		this.settings = loadSettings();
+		this.hidden = loadHidden();
+		// The theme is a setting AND a mode-watcher value; applying it here
+		// means the first frame is already in the right palette rather than
+		// flashing the system default.
+		if (typeof this.settings.theme === 'string') applyTheme(this.settings.theme);
+		this.applySettingEffects();
+	}
+
+	/**
+	 * Remember the workspace list's hidden set.
+	 *
+	 * Called from both mutations rather than from a reactive effect: `hidden`
+	 * is written in exactly two places, and an effect would also fire on the
+	 * restore above and re-save what was just read.
+	 */
+	private persistHidden() {
+		if (this.live) saveHidden(this.hidden);
 	}
 
 	/**
@@ -885,17 +1196,24 @@ export class HarnessStore implements SessionStore {
 			});
 	}
 
-	send(text: string) {
+	send(text: string, blocks?: unknown[]) {
 		const prompt = text.trim();
-		if (!prompt || this.busy) return;
+		// An attachment-only prompt is a legitimate turn ("what is wrong with
+		// this?" is often a screenshot and nothing else), so the emptiness
+		// check is on the payload, not on the text.
+		const attachments = attachmentCount(blocks);
+		if ((!prompt && attachments === 0) || this.busy) return;
 
 		const sessionId = this.activeSessionId;
 		const now = Date.now();
-		this.write({ ...this.acc, ...openUserTurn(this.acc, prompt, now, this.model, this.effort) });
+		// The transcript has no wire equivalent for "this prompt carried a
+		// picture", so the bubble says so in words the reader can check.
+		const shown = prompt || `${attachments} attachment${attachments === 1 ? '' : 's'}`;
+		this.write({ ...this.acc, ...openUserTurn(this.acc, shown, now, this.model, this.effort) });
 		this.localBusy = true;
 		this.markSession(sessionId, { updatedAt: new Date(now).toISOString() });
 
-		this.transport.send(prompt, (frame) => this.receive(sessionId, frame));
+		this.transport.send(prompt, (frame) => this.receive(sessionId, frame), blocks);
 	}
 
 	cancel() {
@@ -939,6 +1257,97 @@ export class HarnessStore implements SessionStore {
 		} catch {
 			// A directory that vanished mid-typing is not an error worth a card.
 			return [];
+		}
+	}
+
+	/**
+	 * Read one file for the inspector's preview.
+	 *
+	 * The path is resolved against the session's own cwd when it is relative,
+	 * because that is what a transcript's `file-read` part reports and what the
+	 * panel passes back.
+	 */
+	async readFile(path: string): Promise<FilePreview | undefined> {
+		const sessionId = this.activeSessionId;
+		if (!this.transport.fsRead || !sessionId || !path) return undefined;
+		const target = isAbsolutePath(path) ? path : joinPath(this.activeSession.cwd, path);
+		if (!target) return undefined;
+		try {
+			return await this.transport.fsRead(target, sessionId);
+		} catch {
+			// A file that vanished between the click and the read is not an
+			// error the page should take down; the panel says it could not open.
+			return undefined;
+		}
+	}
+
+	/** The part id a reveal is pending for; the thread consumes and clears it. */
+	revealId = $state<string | undefined>(undefined);
+
+	revealPart(id: string) {
+		this.revealId = id;
+	}
+
+	clearReveal() {
+		this.revealId = undefined;
+	}
+
+	/**
+	 * The interactive terminal.
+	 *
+	 * A getter, not a stored object: it closes over `this`, so the session id
+	 * and cwd it resolves are read at CALL time. A snapshot taken at
+	 * construction would keep spawning shells in whichever directory happened
+	 * to be active when the page loaded.
+	 */
+	get terminal(): TerminalBridge {
+		const transport = this.transport;
+		return {
+			unavailable: transport.ptyCreate ? undefined : 'this build cannot spawn a shell',
+			spawn: async (request) => {
+				if (!transport.ptyCreate) throw new Error('this build cannot spawn a shell');
+				const sessionId = this.activeSessionId;
+				if (!sessionId) throw new Error('no session is open');
+				return transport.ptyCreate({
+					sessionId,
+					cwd: this.activeSession.cwd || undefined,
+					rows: request.rows,
+					cols: request.cols
+				});
+			},
+			attach: async (terminalId) => {
+				if (!transport.ptyLoad) throw new Error('this build cannot attach a shell');
+				return transport.ptyLoad(terminalId);
+			},
+			input: (terminalId, data) => transport.ptyInput?.(terminalId, data),
+			resize: (terminalId, rows, cols) => transport.ptyResize?.(terminalId, rows, cols),
+			close: (terminalId) => transport.ptyClose?.(terminalId),
+			onevent: (sink) => {
+				transport.onPtyEvent?.(sink);
+				return () => transport.onPtyEvent?.(() => {});
+			}
+		};
+	}
+
+	/** Save one file, resolving the path the same way `readFile` does. */
+	async writeFile(path: string, content: string): Promise<void> {
+		const sessionId = this.activeSessionId;
+		if (!this.transport.fsWrite || !sessionId || !path) {
+			throw new Error('this build cannot write files');
+		}
+		const target = isAbsolutePath(path) ? path : joinPath(this.activeSession.cwd, path);
+		if (!target) throw new Error('the session has no directory to resolve the path against');
+		await this.transport.fsWrite(target, content, sessionId);
+	}
+
+	/** The working tree, for the source-control panel. */
+	async readGitStatus(): Promise<unknown> {
+		const sessionId = this.activeSessionId;
+		if (!this.transport.gitStatus || !sessionId) return undefined;
+		try {
+			return await this.transport.gitStatus(sessionId);
+		} catch {
+			return undefined;
 		}
 	}
 
@@ -1051,12 +1460,15 @@ export class HarnessStore implements SessionStore {
 	 *
 	 * Resolves to the chosen path, or `undefined` when the dialog was cancelled.
 	 */
-	async addWorkspace(): Promise<string | undefined> {
-		if (!this.transport.pickDirectory) return undefined;
-		const path = await this.transport.pickDirectory();
-		if (!path) return undefined;
-		await this.createSession(path);
-		return path;
+	async addWorkspace(path?: string): Promise<string | undefined> {
+		let chosen = path?.trim() || undefined;
+		if (!chosen) {
+			if (!this.transport.pickDirectory) return undefined;
+			chosen = await this.transport.pickDirectory();
+			if (!chosen) return undefined;
+		}
+		await this.createSession(chosen);
+		return chosen;
 	}
 
 	/**
@@ -1070,11 +1482,13 @@ export class HarnessStore implements SessionStore {
 	removeWorkspace(name: string): void {
 		if (!name || this.hidden.includes(name)) return;
 		this.hidden = [...this.hidden, name];
+		this.persistHidden();
 	}
 
 	/** Bring a hidden workspace back into the list. */
 	restoreWorkspace(name: string): void {
 		this.hidden = this.hidden.filter((candidate) => candidate !== name);
+		this.persistHidden();
 	}
 
 	/**
@@ -1284,6 +1698,74 @@ export class HarnessStore implements SessionStore {
 	beginSessionLoad(sessionId: string) {
 		this.gates = { ...this.gates, [sessionId]: beginReplay() };
 		this.accs = { ...this.accs, [sessionId]: emptyAcc() };
+		// Frames are collected, not folded: see `flushReplay`.
+		this.replayBuffers.set(sessionId, []);
+		// Only the session in front shows a skeleton; a background load (a
+		// subagent's transcript) must not blank the thread.
+		if (sessionId === this.activeSessionId) this.loading = true;
+	}
+
+	/**
+	 * Frames received during a `session/load`, folded in one pass when it ends.
+	 *
+	 * A transcript is replayed as hundreds of individual notifications, and
+	 * folding each one as it arrived meant the reader watched the conversation
+	 * rebuild itself turn by turn — a replay, not a load. Worse, every frame
+	 * was its own `write()`, so a long session produced a render per chunk.
+	 *
+	 * Collecting them costs one array and buys two things: the transcript
+	 * appears at once, and the whole replay is a single accumulator update
+	 * (`reduceAcpUpdate` is pure, so folding N frames into one `write` is
+	 * exactly what the incremental path would have produced, minus N-1
+	 * renders).
+	 *
+	 * A Map rather than `$state`: this is transient plumbing, and making it
+	 * reactive would re-run every reader of the store on each push.
+	 */
+	private replayBuffers = new Map<string, IncomingFrame[]>();
+
+	/** Fold a finished replay into the accumulator with a single write. */
+	private flushReplay(sessionId: string) {
+		const frames = this.replayBuffers.get(sessionId);
+		this.replayBuffers.delete(sessionId);
+
+		// Cleared before the early return: a session with no stored frames is a
+		// finished load too, and leaving the skeleton up for it would show a
+		// loading state forever on every brand-new session.
+		if (sessionId === this.activeSessionId) this.loading = false;
+		if (!frames || frames.length === 0) return;
+
+		// The frames were already admitted when they arrived (the replay branch
+		// in `receive` advances the watermark as it collects), so this pass is
+		// pure folding. Re-running `admit` here would be a second, differently
+		// timed evaluation of the same rule.
+		let acc = this.acc;
+		let tokens: number | undefined;
+		const now = Date.now();
+
+		for (const frame of frames) {
+			const update = frame.params.update as Record<string, unknown> | undefined;
+			if (!update) continue;
+
+			// Last figure wins: the meter wants where the transcript ended, not
+			// every intermediate value it passed through on the way there.
+			const frameTokens = totalTokensOf(frame.params._meta);
+			if (frameTokens !== undefined) tokens = frameTokens;
+
+			const ctx = { now, sessionId, modelId: this.model, effort: this.effort };
+			acc = this.isExtFrame(frame.method)
+				? reduceExtUpdate(acc, update as ExtSessionUpdate, ctx)
+				: reduceAcpUpdate(acc, update as SessionUpdate, ctx);
+		}
+
+		this.write(acc);
+		if (tokens !== undefined) this.applyContextUsed(tokens);
+
+		// Model switches and the like are chrome state, not transcript state;
+		// the last one the replay carried is the one in force now.
+		const last = frames.at(-1);
+		const lastUpdate = last?.params.update as Record<string, unknown> | undefined;
+		if (lastUpdate) this.syncFromUpdate(lastUpdate as ExtSessionUpdate);
 	}
 
 	private receive(sessionId: string, frame: IncomingFrame) {
@@ -1292,6 +1774,10 @@ export class HarnessStore implements SessionStore {
 		// The `session/load` response closes the replay window: everything
 		// after it is compared against the watermark instead of applied blindly.
 		if (frame.method === 'session/load:result') {
+			// Fold everything the replay delivered, in one write, so the
+			// transcript appears whole instead of assembling itself frame by
+			// frame in front of the reader.
+			this.flushReplay(sessionId);
 			this.gates = {
 				...this.gates,
 				[sessionId]: endReplay(this.gateFor(sessionId))
@@ -1340,6 +1826,25 @@ export class HarnessStore implements SessionStore {
 		const gate = this.gateFor(sessionId);
 		const verdict = admit(gate, eventIdOf(frame.params));
 		if (!verdict.apply) return;
+
+		/**
+		 * During a replay the frame is COLLECTED rather than folded.
+		 *
+		 * A transcript arrives as hundreds of notifications; folding each one
+		 * on arrival is what made opening a session look like watching it be
+		 * replayed. `flushReplay` folds them in one pass when the load
+		 * response lands, which is a load.
+		 *
+		 * The watermark is still advanced here, so the gate above is the same
+		 * rule it always was — only the render is deferred.
+		 */
+		if (gate.phase === 'replay') {
+			this.gates = { ...this.gates, [sessionId]: verdict.state };
+			const buffer = this.replayBuffers.get(sessionId);
+			if (buffer) buffer.push(frame);
+			return;
+		}
+
 		this.gates = { ...this.gates, [sessionId]: verdict.state };
 
 		// The context meter follows the stream, not the attach snapshot: every
