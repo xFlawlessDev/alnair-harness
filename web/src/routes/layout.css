@@ -355,3 +355,27 @@
 		font-variant-numeric: tabular-nums;
 	}
 }
+
+/* ------------------------------------------------------------------ density
+ *
+ * `density = compact` tightens the vertical rhythm of the thread without
+ * touching any component's markup. It is a root attribute rather than a class
+ * on one element because the rows that need it are scattered through the
+ * transcript, and a wrapper class would have to be threaded through every
+ * one of them.
+ *
+ * Only the *reading* surface is affected: the composer, the header and the
+ * panels keep their own spacing, because a compact transcript beside a
+ * comfortable composer is what a reader expects from the setting's name.
+ * ------------------------------------------------------------------------- */
+:root[data-density='compact'] {
+	--density-row-gap: 0.5rem;
+}
+
+:root[data-density='compact'] [data-slot='trace'] {
+	gap: 0.125rem;
+}
+
+:root[data-density='compact'] [data-slot='trace-line'] {
+	padding-block: 0.0625rem;
+}
