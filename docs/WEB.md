@@ -64,6 +64,7 @@ stays a single file. Debug builds read `web/build/` from disk, which means
 |---|---|
 | `GET /ws` | WebSocket upgrade (cookie + `Origin` required) |
 | `GET /api/session` | Sets the auth cookie; returns version, leader target, `webBuilt` |
+| `POST /api/pick-directory` | Native folder dialog (cookie + `Origin` required) |
 | `GET /healthz` | `ok`, no auth — for scripts |
 | `GET /*` | Embedded asset; miss **with** an extension → 404; miss **without** → `index.html` |
 
@@ -89,17 +90,12 @@ reloaded. That fails closed on purpose.
 **Embedded** (no Vite): `npm --prefix web run build`, then `cargo run -- web`.
 Debug builds read from disk, so re-running the build is enough.
 
-**HMR**: run `npm --prefix web run dev` (`:5173`) and proxy to the server:
-
-```ts
-// web/vite.config.ts
-server: {
-  proxy: {
-    '/api': 'http://127.0.0.1:2420',
-    '/ws': { target: 'ws://127.0.0.1:2420', ws: true }
-  }
-}
-```
+**HMR**: run `npm --prefix web run dev` (`:5173`) and let it proxy to the
+server. `web/vite.config.ts` already forwards `/api` and `/ws` to
+`ALNAIR_WEB_BACKEND` (default `http://127.0.0.1:2420`), so the dev page reaches
+the same leader the embedded build does — without the proxy, `/api/*` answers
+404 from Vite and `/ws` never upgrades, which makes "add a workspace" and every
+other server-side action fail only in development.
 
 The dev origin is accepted by the `Origin` check **only** in debug builds.
 
@@ -211,6 +207,150 @@ produces on demand (a parked questionnaire, an exhausted retry).
   uses, so the live reverse request refines the replay-built card instead of
   adding a second one. Both `interaction_resolved` and the call's own completion
   mark it resolved.
+- **The `/` menu is filtered, and the filter is a DENYLIST.** The agent
+  advertises one catalog for every client (`available_commands` in
+  `alnair-shell/src/session/slash_commands.rs`), and those entries work here:
+  each answers through `send_slash_command_output`, so its text lands in the
+  transcript. The pager's own commands never reach ACP — `/model`, `/clear`,
+  `/rewind`, `/theme`, `/vim-mode`, `/terminal-setup` and the rest of
+  `alnair-tui/src/slash/commands/` — and typing one here sends text the shell
+  parses as unknown, so the model answers it as prose. `commands.ts` denies
+  them by name (and by alias, because the dropdown inserts `/<name>`) and
+  allows everything else: an allowlist would hide every future builtin and
+  every installed skill until someone remembered to add it.
+- **A turn's duration is measured from its PROMPT.** The assistant turn is
+  created by its first part, which lands after the model has been thinking, so
+  timing from `at` lost the wait and a tool-only turn reported `0s`. The
+  reducer carries `Acc.promptStartedAt` (set by `openUserTurn` and by a replayed
+  `user_message_chunk`) and stamps it as the turn's `startedAt`; `closeTurn`
+  measures from there. A turn the next prompt supersedes is settled with the
+  same anchor, so a transcript that lost its trailing `turn_completed` still
+  shows a duration instead of nothing.
+- **A finished turn folds its work away, and the answer stays.** `splitFinalWork`
+  takes the LAST non-empty text part as the answer and everything before it as
+  work; the collapsed header is `Worked for 1m 04s · 12 calls · 3 files edited`
+  and expanding it restores the original trace. A turn with no text answer
+  (cancelled, or ended on a tool call) keeps everything expanded — folding it
+  would leave an empty screen and a button. The split lives in `segments.ts`
+  because it is the same question as "where does the trace end", which the
+  grouping already answers.
+- **A resolved permission card is one quiet line.** It is history: the decision
+  was made, the tool ran, and the result is the row underneath. Only the LIVE
+  request keeps the bordered block and the sentence explaining what to do.
+- **The composer takes attachments, and they are prompt BLOCKS.** A pasted
+  image becomes an ACP `ImageContent`; a long paste (≥1,200 chars or ≥24 lines)
+  becomes a `Resource` with the text inline, which the agent renders as
+  `<file_contents>` — the same path the TUI's paste takes. `promptBlocks` puts
+  the text block FIRST and the attachments after it, so `[Image #1]` in the
+  sentence points at a picture that has already arrived. A pasted path stays
+  text: the agent resolves it itself.
+- **The inspector is four panes over real state.** Files come from the
+  transcript, the editor reads through `alnair/fs/read_file`, source control
+  through `alnair/git/status`, and commands are the session's own tool output.
+  Monaco is imported dynamically (`#lib/editor.ts`) so a session that never
+  opens the panel downloads none of it, and its worker is wired through
+  `MonacoEnvironment.getWorker` — without that the first parse throws rather
+  than degrading.
+- **The terminal pane is read-only, on purpose.** `pty/notification` carries a
+  `terminalId` and no session id, so the leader routes its output to
+  `last_active_client`; with the TUI attached that is the terminal, not this
+  page. A shell here would show another surface's output some of the time and
+  none the rest.
+- **"Add a workspace" cannot dead-end.** The native dialog is the good path, but
+  it is legitimately unavailable sometimes: a headless server has no desktop,
+  `picker::OPEN` allows one dialog at a time, and a release build refuses the
+  dev origin. A refusal opens a typed-path dialog instead of doing nothing —
+  which is what the button used to do. Right-clicking `+` skips the dialog
+  entirely, for a reader who already knows the path.
+- **A recap is requested, then streamed.** `alnair/recap` answers once the
+  command is QUEUED; the text arrives later as a `session_recap` update and the
+  reducer folds it into the transcript as a notice. `recapText` reads that notice
+  rather than keeping a second copy, so a reload cannot disagree with the thread.
+- **A session opens; it does not replay.** A transcript arrives as hundreds of
+  `session/update` notifications, and folding each one on arrival made opening
+  a conversation look like watching it be rebuilt turn by turn. Frames that
+  arrive during the replay window are COLLECTED (`replayBuffers`) and folded in
+  one pass when the load ends — one accumulator write instead of one render per
+  chunk. `admit` still runs per frame, so the watermark that stops a reconnect
+  from doubling the transcript is unchanged. `openSession` flushes too, for a
+  transport that resolves without a `session/load:result` marker.
+- **The roster delta is `_`-prefixed on the wire.** The leader forwards agent
+  notifications as `_alnair/sessions/changed` (see
+  `is_machine_wide_broadcast_notification`, which normalizes for the same
+  reason). Matching only the bare name dropped every delta at the "no
+  sessionId" check, which is why a new session appeared only after a reload.
+- **`<system-reminder>` is system chrome, not a prompt.** The shell stores
+  injected context as a synthetic USER message
+  (`ConversationItem::system_reminder` → `push_user_message`), so it arrives on
+  the `user_message_chunk` rail and a naive client draws a background-task
+  notification as a bubble the reader typed. `system-notes.ts` recognises a
+  message that is WHOLLY one `<tag>…</tag>` wrapper (anchored both ends, so a
+  prompt that merely quotes the tag stays a prompt) and the reducer turns it
+  into a `system` part with the wrapper's name. It is checked BEFORE the
+  optimistic-echo guard: that guard swallows every user chunk until the turn
+  closes, which would eat a mid-turn reminder into `streamedUserText` and lose
+  it entirely.
+- **A thought ends when the next thing starts.** The wire has no
+  `thought_completed`; a reasoning part that only listened for one stayed
+  `running` for the rest of the turn and left a spinner and "Thinking" over a
+  finished thought. `pushPart` settles every running reasoning part whenever a
+  non-reasoning part arrives (text, tool call, notice, subagent), and
+  `closeTurn` settles the rest. The row also falls back on its own: a thought
+  inside a closed turn reads `Thought` whatever its own status says.
+- **Copy goes through `#lib/clipboard.ts`.** `navigator.clipboard` is
+  `undefined` outside a secure context, so the old bare call threw a
+  `TypeError` inside the click handler — before any `.catch` could run — and
+  the button did nothing at all. `copyText` tries the async API, falls back to
+  a hidden textarea plus `execCommand('copy')`, and reports whether it landed so
+  the icon can say "failed" instead of pretending. Downloads are the same
+  module: a blob URL behind an `<a download>`, with `safeFilename` keeping the
+  name openable on every OS.
+- **The bottom panel is a drawer, not a rail.** The workspace editor and the
+  interactive terminal live in `inspector/bottom-drawer.svelte`, opened with
+  ``Ctrl+` `` (``Ctrl+Shift+` `` goes straight to the editor), resizable by
+  dragging its top edge, and fullscreen-able. Both need the thread's full
+  width; neither fits a 288px column. The editor is a real multi-tab workspace
+  editor (tree, dirty dots, Ctrl/Cmd+S through `alnair/fs/write_file`), and the
+  terminal is a real PTY through `alnair/terminal/pty/*` rendered by xterm —
+  not a mirror of the agent's tool output.
+- **The right rail is lists only.** Files the thread touched, and the working
+  tree. Clicking a file opens it in the drawer's editor.
+- **A table's toolbar is ours, not the library's.** Streamdown's
+  `TableDownload.svelte` revokes the blob URL in the same task as the click
+  (cancelling the download in some browsers) and copies through
+  `navigator.clipboard` directly (which throws outside a secure context, so
+  `--bind 0.0.0.0` got a dead button). `thread/markdown-table.svelte` replaces
+  the `table` snippet and goes through `#lib/clipboard.ts`, keeping the same
+  four formats.
+- **Preferences live in `localStorage`, validated by the registry.**
+  `harness/preferences.ts` owns three keys under `alnair.web.` — settings,
+  layout (rail, drawer, tab, height), hidden workspaces. Every read is fallible
+  (a partitioned context throws on access) and every stored value is coerced
+  against its `SettingMeta.kind`, so an older build's data degrades to the
+  default instead of reaching a component as an unexpected type. `loadLayout`
+  returns `undefined` rather than a default object, because the rail's
+  first-paint value comes from the viewport: "no preference" and "preferred
+  closed" must be distinguishable.
+- **Every setting in the dialog does something.** They were all inert before —
+  twelve controls that wrote to an object nothing read. `view-prefs.ts` is the
+  one place the registry's vocabulary (`show_thinking`) meets the thread's
+  (`thinking`), and a missing key resolves to the registry's own default rather
+  than to `false`, which is what keeps a store that has not restored yet from
+  hiding reasoning or unfolding every diff.
+- **Both drawer panes stay mounted.** Switching tabs used to swap the rendered
+  snippet, which unmounted the other pane: the terminal's teardown closed its
+  PTY (killing the shell) and the editor lost every tab and unsaved buffer. The
+  drawer hides one and shows the other, and the terminal spawns lazily on first
+  show — opening the panel on the editor tab must not start a shell.
+- **A narrow window can still reach its sessions.** The rail is `hidden md:flex`,
+  so below 768px there was no way to switch session at all. `Dialog.Sheet` is a
+  left-anchored slide-over hosting the same `SessionSidebar` (one component, not
+  a second copy), opened from a header button that only renders below `md`.
+- **The socket reports its health.** `connection` is `live`, `reconnecting` or
+  `offline`; `connection-banner.svelte` renders the last two. A page that
+  retries silently for ten seconds is indistinguishable from a frozen one, and
+  the banner is what turns "wait" and "something is wrong" into different
+  sentences.
 - **The context meter streams; its breakdown does not.** Every persisted frame
   carries `_meta.totalTokens` — the same figure the TUI's context bar reads — so
   the ring and the percentage move live (`applyContextUsed`). The itemized rows

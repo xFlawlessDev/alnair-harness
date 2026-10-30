@@ -106,9 +106,9 @@ invented; where the wire carries less, the UI shows less.
 | `TerminalPart`    | `tool_call` kind `execute`, or `task_backgrounded` / `task_completed` |
 | `SubagentPart`    | `subagent_spawned` → `subagent_progress` → `subagent_finished`        |
 | `PermissionPart`  | `pending_interaction` with `kind: permission`                         |
+| `SystemPart`      | a `user_message_chunk` that is wholly a `<tag>…</tag>` envelope       |
 | `QuestionPart`    | the `alnair/ask_user_question` reverse request                        |
-| `NoticePart`      | `retry_state`, `auto_compact_*`, `model_*`, `session_recap`           |
-| `TodoItem`        | the ACP `plan` update (which `todo_write` produces)                   |
+| `NoticePart`      | `retry_state`, `auto_compact_*`, `model_*`, `session_recap`           |     | `TodoItem` | the ACP `plan` update (which `todo_write` produces) |
 | `PlanArtifact`    | the `alnair/exit_plan_mode` reverse request                           |
 | `GraphState`      | `graph_updated` — counts, not a DAG                                   |
 | `ContextUsage`    | `auto_compact_*` and `model_changed`                                  |
@@ -164,17 +164,23 @@ src/
       types/ext.ts        Alnair's extension updates
       types.ts            the view model
       reducer.ts          wire → view model, pure
+      commands.ts         which advertised slash commands the browser may show
+      attachments.ts      pasted images / long text → ACP prompt blocks
+      system-notes.ts     `<system-reminder>` envelopes, and why they are not prompts
       workspaces.ts       flat session rows → workspace groups
       fixtures.ts         scripted transcripts
       session-store.svelte.ts  the store and the fixture transport
       mock.ts             session rows, catalog, initial transcript
     components/
-      chrome/             sidebar, thread header, plan + todo popovers, graph chip
-      thread/             thread, turn, markdown, one row per part kind
-      composer/           prompt card, access picker, model picker, checkout row
+      chrome/             sidebar, thread header, plan + todo popovers
+      thread/             thread, turn, work summary, one row per part kind
+      composer/           prompt card, attachments, pickers, checkout row
       settings/           the settings dialog
-      inspector/          graph panel, files panel, activity stats
+      inspector/          right rail (files, source control) + bottom drawer
+                          (Monaco editor, xterm terminal)
       ui/                 shadcn-svelte components (vendored)
+    editor.ts             Monaco, loaded on first panel open
+    clipboard.ts          copy + download, secure-context-safe
     highlighter.ts        Shiki, loaded per language
 ```
 
@@ -254,6 +260,29 @@ self-hosted in `static/fonts/`; nothing loads from a CDN.
   attached below. The access menu offers the runtime's three
   `PermissionMode`s — Ask first, Auto, Full access — and stays in step with the
   same setting in the dialog.
+- **A finished turn folds its work away.** Forty trace rows between a question
+  and its answer make a long thread unreadable, so everything before the LAST
+  text part collapses into one line — `Worked for 1m 04s · 12 calls · 3 files
+edited` — and expanding it restores the original trace. A turn with no text
+  answer keeps everything open: folding it would leave an empty screen and a
+  button. The duration is measured from the PROMPT, not from the first token,
+  which is why a quick tool-only turn no longer reports `0s`.
+- **The composer takes files.** A pasted image goes on the wire as an ACP
+  `ImageContent`; a long paste (≥1,200 characters or ≥24 lines) goes as a
+  `Resource` with the text inline, the same `<file_contents>` path the TUI's
+  paste takes. `+` opens a real file input, and `Backspace` on an empty draft
+  removes the last chip.
+- **The inspector is a rail plus a drawer.** The rail holds lists — files the
+  thread touched, and the working tree from `alnair/git/status` — because a
+  click on a file is a request to edit it. The editor and the terminal live in
+  a bottom drawer opened with ``Ctrl+` ``, the shape VS Code and `alnair-ai`
+  both use: the editor is multi-tab Monaco over `alnair/fs/*`, the terminal is
+  a real PTY through `alnair/terminal/pty/*` rendered by xterm.
+- **The `/` menu is filtered.** The agent advertises one catalog to every
+  client; `commands.ts` denies the pager's own local commands (`/model`,
+  `/clear`, `/rewind`, `/theme`, …), which never reach ACP and would be dead
+  rows here. It is a denylist, so a skill or a future builtin appears without
+  editing anything.
 - **Trace** is the backbone. Every step is a `Trace.Root` line, so they share one
   shape and one status vocabulary. `groupParts()` batches consecutive steps into
   one `Trace.Root` and breaks the run at text, notices, and permission cards.
@@ -268,7 +297,18 @@ self-hosted in `static/fonts/`; nothing loads from a CDN.
   button.
 - **Permission** has exactly one set of buttons, in the banner above the
   composer. The in-thread card is a marker, not a control: two sets for one
-  request invites answering it twice.
+  request invites answering it twice. An ANSWERED request collapses to one
+  quiet line — it is history, the tool already ran, and a boxed block there
+  out-shouts the result underneath it.
+- **An injected `<system-reminder>` is not a prompt.** The shell stores it as a
+  synthetic USER message, so it arrives on the user rail; `system-notes.ts`
+  recognises a message that is wholly one wrapper and the reducer gives it a
+  `system` part. It renders as a folded row naming the mechanism, never as a
+  bubble on the right.
+- **A thought becomes "Thought" when the next part arrives.** There is no
+  `thought_completed` on the wire, so the reducer settles a running reasoning
+  part at the next non-reasoning part — otherwise the row kept a spinner and
+  said "Thinking" over a finished thought for the rest of the turn.
 - **Questions** follow the same rule. The panel above the composer shows one
   question at a time, with Back and Next between them and a tick per question;
   the draft survives the move, so an earlier answer can be revised after seeing
