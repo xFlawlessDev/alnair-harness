@@ -1,5 +1,12 @@
 import { describe, expect, it } from 'vitest';
-import { baseName, formatDuration, formatPercent, formatRelative, formatTokens } from './format.js';
+import {
+	baseName,
+	formatDuration,
+	formatPercent,
+	formatRelative,
+	formatTokens,
+	formatWorked
+} from './format.js';
 
 describe('formatDuration', () => {
 	it('renders milliseconds below a second', () => {
@@ -19,6 +26,41 @@ describe('formatDuration', () => {
 
 	it('renders nothing when the duration is unknown', () => {
 		expect(formatDuration(undefined)).toBe('');
+	});
+});
+
+describe('formatWorked', () => {
+	it('always names seconds, even under a minute', () => {
+		// "12s", not "12.0s": this is a rounded-off total, not a step's timing.
+		expect(formatWorked(12_000)).toBe('12s');
+		expect(formatWorked(1_400)).toBe('1s');
+	});
+
+	it('pads the trailing unit so two turns line up', () => {
+		expect(formatWorked(65_000)).toBe('1m 05s');
+		expect(formatWorked(64_000)).toBe('1m 04s');
+	});
+
+	it('renders hours, minutes and seconds together', () => {
+		expect(formatWorked(3_852_000)).toBe('1h 04m 12s');
+	});
+
+	it('keeps a zero minute when the hour carries it', () => {
+		expect(formatWorked(3_605_000)).toBe('1h 00m 05s');
+	});
+
+	it('renders nothing when the duration is unknown', () => {
+		expect(formatWorked(undefined)).toBe('');
+	});
+
+	it('refuses a negative duration rather than printing a negative', () => {
+		expect(formatWorked(-1_000)).toBe('');
+	});
+
+	it('renders a sub-second turn as 0s rather than an empty string', () => {
+		// A turn that really did finish instantly is still a duration; saying
+		// nothing would read as "we do not know".
+		expect(formatWorked(400)).toBe('0s');
 	});
 });
 

@@ -10,6 +10,26 @@ export function formatDuration(ms: number | undefined): string {
 	return rest === 0 ? `${minutes}m` : `${minutes}m ${rest}s`;
 }
 
+/**
+ * A whole duration as `xh ym zs`, for the "Worked for …" summary.
+ *
+ * Distinct from `formatDuration`, which answers "how long is this step" with a
+ * short form (`47ms`, `2m`). A turn's total is read as a rounded-off duration,
+ * so it always names seconds — `12s`, `2m 05s`, `1h 04m 12s` — and a reader can
+ * compare two turns without converting units in their head.
+ */
+export function formatWorked(ms: number | undefined): string {
+	if (ms === undefined || !Number.isFinite(ms) || ms < 0) return '';
+	const total = Math.round(ms / 1_000);
+	const seconds = total % 60;
+	const minutes = Math.floor(total / 60) % 60;
+	const hours = Math.floor(total / 3_600);
+	const pad = (value: number) => String(value).padStart(2, '0');
+	if (hours > 0) return `${hours}h ${pad(minutes)}m ${pad(seconds)}s`;
+	if (minutes > 0) return `${minutes}m ${pad(seconds)}s`;
+	return `${seconds}s`;
+}
+
 export function formatTokens(tokens: number): string {
 	if (tokens < 1_000) return `${tokens}`;
 	if (tokens < 1_000_000) return `${(tokens / 1_000).toFixed(tokens < 10_000 ? 1 : 0)}k`;
