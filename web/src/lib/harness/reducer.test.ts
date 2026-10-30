@@ -13,6 +13,7 @@ import {
 import type { ExtSessionUpdate } from './types/ext.js';
 import type { SessionUpdate } from './types/acp.js';
 import type { Acc } from './reducer.js';
+import type { TurnPart } from './types.js';
 
 const SESSION = 's-graph';
 const NOW = Date.parse('2026-10-20T09:41:12Z');
@@ -413,6 +414,325 @@ describe('reducer: replay', () => {
 		expect(kinds).toContain('image-read');
 		expect(kinds).toContain('subagent');
 		expect(kinds).toContain('text');
+	});
+});
+
+describe('reducer: turn duration', () => {
+	const agentChunk = (text: string): SessionUpdate =>
+		({
+			sessionUpdate: 'agent_message_chunk',
+			content: { type: 'text', text }
+		}) as unknown as SessionUpdate;
+
+	const toolCall = (id: string, status = 'completed'): SessionUpdate =>
+		({
+			sessionUpdate: 'tool_call',
+			toolCallId: id,
+			title: 'Read a file',
+			kind: 'read',
+			status,
+			content: [],
+			locations: []
+		}) as unknown as SessionUpdate;
+
+	const completed = (reason = 'end_turn'): ExtSessionUpdate =>
+		({
+			sessionUpdate: 'turn_completed',
+			prompt_id: 'p1',
+			stop_reason: reason
+		}) as unknown as ExtSessionUpdate;
+
+	it('measures from the PROMPT, not from the first token', () => {
+		// The whole bug: a turn is created by its first part, which lands after
+		// the model has been thinking. Timing from `at` lost that wait, and a
+		// tool-only turn reported "0s".
+		let acc = openUserTurn(emptyAcc(), 'run the tests', NOW);
+		acc = reduceAcpUpdate(acc, agentChunk('on it'), { now: NOW + 4_000, sessionId: SESSION });
+		acc = reduceExtUpdate(acc, completed(), { now: NOW + 9_000, sessionId: SESSION });
+
+		const answer = acc.turns.find((turn) => turn.role === 'assistant')!;
+		expect(answer.startedAt).toBe(NOW);
+		expect(answer.durationMs).toBe(9_000);
+	});
+
+	it('reports a real duration for a turn with no text at all', () => {
+		let acc = openUserTurn(emptyAcc(), 'read it', NOW);
+		acc = reduceAcpUpdate(acc, toolCall('c1'), { now: NOW + 2_500, sessionId: SESSION });
+		acc = reduceExtUpdate(acc, completed(), { now: NOW + 3_000, sessionId: SESSION });
+
+		const answer = acc.turns.find((turn) => turn.role === 'assistant')!;
+		expect(answer.durationMs).toBe(3_000);
+	});
+
+	it('settles a turn that the next prompt supersedes, instead of leaving it blank', () => {
+		// A transcript whose tail lost `turn_completed` still has a boundary.
+		let acc = openUserTurn(emptyAcc(), 'first', NOW);
+		acc = reduceAcpUpdate(acc, agentChunk('answer'), { now: NOW + 1_000, sessionId: SESSION });
+		acc = openUserTurn(acc, 'second', NOW + 5_000);
+
+		const first = acc.turns.find((turn) => turn.role === 'assistant')!;
+		expect(first.status).toBe('complete');
+		expect(first.durationMs).toBe(5_000);
+	});
+
+	it('times each turn from its own prompt, not the session start', () => {
+		let acc = openUserTurn(emptyAcc(), 'one', NOW);
+		acc = reduceAcpUpdate(acc, agentChunk('a'), { now: NOW + 1_000, sessionId: SESSION });
+		acc = reduceExtUpdate(acc, completed(), { now: NOW + 2_000, sessionId: SESSION });
+
+		acc = openUserTurn(acc, 'two', NOW + 100_000);
+		acc = reduceAcpUpdate(acc, agentChunk('b'), { now: NOW + 104_000, sessionId: SESSION });
+		acc = reduceExtUpdate(acc, completed(), { now: NOW + 107_000, sessionId: SESSION });
+
+		const assistants = acc.turns.filter((turn) => turn.role === 'assistant');
+		expect(assistants[0].durationMs).toBe(2_000);
+		expect(assistants[1].durationMs).toBe(7_000);
+	});
+
+	it('clears the prompt anchor once a turn closes', () => {
+		// Otherwise the NEXT turn's `startedAt` would reach back to a prompt it
+		// did not answer.
+		let acc = openUserTurn(emptyAcc(), 'one', NOW);
+		acc = reduceAcpUpdate(acc, agentChunk('a'), { now: NOW + 1_000, sessionId: SESSION });
+		acc = reduceExtUpdate(acc, completed(), { now: NOW + 2_000, sessionId: SESSION });
+		expect(acc.promptStartedAt).toBeUndefined();
+	});
+
+	it('never reports a negative duration', () => {
+		// A frame whose timestamp is older than the prompt (clock skew across a
+		// reconnect) must not paint "-3s".
+		let acc = openUserTurn(emptyAcc(), 'one', NOW);
+		acc = reduceAcpUpdate(acc, agentChunk('a'), { now: NOW + 1_000, sessionId: SESSION });
+		acc = reduceExtUpdate(acc, completed(), { now: NOW - 3_000, sessionId: SESSION });
+		expect(acc.turns.find((turn) => turn.role === 'assistant')!.durationMs).toBe(0);
+	});
+
+	it('leaves a streaming turn with no duration until it closes', () => {
+		let acc = openUserTurn(emptyAcc(), 'one', NOW);
+		acc = reduceAcpUpdate(acc, agentChunk('a'), { now: NOW + 1_000, sessionId: SESSION });
+		expect(acc.turns.find((turn) => turn.role === 'assistant')!.durationMs).toBeUndefined();
+	});
+});
+
+describe('reducer: reasoning phase', () => {
+	const thought = (text: string): SessionUpdate =>
+		({
+			sessionUpdate: 'agent_thought_chunk',
+			content: { type: 'text', text }
+		}) as unknown as SessionUpdate;
+
+	const message = (text: string): SessionUpdate =>
+		({
+			sessionUpdate: 'agent_message_chunk',
+			content: { type: 'text', text }
+		}) as unknown as SessionUpdate;
+
+	const toolCall = (id: string): SessionUpdate =>
+		({
+			sessionUpdate: 'tool_call',
+			toolCallId: id,
+			title: 'Read a file',
+			kind: 'read',
+			status: 'in_progress',
+			content: [],
+			locations: []
+		}) as unknown as SessionUpdate;
+
+	const reasoningPart = (acc: Acc) => {
+		const part = acc.turns.at(-1)?.parts.find((candidate) => candidate.kind === 'reasoning');
+		return part as Extract<TurnPart, { kind: 'reasoning' }> | undefined;
+	};
+
+	it('starts a thought as running', () => {
+		let acc = openUserTurn(emptyAcc(), 'hi', NOW);
+		acc = reduceAcpUpdate(acc, thought('weighing options'), { now: NOW + 1, sessionId: SESSION });
+		expect(reasoningPart(acc)?.status).toBe('running');
+	});
+
+	it('settles the thought when the answer starts', () => {
+		// The bug: there is no `thought_completed` on the wire, so the row kept
+		// its spinner and said "Thinking" for the rest of the turn.
+		let acc = openUserTurn(emptyAcc(), 'hi', NOW);
+		acc = reduceAcpUpdate(acc, thought('weighing options'), { now: NOW + 1, sessionId: SESSION });
+		acc = reduceAcpUpdate(acc, message('here is the answer'), {
+			now: NOW + 2,
+			sessionId: SESSION
+		});
+		expect(reasoningPart(acc)?.status).toBe('complete');
+	});
+
+	it('settles the thought when a tool call starts', () => {
+		let acc = openUserTurn(emptyAcc(), 'hi', NOW);
+		acc = reduceAcpUpdate(acc, thought('I should read the file'), {
+			now: NOW + 1,
+			sessionId: SESSION
+		});
+		acc = reduceAcpUpdate(acc, toolCall('c1'), { now: NOW + 2, sessionId: SESSION });
+		expect(reasoningPart(acc)?.status).toBe('complete');
+	});
+
+	it('settles it when a notice arrives', () => {
+		let acc = openUserTurn(emptyAcc(), 'hi', NOW);
+		acc = reduceAcpUpdate(acc, thought('thinking'), { now: NOW + 1, sessionId: SESSION });
+		acc = reduceExtUpdate(
+			acc,
+			{
+				sessionUpdate: 'auto_compact_started',
+				percentage: 90,
+				reason: 'context'
+			} as unknown as ExtSessionUpdate,
+			{ now: NOW + 2, sessionId: SESSION }
+		);
+		expect(reasoningPart(acc)?.status).toBe('complete');
+	});
+
+	it('leaves a LATER thought running until its own boundary', () => {
+		// Two thinking phases in one turn: the first is closed by the tool call,
+		// the second stays open until the answer.
+		let acc = openUserTurn(emptyAcc(), 'hi', NOW);
+		acc = reduceAcpUpdate(acc, thought('first'), { now: NOW + 1, sessionId: SESSION });
+		acc = reduceAcpUpdate(acc, toolCall('c1'), { now: NOW + 2, sessionId: SESSION });
+		acc = reduceAcpUpdate(acc, thought('second'), { now: NOW + 3, sessionId: SESSION });
+
+		const thoughts = acc.turns
+			.at(-1)!
+			.parts.filter(
+				(part): part is Extract<TurnPart, { kind: 'reasoning' }> => part.kind === 'reasoning'
+			);
+		expect(thoughts.map((part) => part.status)).toEqual(['complete', 'running']);
+
+		acc = reduceAcpUpdate(acc, message('done'), { now: NOW + 4, sessionId: SESSION });
+		const settled = acc.turns
+			.at(-1)!
+			.parts.filter(
+				(part): part is Extract<TurnPart, { kind: 'reasoning' }> => part.kind === 'reasoning'
+			);
+		expect(settled.map((part) => part.status)).toEqual(['complete', 'complete']);
+	});
+
+	it('closes a running thought when the turn ends', () => {
+		// `closeTurn` settles every running part, which is what makes a turn that
+		// ended mid-thought read as finished.
+		let acc = openUserTurn(emptyAcc(), 'hi', NOW);
+		acc = reduceAcpUpdate(acc, thought('still going'), { now: NOW + 1, sessionId: SESSION });
+		acc = reduceExtUpdate(
+			acc,
+			{
+				sessionUpdate: 'turn_completed',
+				prompt_id: 'p1',
+				stop_reason: 'cancelled'
+			} as unknown as ExtSessionUpdate,
+			{ now: NOW + 2, sessionId: SESSION }
+		);
+		expect(reasoningPart(acc)?.status).toBe('complete');
+	});
+});
+
+describe('reducer: injected system notes', () => {
+	const reminder = (body: string): SessionUpdate =>
+		({
+			sessionUpdate: 'user_message_chunk',
+			content: { type: 'text', text: `<system-reminder>\n${body}\n</system-reminder>` }
+		}) as unknown as SessionUpdate;
+
+	const userChunk = (text: string): SessionUpdate =>
+		({
+			sessionUpdate: 'user_message_chunk',
+			content: { type: 'text', text }
+		}) as unknown as SessionUpdate;
+
+	it('does not render a reminder as a user prompt', () => {
+		// The whole bug: the shell stores injected context as a synthetic USER
+		// message, so it arrives on the user rail and used to become a bubble on
+		// the right — claiming the reader typed a task notification.
+		const acc = reduceAcpUpdate(emptyAcc(), reminder('Background task "x" completed.'), {
+			now: NOW,
+			sessionId: SESSION
+		});
+		expect(acc.turns.some((turn) => turn.role === 'user')).toBe(false);
+		const part = acc.turns.flatMap((turn) => turn.parts).find((p) => p.kind === 'system');
+		expect(part).toMatchObject({
+			kind: 'system',
+			tag: 'system-reminder',
+			body: 'Background task "x" completed.'
+		});
+	});
+
+	it('stands alone as a system turn when nothing is open', () => {
+		const acc = reduceAcpUpdate(emptyAcc(), reminder('a note'), { now: NOW, sessionId: SESSION });
+		expect(acc.turns).toHaveLength(1);
+		expect(acc.turns[0].role).toBe('system');
+		expect(acc.turns[0].status).toBe('complete');
+		// It must not open a turn: a `streaming` turn with no `turn_completed`
+		// leaves a spinner and a stop button on an idle session.
+		expect(acc.openTurnId).toBeUndefined();
+	});
+
+	it('stands alone right after a prompt, because no answer has started', () => {
+		// A reminder that arrives between the prompt and the first token has no
+		// assistant turn to join. It becomes its own system turn — NOT a part of
+		// the user's bubble, and not a fake assistant turn that would render as
+		// a reply the agent never gave.
+		let acc = openUserTurn(emptyAcc(), 'do the thing', NOW);
+		acc = reduceAcpUpdate(acc, reminder('a background task finished'), {
+			now: NOW + 10,
+			sessionId: SESSION
+		});
+
+		expect(acc.turns.map((turn) => turn.role)).toEqual(['user', 'system']);
+		expect(acc.openTurnId).toBeUndefined();
+	});
+
+	it('joins the open assistant turn when one is running', () => {
+		let acc = openUserTurn(emptyAcc(), 'do the thing', NOW);
+		acc = reduceAcpUpdate(
+			acc,
+			{
+				sessionUpdate: 'agent_thought_chunk',
+				content: { type: 'text', text: 'working on it' }
+			} as unknown as SessionUpdate,
+			{ now: NOW + 5, sessionId: SESSION }
+		);
+		acc = reduceAcpUpdate(acc, reminder('a background task finished'), {
+			now: NOW + 10,
+			sessionId: SESSION
+		});
+
+		// One assistant turn holds both the thought and the reminder, so the
+		// thread keeps its shape instead of splitting into three rows.
+		expect(acc.turns.map((turn) => turn.role)).toEqual(['user', 'assistant']);
+		expect(acc.turns[1].parts.some((part) => part.kind === 'system')).toBe(true);
+		expect(acc.openTurnId).toBe(acc.turns[1].id);
+	});
+
+	it('does not extend a prompt bubble with a reminder chunk', () => {
+		// A reminder can arrive inside the user-chunk window; joining it would
+		// append the reminder's text to what the reader typed.
+		let acc = emptyAcc();
+		acc = reduceAcpUpdate(acc, userChunk('what is up'), { now: NOW, sessionId: SESSION });
+		acc = reduceAcpUpdate(acc, reminder('injected note'), {
+			now: NOW + 1,
+			sessionId: SESSION
+		});
+
+		const user = acc.turns.find((turn) => turn.role === 'user')!;
+		expect((user.parts[0] as { text: string }).text).toBe('what is up');
+		expect(acc.turns.some((turn) => turn.parts.some((part) => part.kind === 'system'))).toBe(true);
+	});
+
+	it('still treats a prompt that merely mentions the tag as a prompt', () => {
+		const acc = reduceAcpUpdate(
+			emptyAcc(),
+			userChunk('why does <system-reminder> appear in my chat?'),
+			{ now: NOW, sessionId: SESSION }
+		);
+		expect(acc.turns[0].role).toBe('user');
+		expect(acc.turns[0].parts[0]).toMatchObject({ kind: 'text' });
+	});
+
+	it('is ambient, so a later part does not open a turn for it', () => {
+		const acc = reduceAcpUpdate(emptyAcc(), reminder('note'), { now: NOW, sessionId: SESSION });
+		expect(acc.openTurnId).toBeUndefined();
 	});
 });
 

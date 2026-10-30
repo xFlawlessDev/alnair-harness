@@ -56,6 +56,7 @@ import type {
 	ReasoningPart,
 	Session,
 	SubagentPart,
+	SystemPart,
 	TerminalPart,
 	TextPart,
 	TodoItem,
@@ -65,6 +66,7 @@ import type {
 	TurnStatus
 } from './types.js';
 import { isExtMethod } from './wire.js';
+import { systemEnvelope, type SystemEnvelope } from './system-notes.js';
 import { outputText } from './terminal-output.js';
 
 /* ------------------------------------------------------------- accumulator */
@@ -146,6 +148,17 @@ export interface Acc {
 	turns: Turn[];
 	/** The assistant turn currently open, if any. */
 	openTurnId?: string;
+	/**
+	 * Epoch millis when the prompt behind the open turn was sent.
+	 *
+	 * The assistant turn is created by its FIRST part, which arrives after the
+	 * model has already been thinking. Timing a turn from that first part
+	 * therefore loses every second spent before the first token — the "worked
+	 * for 0s" that a quick tool-only turn produced. This is the anchor the
+	 * turn's `startedAt` and `durationMs` are measured from instead, and it is
+	 * cleared on the same path that closes the turn.
+	 */
+	promptStartedAt?: number;
 	/** Prompt text already streamed as `user_message_chunk`, so `send()` can skip it. */
 	streamedUserText: string;
 	/**
@@ -224,6 +237,23 @@ const durationOf = (tool: ToolState, now: number) =>
 const turnById = (turns: Turn[], id: string | undefined) =>
 	id === undefined ? undefined : turns.find((turn) => turn.id === id);
 
+/** When a turn's work began: the prompt it answers, else its own first part. */
+const turnStartOf = (turn: Turn): number => turn.startedAt ?? new Date(turn.at).getTime();
+
+/**
+ * Close a turn that was superseded rather than reported.
+ *
+ * A transcript whose tail lost its `turn_completed` still has a durable
+ * boundary: the next prompt. Settling here is what keeps such a turn from
+ * showing no duration at all — and it is measured from the same anchor
+ * `closeTurn` uses, so the two paths cannot disagree about what "worked for"
+ * means.
+ */
+function settleTurn(turn: Turn, endAt: number): Turn {
+	const durationMs = turn.durationMs ?? Math.max(0, endAt - turnStartOf(turn));
+	return { ...turn, status: 'complete', durationMs };
+}
+
 /** Replace one part inside one turn, leaving the rest of the transcript alone. */
 function patchPart(
 	acc: Acc,
@@ -258,18 +288,31 @@ function appendUserChunk(acc: Acc, chunk: string, at: number, promptIndex?: numb
 		openId !== undefined &&
 		(promptIndex === undefined || acc.openUserChunkPromptIndex === promptIndex);
 	if (openId !== undefined && samePrompt) {
-		const turns = acc.turns.map((turn) =>
-			turn.id === openId
-				? {
-						...turn,
-						parts: turn.parts.map((part) =>
-							part.kind === 'text' ? { ...part, text: part.text + chunk } : part
-						)
-					}
-				: turn
-		);
-		return { ...acc, turns };
+		// A chunk that is itself a whole envelope cannot extend a prompt
+		// bubble: it arrives after the prompt, in the same window, and joining
+		// it would append the reminder's text to what the reader typed.
+		const envelope = systemEnvelope(chunk);
+		if (!envelope) {
+			const turns = acc.turns.map((turn) =>
+				turn.id === openId
+					? {
+							...turn,
+							parts: turn.parts.map((part) =>
+								part.kind === 'text' ? { ...part, text: part.text + chunk } : part
+							)
+						}
+					: turn
+			);
+			return { ...acc, turns };
+		}
+		return pushSystemNote(acc, envelope, at);
 	}
+
+	// The shell stores injected context as a synthetic USER message, so it
+	// arrives on this rail. Rendering it as a prompt bubble claims the reader
+	// wrote it; a system row says what it actually is.
+	const envelope = systemEnvelope(chunk);
+	if (envelope) return pushSystemNote(acc, envelope, at);
 
 	const turn: Turn = {
 		id: newId(),
@@ -288,7 +331,7 @@ function appendUserChunk(acc: Acc, chunk: string, at: number, promptIndex?: numb
 			? acc.turns
 			: acc.turns.map((existing) =>
 					existing.id === acc.openTurnId && existing.status === 'streaming'
-						? { ...existing, status: 'complete' as TurnStatus }
+						? settleTurn(existing, at)
 						: existing
 				);
 	return {
@@ -296,13 +339,42 @@ function appendUserChunk(acc: Acc, chunk: string, at: number, promptIndex?: numb
 		turns: [...turns, turn],
 		openUserChunkId: turn.id,
 		openUserChunkPromptIndex: promptIndex,
-		openTurnId: undefined
+		openTurnId: undefined,
+		// The prompt's own chunk timestamp is the closest thing a replayed
+		// transcript has to "when the user sent this", so the answer that
+		// follows is measured from it rather than from its first token. Later
+		// chunks of the SAME bubble keep it (see the branch above).
+		promptStartedAt: at
 	};
+}
+
+/**
+ * Append a system note as its own row.
+ *
+ * It joins the OPEN assistant turn when one is running — the injection happened
+ * during that turn, and a standalone row between the question and its answer
+ * would break the thread's shape — and otherwise stands alone as a `system`
+ * turn. It never joins a user turn: that is the bug this whole path exists to
+ * fix.
+ */
+function pushSystemNote(acc: Acc, envelope: SystemEnvelope, at: number): Acc {
+	const part: SystemPart = {
+		kind: 'system',
+		id: newId(),
+		tag: envelope.tag,
+		body: envelope.body
+	};
+	return pushPart(acc, part, at);
 }
 
 /** Append a part to the open turn, creating one if the agent sent updates first. */
 function pushPart(acc: Acc, part: TurnPart, at: number): Acc {
-	if (acc.openTurnId === undefined) {
+	// Any part that is not reasoning ends the thinking phase. Doing it here
+	// rather than at each call site means a tool call, a notice, a subagent
+	// spawn and a plain text chunk all close it the same way.
+	const settled = part.kind === 'reasoning' ? acc : settleReasoning(acc);
+
+	if (settled.openTurnId === undefined) {
 		// An ambient part — a notice, an error — is system chatter, not the
 		// agent working. Opening a turn for it would leave a turn marked
 		// `streaming` that no `turn_completed` will ever close, and the UI
@@ -316,12 +388,12 @@ function pushPart(acc: Acc, part: TurnPart, at: number): Acc {
 			// Attach to the nearest assistant/system turn, never to a user
 			// prompt: a recap under a prompt the user just sent would read as
 			// the agent's reply.
-			const host = [...acc.turns].reverse().find((turn) => turn.role !== 'user');
+			const host = [...settled.turns].reverse().find((turn) => turn.role !== 'user');
 			if (host) {
-				const turns = acc.turns.map((turn) =>
+				const turns = settled.turns.map((turn) =>
 					turn.id === host.id ? { ...turn, parts: [...turn.parts, part] } : turn
 				);
-				return { ...acc, turns };
+				return { ...settled, turns };
 			}
 			const turn: Turn = {
 				id: newId(),
@@ -330,7 +402,7 @@ function pushPart(acc: Acc, part: TurnPart, at: number): Acc {
 				at: new Date(at).toISOString(),
 				parts: [part]
 			};
-			return { ...acc, turns: [...acc.turns, turn] };
+			return { ...settled, turns: [...settled.turns, turn] };
 		}
 
 		const turn: Turn = {
@@ -338,24 +410,28 @@ function pushPart(acc: Acc, part: TurnPart, at: number): Acc {
 			role: 'assistant',
 			status: 'streaming',
 			at: new Date(at).toISOString(),
+			// Measured from the prompt when one is known, so the time the model
+			// spent thinking before its first token counts as work.
+			startedAt: settled.promptStartedAt ?? at,
 			parts: [part]
 		};
-		return { ...acc, turns: [...acc.turns, turn], openTurnId: turn.id };
+		return { ...settled, turns: [...settled.turns, turn], openTurnId: turn.id };
 	}
-	const turns = acc.turns.map((turn) =>
-		turn.id === acc.openTurnId ? { ...turn, parts: [...turn.parts, part] } : turn
+	const turns = settled.turns.map((turn) =>
+		turn.id === settled.openTurnId ? { ...turn, parts: [...turn.parts, part] } : turn
 	);
-	return { ...acc, turns };
+	return { ...settled, turns };
 }
 
 /**
  * Whether a part describes the SYSTEM rather than the agent's work.
  *
- * A notice or an error can arrive with no turn open — a recap, a retry banner,
- * a compaction line. Those must not be mistaken for the start of a turn.
+ * A notice, an error or an injected reminder can arrive with no turn open — a
+ * recap, a retry banner, a compaction line, a background-task completion.
+ * Those must not be mistaken for the start of a turn.
  */
 function isAmbient(part: TurnPart): boolean {
-	return part.kind === 'notice' || part.kind === 'error';
+	return part.kind === 'notice' || part.kind === 'error' || part.kind === 'system';
 }
 
 /**
@@ -421,11 +497,45 @@ function appendText(acc: Acc, kind: 'text' | 'reasoning', chunk: string, at: num
 				: part
 		);
 	}
+	// Reasoning is over the moment anything else starts arriving. Without this
+	// the row kept its `running` status for the rest of the turn and the UI
+	// showed a spinner and "Thinking" over a thought that had finished — the
+	// one thing a finished turn must not claim. `pushPart` is the funnel every
+	// new part goes through, so the rule lives there (see `settleReasoning`).
 	const part: TextPart | ReasoningPart =
 		kind === 'text'
 			? { kind: 'text', id: newId(), text: chunk }
 			: { kind: 'reasoning', id: newId(), text: chunk, status: 'running' };
 	return pushPart(acc, part, at);
+}
+
+/**
+ * Close every reasoning part still marked running.
+ *
+ * A thought is a PHASE, and the phase ends when the next thing arrives — a
+ * message chunk, a tool call, a subagent spawn. The wire never says so: there
+ * is no `thought_completed` update, and `turn_completed` is far too late (the
+ * turn can run for minutes after thinking stops). So the boundary is derived
+ * from the next part, exactly as the TUI's own tracker derives it.
+ */
+function settleReasoning(acc: Acc): Acc {
+	const turn = turnById(acc.turns, acc.openTurnId);
+	if (!turn || !turn.parts.some((part) => part.kind === 'reasoning' && part.status === 'running')) {
+		return acc;
+	}
+	const turns = acc.turns.map((candidate) =>
+		candidate.id === turn.id
+			? {
+					...candidate,
+					parts: candidate.parts.map((part) =>
+						part.kind === 'reasoning' && part.status === 'running'
+							? { ...part, status: 'complete' as PartStatus }
+							: part
+					)
+				}
+			: candidate
+	);
+	return { ...acc, turns };
 }
 
 /* --------------------------------------------------------------- diff rows */
@@ -847,6 +957,13 @@ export function reduceAcpUpdate(input: Acc, update: SessionUpdate, ctx: ReduceCo
 		case 'user_message_chunk': {
 			const chunk = textOf(update.content);
 			if (!chunk) return acc;
+			// Injected context shares this rail with real prompts (the shell
+			// stores it as a synthetic USER message), so it is checked FIRST —
+			// before the optimistic-echo guard below. That guard swallows every
+			// user chunk until the turn closes, which would eat a mid-turn
+			// reminder into `streamedUserText` and lose it entirely.
+			const envelope = systemEnvelope(chunk);
+			if (envelope) return pushSystemNote(acc, envelope, now);
 			// The live path already painted this prompt optimistically; the echo
 			// is only bookkeeping for `send()`.
 			if (acc.optimisticUserTurn) {
@@ -1507,14 +1624,14 @@ export function closeTurn(
 	now: number
 ): Acc {
 	const turn = turnById(acc.turns, acc.openTurnId);
-	if (!turn) return { ...acc, openTurnId: undefined };
+	if (!turn) return { ...acc, openTurnId: undefined, promptStartedAt: undefined };
 	const turns = acc.turns.map((current) =>
 		current.id === turn.id
 			? {
 					...current,
 					status,
 					promptId: promptId ?? current.promptId,
-					durationMs: now - new Date(current.at).getTime(),
+					durationMs: Math.max(0, now - turnStartOf(current)),
 					parts: current.parts.map((part) =>
 						'status' in part && part.status === 'running'
 							? { ...part, status: 'complete' as PartStatus }
@@ -1527,6 +1644,7 @@ export function closeTurn(
 		...acc,
 		turns,
 		openTurnId: undefined,
+		promptStartedAt: undefined,
 		streamedUserText: '',
 		// A turn boundary is also a prompt boundary: the next echo must start
 		// its own bubble rather than extending this prompt's.
@@ -1558,9 +1676,7 @@ export function openUserTurn(
 ): Acc {
 	const turns = acc.openTurnId
 		? acc.turns.map((turn) =>
-				turn.id === acc.openTurnId && turn.status === 'streaming'
-					? { ...turn, status: 'complete' as TurnStatus }
-					: turn
+				turn.id === acc.openTurnId && turn.status === 'streaming' ? settleTurn(turn, at) : turn
 			)
 		: acc.turns;
 
@@ -1575,6 +1691,9 @@ export function openUserTurn(
 		...acc,
 		turns: [...turns, turn],
 		openTurnId: undefined,
+		// The clock the answer's "worked for" is measured from: this prompt,
+		// not the first token the model eventually emits.
+		promptStartedAt: at,
 		// The prompt is on screen; the agent's echo of it must not add a second
 		// bubble. Cleared when the turn closes.
 		optimisticUserTurn: true,

@@ -73,6 +73,7 @@ function activityOfPart(part: TurnPart): TurnActivity | undefined {
 		case 'notice':
 		case 'error':
 		case 'diff':
+		case 'system':
 			return undefined;
 		default:
 			return undefined;
