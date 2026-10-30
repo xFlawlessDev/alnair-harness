@@ -1,4 +1,6 @@
 <script lang="ts">
+	import PanelBottomIcon from '@lucide/svelte/icons/panel-bottom';
+	import PanelLeftIcon from '@lucide/svelte/icons/panel-left';
 	import PanelRightIcon from '@lucide/svelte/icons/panel-right';
 	import { Button } from '#lib/components/ui/button/index.js';
 	import * as Tooltip from '#lib/components/ui/tooltip/index.js';
@@ -28,7 +30,10 @@
 		subagents,
 		onsubagent,
 		inspectorOpen,
-		oninspector
+		oninspector,
+		drawerOpen = false,
+		ondrawer,
+		onnavigate
 	}: {
 		session: Session;
 		/** Absent when the agent has no graph running. */
@@ -41,11 +46,29 @@
 		onsubagent: (subagent: SubagentSummary) => void;
 		inspectorOpen: boolean;
 		oninspector: () => void;
+		/** Whether the bottom editor/terminal panel is showing. */
+		drawerOpen?: boolean;
+		/** Toggle it. Absent hides the button. */
+		ondrawer?: () => void;
+		/** Open the session list. Only rendered below `md`, where the rail is
+		 *  hidden and this is the only way to reach another session. */
+		onnavigate?: () => void;
 	} = $props();
 </script>
 
 <header class="rule-b flex h-12 shrink-0 items-center gap-3 bg-paper px-4">
 	<div class="flex min-w-0 flex-1 items-center gap-2">
+		{#if onnavigate}
+			<Button
+				variant="ghost"
+				size="icon-sm"
+				class="-ml-1 shrink-0 text-ink-tertiary hover:text-ink md:hidden"
+				aria-label="Open the session list"
+				onclick={onnavigate}
+			>
+				<PanelLeftIcon />
+			</Button>
+		{/if}
 		<h1 class="min-w-0 truncate text-[13px] font-medium">{session.title}</h1>
 		{#if subagents.length > 0}
 			<SubagentPopover {subagents} onselect={onsubagent} />
@@ -78,6 +101,27 @@
 
 		{#if graph}
 			<GraphChip {graph} />
+		{/if}
+
+		{#if ondrawer}
+			<Tooltip.Root>
+				<Tooltip.Trigger>
+					{#snippet child({ props })}
+						<Button
+							{...props}
+							variant="ghost"
+							size="icon-sm"
+							aria-label="Toggle the editor and terminal panel"
+							aria-pressed={drawerOpen}
+							class="text-ink-tertiary hover:text-ink aria-pressed:bg-paper-card aria-pressed:text-ink"
+							onclick={ondrawer}
+						>
+							<PanelBottomIcon />
+						</Button>
+					{/snippet}
+				</Tooltip.Trigger>
+				<Tooltip.Content><p>Editor &amp; terminal · Ctrl+`</p></Tooltip.Content>
+			</Tooltip.Root>
 		{/if}
 
 		<Tooltip.Root>

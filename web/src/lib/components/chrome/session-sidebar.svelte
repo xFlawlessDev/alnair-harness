@@ -60,8 +60,12 @@
 		onrename: (id: string, title: string) => void | Promise<void>;
 		ondelete: (id: string) => void | Promise<void>;
 		oncreate: (cwd: string) => void | Promise<void>;
-		/** Open the native folder picker and start a session there. */
-		onaddworkspace: () => void | Promise<void>;
+		/**
+		 * Open the native folder picker and start a session there.
+		 *
+		 * `path` skips the dialog, for the typed-path fallback.
+		 */
+		onaddworkspace: (path?: string) => void | Promise<void>;
 		onremoveworkspace: (name: string) => void;
 		onrestoreworkspace: (name: string) => void;
 		/** Report a refusal the caller could not apply (a blank title, …). */
@@ -171,14 +175,75 @@
 
 	/** An in-flight native dialog, so the button can say so. */
 	let adding = $state(false);
+	/** The typed-path fallback, shown when the native dialog cannot open. */
+	let pathOpen = $state(false);
+	let pathDraft = $state('');
+	let pathError = $state<string | undefined>(undefined);
+	let addingPath = $state(false);
+	let pathInput: HTMLInputElement | null = $state(null);
 
+	/**
+	 * Ask for a directory, and never fail silently.
+	 *
+	 * Left click opens the native dialog — the ordinary gesture, and the one a
+	 * reader expects from a `+`. The dialog is not always available: a headless
+	 * `alnair web` has no desktop to draw on, a second concurrent request is
+	 * refused (`picker::OPEN` allows one dialog at a time), and a release build
+	 * rejects a dev-server Origin outright. Those used to surface as nothing at
+	 * all — the button spun and stopped — which reads as a broken control. So a
+	 * refusal opens the typed-path dialog instead, and only an explicit Cancel
+	 * ends the action.
+	 */
 	async function addWorkspace() {
 		if (adding) return;
 		adding = true;
+		pathError = undefined;
 		try {
 			await onaddworkspace();
+		} catch (error) {
+			pathError = error instanceof Error ? error.message : 'the folder picker failed';
+			openPathDialog();
 		} finally {
 			adding = false;
+		}
+	}
+
+	function openPathDialog() {
+		pathDraft = pathDraft || defaultBase();
+		pathOpen = true;
+		void tick().then(() => {
+			pathInput?.focus();
+			pathInput?.select();
+		});
+	}
+
+	/**
+	 * A starting point for the typed path.
+	 *
+	 * The active session's own directory is the only absolute path this page
+	 * knows, and a reader adding a workspace is usually doing it next to one
+	 * they already have open.
+	 */
+	function defaultBase(): string {
+		const active = groups
+			.flatMap((group) => group.sessions)
+			.find((session) => session.id === activeId);
+		return active?.cwd ?? groups.find((group) => group.path)?.path ?? '';
+	}
+
+	async function submitPath() {
+		const path = pathDraft.trim();
+		if (!path || addingPath) return;
+		addingPath = true;
+		pathError = undefined;
+		try {
+			await onaddworkspace(path);
+			pathOpen = false;
+			pathDraft = '';
+		} catch (error) {
+			pathError = error instanceof Error ? error.message : 'that directory could not be opened';
+		} finally {
+			addingPath = false;
 		}
 	}
 </script>
@@ -220,7 +285,9 @@
 							</button>
 						{/snippet}
 					</Tooltip.Trigger>
-					<Tooltip.Content><p>Add workspace directory…</p></Tooltip.Content>
+					<Tooltip.Content>
+						<p>Add workspace directory…</p>
+					</Tooltip.Content>
 				</Tooltip.Root>
 			</div>
 		</div>
@@ -303,6 +370,15 @@
 								>
 									<PlusIcon class="size-3.5" />
 									New session here
+								</DropdownMenu.Item>
+								<DropdownMenu.Item onclick={openPathDialog}>
+									<FolderTreeIcon class="size-3.5" />
+									<span class="flex min-w-0 flex-col">
+										<span>Add workspace by path…</span>
+										<span class="text-[10.5px] text-ink-tertiary">
+											type an absolute directory instead of browsing
+										</span>
+									</span>
 								</DropdownMenu.Item>
 								<DropdownMenu.Separator />
 								<DropdownMenu.Item onclick={() => onremoveworkspace(group.name)}>
@@ -469,10 +545,21 @@
 			{/each}
 
 			{#if groups.length === 0}
-				<p class="px-3 py-6 text-center text-[11.5px] leading-relaxed text-ink-tertiary">
-					No workspaces yet. Use <span class="font-mono">+</span> above to pick a directory, or start
-					one from the composer.
-				</p>
+				<div class="px-3 py-6 text-center">
+					<p class="text-[11.5px] leading-relaxed text-ink-tertiary">
+						No workspaces yet. Use <span class="font-mono">+</span> above to pick a directory, or start
+						one from the composer.
+					</p>
+					<Button
+						type="button"
+						variant="outline"
+						size="sm"
+						class="mt-3 h-6 text-[11px]"
+						onclick={openPathDialog}
+					>
+						Or type a path…
+					</Button>
+				</div>
 			{/if}
 		</div>
 	</nav>
@@ -530,6 +617,80 @@
 		</div>
 	</div>
 </aside>
+
+<!--
+	The typed-path fallback for "add a workspace".
+
+	It exists because the native dialog can legitimately be unavailable — a
+	headless server, a second request while one dialog is open, a refused
+	Origin — and every one of those used to make the `+` button do nothing
+	visible. A path the reader types is the answer that always works, so the
+	control can never be a dead end.
+-->
+<Dialog.Root bind:open={pathOpen}>
+	<Dialog.Content class="max-w-md">
+		<div class="flex flex-col gap-4 p-5">
+			<div class="flex items-start gap-2.5">
+				<FolderTreeIcon class="mt-0.5 size-4 shrink-0 text-ink-tertiary" />
+				<div class="min-w-0">
+					<Dialog.Title class="text-[13.5px] font-medium">Add a workspace</Dialog.Title>
+					<Dialog.Description class="mt-1 text-[11.5px] leading-relaxed text-ink-tertiary">
+						Type the absolute path of the directory. A session opens there, which is what puts the
+						directory in this list.
+					</Dialog.Description>
+				</div>
+			</div>
+
+			<form
+				onsubmit={(event) => {
+					event.preventDefault();
+					void submitPath();
+				}}
+			>
+				<input
+					bind:this={pathInput}
+					bind:value={pathDraft}
+					class="w-full rounded-md border border-line-strong bg-paper px-2.5 py-1.5 font-mono text-[11.5px] text-ink outline-none placeholder:text-ink-tertiary/60 focus:border-olive/60"
+					placeholder="D:\dev\my-project"
+					aria-label="Workspace directory path"
+					spellcheck="false"
+					autocomplete="off"
+				/>
+			</form>
+
+			{#if pathError}
+				<p
+					class="rounded-md border border-error/40 bg-error/5 px-2.5 py-1.5 text-[11.5px] text-error"
+				>
+					{pathError}
+				</p>
+			{/if}
+
+			<div class="flex justify-end gap-2">
+				<Button
+					type="button"
+					variant="outline"
+					size="sm"
+					onclick={() => {
+						pathOpen = false;
+						pathError = undefined;
+					}}
+				>
+					Cancel
+				</Button>
+				<Button
+					type="button"
+					variant="default"
+					size="sm"
+					disabled={!pathDraft.trim() || addingPath}
+					onclick={() => void submitPath()}
+				>
+					{addingPath ? 'Opening…' : 'Add workspace'}
+				</Button>
+			</div>
+		</div>
+	</Dialog.Content>
+</Dialog.Root>
 
 <!--
 	Deleting a session removes a transcript from disk. The dialog is the only
