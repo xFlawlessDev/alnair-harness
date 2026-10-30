@@ -70,6 +70,17 @@ export const thoughtChunk = (sessionId: string, value: string, delay = 0) =>
 export const userChunk = (sessionId: string, value: string, delay = 0) =>
 	acpUpdate(sessionId, { sessionUpdate: 'user_message_chunk', content: text(value) }, delay);
 
+/**
+ * An injected `<system-reminder>`, as the shell emits it.
+ *
+ * It travels as a `user_message_chunk` — `ConversationItem::system_reminder`
+ * pushes a synthetic USER message — which is why a client that renders every
+ * user chunk as a bubble shows a background-task notification as if the reader
+ * had typed it.
+ */
+export const systemReminder = (sessionId: string, body: string, delay = 0) =>
+	userChunk(sessionId, `<system-reminder>\n${body}\n</system-reminder>`, delay);
+
 export interface ToolCallInit {
 	toolCallId: string;
 	title: string;
@@ -619,6 +630,13 @@ export const cancelledTurn: ScriptedTurn = {
 				event_text: '   Compiling alnair-shell v0.1.20'
 			},
 			700
+		),
+		// The completion arrives as an injected reminder, exactly as the shell
+		// delivers it — on the user rail. It must render as a system row.
+		systemReminder(
+			S,
+			'Background task "task-91" completed (exit code: 0).\nCommand: cargo test --workspace\nUse get_command_or_subagent_output("task-91") to see the full output.',
+			400
 		),
 		toolUpdate(S, 'call_test', { status: 'failed' }, 500),
 		extUpdate(

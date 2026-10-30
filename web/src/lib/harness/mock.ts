@@ -305,6 +305,11 @@ function foldTurn(acc: Acc, turn: { prompt: string; steps: WireStep[] }, at: num
  */
 export function initialTranscript(): Acc {
 	let acc = emptyAcc();
+	// The command catalog is a session-level frame, not a turn's: the agent
+	// advertises it once per session, and the composer's `/` menu reads it from
+	// the accumulator. Seeding it here is what makes the fixture exercise the
+	// same filter the live page does.
+	acc = { ...acc, commands: commands.map((command) => ({ ...command })) };
 	acc = foldTurn(acc, foundationTurn, Date.parse(t(14)));
 	acc = foldTurn(acc, cancelledTurn, Date.parse(t(6)));
 	// Park the last turn on its permission request: drop the frames after it.
@@ -393,22 +398,47 @@ export const suggestions = [
 
 /**
  * Slash commands as the agent advertises them: ACP `AvailableCommand` carries
- * `name`, `description`, and an optional `input.hint`. This is the builtin set
- * the runtime registers, trimmed to the ones a web client can act on.
+ * `name`, `description`, and an optional `input.hint`.
+ *
+ * This is the SHELL's catalog — the builtins in
+ * `alnair-shell/src/session/slash_commands.rs`, plus an installed skill. The
+ * pager's own `/model`, `/clear`, `/rewind`, `/theme` and the rest never reach
+ * ACP, so they are not here: offering them in a browser sends text the shell
+ * parses as an unknown command, and the model answers it as prose.
  */
 export const commands: SlashCommand[] = [
-	{ name: 'goal', description: 'Run the objective as a goal', hint: '<objective>' },
-	{ name: 'graph', description: 'Decompose the objective into a DAG', hint: '<objective>' },
-	{ name: 'swarm', description: 'Fan out over a list of items', hint: '<task>' },
-	{ name: 'plan', description: 'Enter plan mode' },
-	{ name: 'compact', description: 'Compact the conversation' },
-	{ name: 'model', description: 'Switch the model', hint: '<model>' },
-	{ name: 'clear', description: 'Clear the thread' },
-	{ name: 'rewind', description: 'Rewind to an earlier turn', hint: '<turn>' },
-	{ name: 'review', description: 'Review the working tree' },
-	{ name: 'memory', description: 'Browse and toggle memory' },
-	{ name: 'mcp', description: 'Manage MCP servers' },
-	{ name: 'terminal-setup', description: 'Per-terminal keyboard recipe' }
+	{ name: 'compact', description: 'Compress conversation history to save context window' },
+	{
+		name: 'always-approve',
+		description: 'Toggle always-approve mode (skip all permission prompts)',
+		hint: 'on|off'
+	},
+	{ name: 'memory', description: 'Browse, view, and manage your memories', hint: 'on|off' },
+	{ name: 'context', description: 'Show context window usage and session stats' },
+	{ name: 'session-info', description: 'Show session details (model, turns, context usage)' },
+	{ name: 'lessons', description: "Show or clear this workspace's captured harness lessons" },
+	{ name: 'goal', description: 'Set, manage, or check an autonomous goal', hint: '<objective>' },
+	{
+		name: 'graph',
+		description: 'Decompose an objective into a dependency graph of autonomous goals',
+		hint: '<objective>'
+	},
+	{
+		name: 'swarm',
+		description: 'Fan out across a fleet of subagents',
+		hint: '[on | off | <task>]'
+	},
+	{
+		name: 'loop',
+		description: 'Run a prompt on a recurring interval',
+		hint: '[interval] <prompt>'
+	},
+	{
+		name: 'feedback',
+		description: 'Send feedback about the current session',
+		hint: 'feedback text'
+	},
+	{ name: 'commit', description: 'Commit the working tree with a generated message' }
 ];
 
 /**
