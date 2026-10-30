@@ -17,7 +17,7 @@
  */
 
 import type { AskUserQuestionResponse, SubagentLiveSnapshot } from './types/ext.js';
-import type { IncomingFrame, PlanOutcome, Transport } from './session-store.svelte.js';
+import type { FilePreview, IncomingFrame, PlanOutcome, Transport } from './session-store.svelte.js';
 import type {
 	BranchEntry,
 	ContextUsage,
@@ -84,6 +84,9 @@ export class WebSocketTransport implements Transport {
 	private frameSink: ((sessionId: string, frame: IncomingFrame) => void) | undefined;
 	private reconnectedSink: (() => void) | undefined;
 	private rosterSink: ((delta: { upserted?: unknown[]; removed?: string[] }) => void) | undefined;
+	private connectionSink: ((state: 'live' | 'reconnecting' | 'offline') => void) | undefined;
+	/** Last reported health, so a repeat does not re-render the indicator. */
+	private lastConnection: 'live' | 'reconnecting' | 'offline' | undefined;
 
 	/** Backoff state for the local-server reconnect loop. */
 	private reconnectAttempt = 0;
@@ -108,9 +111,28 @@ export class WebSocketTransport implements Transport {
 		this.reconnectedSink = sink;
 	}
 
+	/**
+	 * Report the socket's own health.
+	 *
+	 * Distinct from `onReconnected`: that fires once the leader answers again,
+	 * while this reports the attempts in between — which is the state a reader
+	 * needs, because a page that retries silently for ten seconds looks frozen.
+	 */
+	onConnection(sink: (state: 'live' | 'reconnecting' | 'offline') => void) {
+		this.connectionSink = sink;
+	}
+
+	/** Emit a health change, ignoring a repeat of the last value. */
+	private reportConnection(state: 'live' | 'reconnecting' | 'offline') {
+		if (state === this.lastConnection) return;
+		this.lastConnection = state;
+		this.connectionSink?.(state);
+	}
+
 	async connect(): Promise<void> {
 		await this.openSocket();
 		await this.initialize();
+		this.reportConnection('live');
 	}
 
 	/**
@@ -207,6 +229,168 @@ export class WebSocketTransport implements Transport {
 		const raw = await this.ext('alnair/fs/list', { path, sessionId });
 		const payload = unwrapExt<{ nodes?: FsNode[] }>(raw);
 		return entriesFromNodes(payload?.nodes ?? []);
+	}
+
+	/**
+	 * Read one file, for the inspector's preview.
+	 *
+	 * `alnair/fs/read_file` answers `FsReadFileData` — `content`, an optional
+	 * `contentBase64` for a binary or ranged read, `size` and `lineCount`. The
+	 * handler refuses a file past its own byte cap and the refusal is the
+	 * `ExtMethodResult.error` half, so a failure surfaces as `undefined` here
+	 * rather than as a rejected request the panel has to catch.
+	 */
+	async fsRead(path: string, sessionId: string): Promise<FilePreview | undefined> {
+		const raw = await this.ext('alnair/fs/read_file', { path, sessionId });
+		const payload = unwrapExt<{
+			content?: unknown;
+			contentBase64?: unknown;
+			size?: unknown;
+			lineCount?: unknown;
+			type?: unknown;
+		}>(raw);
+		if (!payload) return undefined;
+		return {
+			text: typeof payload.content === 'string' ? payload.content : undefined,
+			base64: typeof payload.contentBase64 === 'string' ? payload.contentBase64 : undefined,
+			contentType: typeof payload.type === 'string' ? payload.type : 'text',
+			size: typeof payload.size === 'number' ? payload.size : 0,
+			lineCount: typeof payload.lineCount === 'number' ? payload.lineCount : undefined
+		};
+	}
+
+	/**
+	 * Write one file, for the inspector's editor.
+	 *
+	 * `createDirs` is on so saving into a directory the agent just created
+	 * works; the handler is the agent's own `fs/write_file`, so the result is
+	 * byte-identical to what its write tool would have produced.
+	 */
+	async fsWrite(path: string, content: string, sessionId: string): Promise<void> {
+		await this.ext('alnair/fs/write_file', { path, content, sessionId, createDirs: true });
+	}
+
+	/**
+	 * The working tree, for the source-control panel.
+	 *
+	 * `includeStats` is on so each entry carries its line counts — the panel
+	 * shows them beside the path, and a second round trip per file to get them
+	 * would be one request per changed file.
+	 */
+	async gitStatus(sessionId: string): Promise<unknown> {
+		const raw = await this.ext('alnair/git/status', {
+			sessionId,
+			includeUntracked: true,
+			includeStats: true
+		});
+		return unwrapExt<Record<string, unknown>>(raw) ?? undefined;
+	}
+
+	/**
+	 * Ask for a recap.
+	 *
+	 * `auto: false` is the explicit `/recap` path — the same one the TUI's
+	 * command uses. The response only acknowledges the queue, so the caller
+	 * must not treat it as the text; the recap arrives on the stream as a
+	 * `session_recap` update and the reducer folds it into the transcript.
+	 *
+	 * Kept even though the page no longer offers a recap button: the transcript
+	 * already shows a `session_recap` notice when the agent emits one (on
+	 * return-from-away), and a future surface can ask for another without
+	 * re-deriving this call.
+	 */
+	async recap(sessionId: string): Promise<void> {
+		await this.ext('alnair/recap', { sessionId, auto: false });
+	}
+
+	// --- interactive terminal ------------------------------------------------
+
+	/** Where PTY notifications go. Registered by the terminal pane. */
+	private ptySink: ((terminalId: string, event: Record<string, unknown>) => void) | undefined;
+
+	onPtyEvent(sink: (terminalId: string, event: Record<string, unknown>) => void) {
+		this.ptySink = sink;
+	}
+
+	/**
+	 * Spawn a shell in the session's directory.
+	 *
+	 * `_meta` is deliberately NOT set here: the leader stamps
+	 * `alnair/leaderClientId` onto the request itself (see
+	 * `inject_leader_client_id` in `alnair-shell/src/leader/server.rs`), and a
+	 * second guess at the value would either be ignored or route output to the
+	 * wrong client.
+	 */
+	async ptyCreate(request: {
+		sessionId: string;
+		cwd?: string;
+		rows: number;
+		cols: number;
+	}): Promise<string> {
+		const raw = await this.ext('alnair/terminal/pty/create', {
+			sessionId: request.sessionId,
+			...(request.cwd ? { cwd: request.cwd } : {}),
+			rows: request.rows,
+			cols: request.cols
+		});
+		const payload = unwrapExt<{ terminalId?: unknown }>(raw);
+		const terminalId = typeof payload?.terminalId === 'string' ? payload.terminalId : '';
+		if (!terminalId) throw new Error('the agent did not return a terminal id');
+		return terminalId;
+	}
+
+	/**
+	 * Re-attach to a PTY.
+	 *
+	 * The replay arrives as a normal notification carrying `isReplay: true`,
+	 * so the caller must be listening before this resolves.
+	 */
+	async ptyLoad(terminalId: string): Promise<{
+		rows: number;
+		cols: number;
+		exited: boolean;
+		exitCode?: number;
+	}> {
+		const raw = await this.ext('alnair/terminal/pty/load', { terminalId });
+		const payload = unwrapExt<{
+			rows?: unknown;
+			cols?: unknown;
+			exited?: unknown;
+			exitCode?: unknown;
+		}>(raw);
+		return {
+			rows: typeof payload?.rows === 'number' ? payload.rows : 24,
+			cols: typeof payload?.cols === 'number' ? payload.cols : 80,
+			exited: payload?.exited === true,
+			exitCode: typeof payload?.exitCode === 'number' ? payload.exitCode : undefined
+		};
+	}
+
+	/**
+	 * Forward keystrokes.
+	 *
+	 * A notification, not a request: every key would otherwise pay a round
+	 * trip, and the server has nothing to say back.
+	 */
+	ptyInput(terminalId: string, data: string): void {
+		this.notify('alnair/terminal/pty/input', { terminalId, data });
+	}
+
+	/**
+	 * Resize the PTY.
+	 *
+	 * A notification too, and debounced by the caller: a drag emits a frame per
+	 * pixel, and only the last size matters.
+	 */
+	ptyResize(terminalId: string, rows: number, cols: number): void {
+		this.notify('alnair/terminal/pty/resize', { terminalId, rows, cols });
+	}
+
+	/** End the shell. The server answers once the PTY is gone. */
+	ptyClose(terminalId: string): void {
+		void this.ext('alnair/terminal/kill', { terminalId }).catch(() => {
+			// A shell that already exited is not an error worth surfacing.
+		});
 	}
 
 	/**
@@ -427,12 +611,25 @@ export class WebSocketTransport implements Transport {
 	 * fire-and-forget here because the response only carries the stop reason,
 	 * and the transcript is built from the broadcast stream.
 	 */
-	send(prompt: string): void {
+	/**
+	 * Send a prompt.
+	 *
+	 * Frames arrive through the frame sink, not this callback: a prompt is
+	 * fire-and-forget here because the response only carries the stop reason,
+	 * and the transcript is built from the broadcast stream.
+	 *
+	 * `blocks` is the composer's already-shaped ACP prompt (text plus the
+	 * `image`/`resource` blocks a paste produced). It is used verbatim when
+	 * present: re-deriving the block list here would put the "text first, then
+	 * attachments" rule in two places and let them drift.
+	 */
+	send(prompt: string, _onFrame?: (frame: IncomingFrame) => void, blocks?: unknown[]): void {
 		const sessionId = this.activeSessionId;
 		if (!sessionId) return;
+		const payload = blocks && blocks.length > 0 ? blocks : [{ type: 'text', text: prompt }];
 		void this.request('session/prompt', {
 			sessionId,
-			prompt: [{ type: 'text', text: prompt }]
+			prompt: payload
 		})
 			.then((result) => {
 				const stopReason = (result as { stopReason?: string }).stopReason ?? 'end_turn';
@@ -653,14 +850,43 @@ export class WebSocketTransport implements Transport {
 	private dispatch(message: Rpc) {
 		const params = (message.params ?? {}) as Record<string, unknown>;
 
-		// Machine-wide roster delta: no session id, and the sidebar owns it.
-		if (message.method === 'alnair/sessions/changed') {
+		/**
+		 * Machine-wide roster delta: no session id, and the sidebar owns it.
+		 *
+		 * The `_` prefix is not optional. The leader forwards agent
+		 * notifications `_`-prefixed (`_alnair/sessions/changed`) — see
+		 * `is_machine_wide_broadcast_notification` in
+		 * `alnair-shell/src/leader/server.rs`, which has to normalize for the
+		 * same reason. Comparing only the bare name meant every roster delta
+		 * fell through to the session-frame path, found no `sessionId`, and was
+		 * dropped: the sidebar never saw a session appear until a page reload.
+		 */
+		if (
+			message.method === 'alnair/sessions/changed' ||
+			message.method === '_alnair/sessions/changed'
+		) {
 			this.rosterSink?.({
 				upserted: Array.isArray(params.upserted) ? params.upserted : [],
 				removed: Array.isArray(params.removed)
 					? params.removed.filter((id): id is string => typeof id === 'string')
 					: []
 			});
+			return;
+		}
+
+		/**
+		 * PTY output, exit and busy transitions.
+		 *
+		 * Addressed by `terminalId`, not `sessionId`, so the generic session
+		 * path below would drop every one of them. They belong to the terminal
+		 * pane, which registers a sink only while it owns a shell.
+		 */
+		if (
+			message.method === 'alnair/terminal/pty/notification' ||
+			message.method === '_alnair/terminal/pty/notification'
+		) {
+			const terminalId = String(params.terminalId ?? '');
+			if (terminalId) this.ptySink?.(terminalId, params);
 			return;
 		}
 
@@ -744,7 +970,11 @@ export class WebSocketTransport implements Transport {
 		}
 		this.pending.clear();
 
-		if (this.closedByUs) return;
+		if (this.closedByUs) {
+			this.reportConnection('offline');
+			return;
+		}
+		this.reportConnection('reconnecting');
 		this.scheduleReconnect();
 	}
 
@@ -757,6 +987,9 @@ export class WebSocketTransport implements Transport {
 			void this.connect()
 				.then(() => {
 					this.reconnectAttempt = 0;
+					// `connect` already reported `live`; the store still needs the
+					// reload, because a relaunched leader has frames this view
+					// never saw.
 					this.reconnectedSink?.();
 				})
 				.catch(() => this.scheduleReconnect());

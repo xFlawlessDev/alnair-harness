@@ -458,3 +458,135 @@ describe('ws-transport: leader relaunch', () => {
 		expect(harness.reconnects()).toBe(1);
 	});
 });
+
+describe('ws-transport: roster hot-reload', () => {
+	beforeEach(() => {
+		FakeSocket.instances = [];
+		vi.stubGlobal('WebSocket', FakeSocket);
+	});
+
+	/** A connected transport with a roster sink attached. */
+	async function withRoster() {
+		const harness = makeTransport();
+		const deltas: { upserted?: unknown[]; removed?: string[] }[] = [];
+		harness.transport.onRosterChanged((delta) => deltas.push(delta));
+		const connected = harness.transport.connect();
+		await settle();
+		const socket = FakeSocket.instances[0];
+		answer(socket, 'initialize', {});
+		await connected;
+		return { socket, deltas, harness };
+	}
+
+	it('accepts the `_`-prefixed form the leader actually sends', async () => {
+		// The production wire form. The bare name is what a request looks like;
+		// notifications from the agent are `_`-prefixed by the gateway, and
+		// matching only the bare name dropped every delta — which is why a new
+		// session only appeared after a page reload.
+		const { socket, deltas } = await withRoster();
+		socket.deliver({
+			jsonrpc: '2.0',
+			method: '_alnair/sessions/changed',
+			params: {
+				upserted: [{ sessionId: 's-new', cwd: '/repo', activity: 'idle' }],
+				removed: []
+			}
+		});
+		expect(deltas).toHaveLength(1);
+		expect(deltas[0].upserted).toHaveLength(1);
+	});
+
+	it('still accepts the bare name', async () => {
+		const { socket, deltas } = await withRoster();
+		socket.deliver({
+			jsonrpc: '2.0',
+			method: 'alnair/sessions/changed',
+			params: { upserted: [{ sessionId: 's-x', cwd: '/repo' }], removed: [] }
+		});
+		expect(deltas).toHaveLength(1);
+	});
+
+	it('passes removed ids through, filtered to strings', async () => {
+		const { socket, deltas } = await withRoster();
+		socket.deliver({
+			jsonrpc: '2.0',
+			method: '_alnair/sessions/changed',
+			params: { upserted: [], removed: ['s-1', 42, null] }
+		});
+		expect(deltas[0].removed).toEqual(['s-1']);
+	});
+});
+
+describe('ws-transport: pty routing', () => {
+	beforeEach(() => {
+		FakeSocket.instances = [];
+		vi.stubGlobal('WebSocket', FakeSocket);
+	});
+
+	it('routes PTY notifications by terminalId, not sessionId', async () => {
+		// A PTY notification carries `terminalId` and no session id, so the
+		// generic session path would drop every one of them.
+		const harness = makeTransport();
+		const events: { id: string; event: Record<string, unknown> }[] = [];
+		harness.transport.onPtyEvent((id, event) => events.push({ id, event }));
+
+		const connected = harness.transport.connect();
+		await settle();
+		const socket = FakeSocket.instances[0];
+		answer(socket, 'initialize', {});
+		await connected;
+
+		socket.deliver({
+			jsonrpc: '2.0',
+			method: '_alnair/terminal/pty/notification',
+			params: { terminalId: 'pty-1', type: 'output', data: 'aGk=' }
+		});
+		expect(events).toHaveLength(1);
+		expect(events[0].id).toBe('pty-1');
+		expect(events[0].event.type).toBe('output');
+		// It must NOT have been treated as a session frame.
+		expect(harness.frames).toHaveLength(0);
+	});
+
+	it('sends create flat and returns the terminal id', async () => {
+		const harness = makeTransport();
+		const connected = harness.transport.connect();
+		await settle();
+		const socket = FakeSocket.instances[0];
+		answer(socket, 'initialize', {});
+		await connected;
+
+		const created = harness.transport.ptyCreate({
+			sessionId: 's1',
+			cwd: '/repo',
+			rows: 24,
+			cols: 80
+		});
+		await settle();
+		answer(socket, '_alnair/terminal/pty/create', { result: { terminalId: 'pty-9' } });
+		await expect(created).resolves.toBe('pty-9');
+
+		const request = sentOf(socket, '_alnair/terminal/pty/create');
+		expect(request!.params).toMatchObject({ sessionId: 's1', cwd: '/repo', rows: 24, cols: 80 });
+	});
+
+	it('forwards keystrokes as a notification, not a request', async () => {
+		const harness = makeTransport();
+		const connected = harness.transport.connect();
+		await settle();
+		const socket = FakeSocket.instances[0];
+		answer(socket, 'initialize', {});
+		await connected;
+
+		const before = socket.sent.length;
+		harness.transport.ptyInput('pty-1', 'aGk=');
+		expect(socket.sent.length).toBe(before + 1);
+		const sent = socket.sent.at(-1)!;
+		// Notifications go out bare: the gateway strips the `_` on requests, and
+		// the leader's `method_of` normalizes both forms for notifications. The
+		// important part is that it has NO id, so nothing waits on a response.
+		expect(sent.method).toBe('alnair/terminal/pty/input');
+		expect(sent.id).toBeUndefined();
+		expect(sent.params).toEqual({ terminalId: 'pty-1', data: 'aGk=' });
+	});
+});
