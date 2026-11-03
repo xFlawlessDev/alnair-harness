@@ -33,8 +33,6 @@ key? OpenAI, Anthropic, Google, DeepSeek, Groq, Moonshot and
 
 ![Alnair demo](video/Alnair.gif)
 
-[Full-quality recording (mp4)](video/Alnair.mp4)
-
 </div>
 
 ---
