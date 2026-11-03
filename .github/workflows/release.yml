@@ -80,8 +80,8 @@ jobs:
       # ── web UI ────────────────────────────────────────────────────────────
       - uses: actions/setup-node@v4
         with:
-          # @sveltejs/kit 3.x requires Node >= 22.17.
-          node-version: "22"
+          # Same Node and npm as the local build that produced web/package-lock.json.
+          node-version: "24"
           cache: npm
           cache-dependency-path: web/package-lock.json
 
@@ -89,6 +89,7 @@ jobs:
         shell: bash
         run: |
           set -eu
+          npm install -g npm@12.0.2
           npm --prefix web ci
           npm --prefix web run build
           # A placeholder build still produces a working binary, just with a
