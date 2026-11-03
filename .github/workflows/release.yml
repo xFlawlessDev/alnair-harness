@@ -80,7 +80,8 @@ jobs:
       # ── web UI ────────────────────────────────────────────────────────────
       - uses: actions/setup-node@v4
         with:
-          node-version: "20"
+          # @sveltejs/kit 3.x requires Node >= 22.17.
+          node-version: "22"
           cache: npm
           cache-dependency-path: web/package-lock.json
 
