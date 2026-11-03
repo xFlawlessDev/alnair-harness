@@ -1,14 +1,32 @@
 <script lang="ts">
 	import DocPage from '$lib/docs/DocPage.svelte';
+	import Seo from '$lib/seo/Seo.svelte';
+	import { breadcrumbs, techArticle } from '$lib/seo/schema';
+	import { absolute } from '$lib/seo/site';
 	import type { PageData } from './$types';
 
 	let { data }: { data: PageData } = $props();
+
+	const path = $derived(`/docs/${data.doc.slug}/`);
+	const description = $derived(data.doc.description || `${data.doc.title} — Alnair user guide.`);
+	const title = $derived(`${data.doc.title} — Alnair user guide`);
+
+	const schema = $derived([
+		techArticle({
+			headline: data.doc.title,
+			description,
+			url: absolute(path),
+			inLanguage: 'en'
+		}),
+		breadcrumbs([
+			{ name: 'Alnair', path: '/' },
+			{ name: 'User guide', path: '/docs/' },
+			{ name: data.doc.title, path }
+		])
+	]);
 </script>
 
-<svelte:head>
-	<title>{data.doc.title} — Alnair user guide</title>
-	<meta name="description" content={data.doc.description} />
-</svelte:head>
+<Seo locale="en" {path} {title} {description} type="article" jsonLd={schema} />
 
 <DocPage
 	locale="en"

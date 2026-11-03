@@ -9,6 +9,9 @@
 	import LessonsSection from './LessonsSection.svelte';
 	import Nav from './Nav.svelte';
 	import ProvidersSection from './ProvidersSection.svelte';
+	import Seo from '$lib/seo/Seo.svelte';
+	import { softwareApplication, faqPage } from '$lib/seo/schema';
+	import { absolute, HOME_PATH } from '$lib/seo/site';
 	import { dictionary } from '$lib/i18n';
 	import type { Locale } from '$lib/i18n';
 
@@ -18,26 +21,28 @@
 	const github = 'https://github.com/xFlawlessDev/alnair-harness';
 	const releases = `${github}/releases`;
 	const license = `${github}/blob/master/LICENSE`;
-	const url = $derived(locale === 'en' ? '/' : '/id/');
+	const inLanguage = $derived(locale === 'en' ? 'en' : 'id');
+
+	/** The product and its questions, as structured data the page already shows. */
+	const schema = $derived([
+		softwareApplication({
+			name: 'Alnair',
+			description: copy.meta.description,
+			url: absolute(HOME_PATH[locale]),
+			inLanguage,
+			image: absolute('/media/alnair-demo-poster.jpg')
+		}),
+		faqPage(copy.faq.items, inLanguage)
+	]);
 </script>
 
-<svelte:head>
-	<title>{copy.meta.title}</title>
-	<meta name="description" content={copy.meta.description} />
-	<link rel="canonical" href={url} />
-	<link rel="alternate" hreflang="en" href="/" />
-	<link rel="alternate" hreflang="id" href="/id/" />
-	<link rel="alternate" hreflang="x-default" href="/" />
-	<meta property="og:type" content="website" />
-	<meta property="og:title" content={copy.meta.title} />
-	<meta property="og:description" content={copy.meta.description} />
-	<meta property="og:url" content={url} />
-	<meta property="og:image" content="/media/alnair-demo-poster.jpg" />
-	<meta name="twitter:card" content="summary_large_image" />
-	<meta name="twitter:title" content={copy.meta.title} />
-	<meta name="twitter:description" content={copy.meta.description} />
-	<meta name="twitter:image" content="/media/alnair-demo-poster.jpg" />
-</svelte:head>
+<Seo
+	{locale}
+	path={HOME_PATH[locale]}
+	title={copy.meta.title}
+	description={copy.meta.description}
+	jsonLd={schema}
+/>
 
 <Nav {copy} {locale} {github} />
 

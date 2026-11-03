@@ -4,6 +4,8 @@
 	 * chrome is translated; the guide content itself stays in English.
 	 */
 	import Rich from '$lib/components/Rich.svelte';
+	import Seo from '$lib/seo/Seo.svelte';
+	import { breadcrumbs } from '$lib/seo/schema';
 	import { docsCopy } from '$lib/docs/copy';
 	import type { PageData } from './$types';
 
@@ -27,12 +29,18 @@
 	);
 </script>
 
-<svelte:head>
-	<title>{copy.title} — Alnair</title>
-	<meta name="description" content={copy.subtitle} />
-	<link rel="alternate" hreflang="en" href="/docs/" />
-	<link rel="alternate" hreflang="id" href="/id/docs/" />
-</svelte:head>
+<Seo
+	locale="id"
+	path="/id/docs/"
+	title={`${copy.title} — Alnair`}
+	description={copy.subtitle}
+	jsonLd={[
+		breadcrumbs([
+			{ name: 'Alnair', path: '/id/' },
+			{ name: 'Panduan pengguna', path: '/id/docs/' }
+		])
+	]}
+/>
 
 <header class="intro">
 	<h1>{copy.title}</h1>

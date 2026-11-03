@@ -6,6 +6,8 @@
 	 * is reading order rather than alphabetical order.
 	 */
 	import Rich from '$lib/components/Rich.svelte';
+	import Seo from '$lib/seo/Seo.svelte';
+	import { breadcrumbs } from '$lib/seo/schema';
 	import { docsCopy } from '$lib/docs/copy';
 	import type { PageData } from './$types';
 
@@ -30,12 +32,18 @@
 	);
 </script>
 
-<svelte:head>
-	<title>{copy.title} — Alnair</title>
-	<meta name="description" content={copy.subtitle} />
-	<link rel="alternate" hreflang="en" href="/docs/" />
-	<link rel="alternate" hreflang="id" href="/id/docs/" />
-</svelte:head>
+<Seo
+	locale="en"
+	path="/docs/"
+	title={`${copy.title} — Alnair`}
+	description={copy.subtitle}
+	jsonLd={[
+		breadcrumbs([
+			{ name: 'Alnair', path: '/' },
+			{ name: 'User guide', path: '/docs/' }
+		])
+	]}
+/>
 
 <header class="intro">
 	<h1>{copy.title}</h1>
