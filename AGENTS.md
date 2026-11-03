@@ -149,6 +149,28 @@ a design against the 0.1.15 teardown), MCP servers on protocol 2026-07-28
   makes no external requests — fonts are self-hosted, nothing loads from a CDN.
 - `third_party/` — vendored Mermaid rendering stack (untouched policy).
 - `bin/protoc` — dotslash launcher used by proto codegen.
+- `landing/` — the marketing site: SvelteKit + Tailwind v4, fully prerendered
+  into one static folder per language (`/` and `/id/`) and deployed to
+  Cloudflare (Workers static assets or Pages). Its own `README.md` covers the
+  deploy shape and `landing/docs/README.md` the docs pipeline. Separate npm
+  project with its own `check`/`lint`, never part of the Cargo workspace or the
+  `web/` gates — and deliberately not `web/` itself, because that build is
+  `rust-embed`ed into the binary and marketing copy must not ship inside the
+  agent. Shares the app's design tokens, fonts and logo rather than
+  re-inventing them.
+- `landing/src/lib/docs/` — the user guide, published. It reads
+  `crates/codegen/alnair-tui/docs/user-guide/` at build time and takes its
+  titles, order and slugs from that crate's own `docs.rs` registry, so the site
+  cannot publish a guide that differs from the one the binary ships. Content
+  stays English in both locales on purpose: a translated copy would be a second
+  manual, and only the page chrome (`docs/copy.ts`) is translated. Link
+  handling is the part to be careful with — sibling `.md` links are rewritten to
+  site paths, a link to a document the binary does not ship is flattened to its
+  text, and a `#fragment` is matched against the ids that actually exist
+  (exactly, then loosely) or dropped, because a published anchor that points
+  nowhere fails the prerender. `node landing/scripts/check-links.mjs` covers
+  what the prerenderer cannot: the Indonesian mirror and the hand-written
+  anchors.
 
 ## Terminal chrome appearance
 

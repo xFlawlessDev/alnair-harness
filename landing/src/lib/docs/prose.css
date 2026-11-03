@@ -1,0 +1,304 @@
+/* ---------------------------------------------------------------------------
+ * The guide's article styles.
+ *
+ * The user guide is written for a terminal: dense tables, fenced commands, and
+ * blockquotes used as callouts. Everything below exists so that prose survives
+ * the change of medium — full-width tables, runnable commands, and headings
+ * that sit at a readable rhythm instead of a document's default leading.
+ *
+ * These rules are scoped under `.prose` and the markup they target is produced
+ * by `render_doc`, so nothing here depends on app components.
+ * ------------------------------------------------------------------------- */
+
+.prose {
+	font-size: 0.9375rem;
+	line-height: 1.75;
+	color: var(--ink-secondary);
+}
+
+.prose > :first-child {
+	margin-top: 0;
+}
+
+/* ------------------------------------------------------------------ headings
+ * Docs are skimmed by heading, so they need air above and almost none below —
+ * the opposite of the browser default, which glues a heading to the text above
+ * it and floats it away from the text it introduces.
+ * -------------------------------------------------------------------------- */
+.prose h2,
+.prose h3,
+.prose h4 {
+	position: relative;
+	color: var(--ink);
+	text-wrap: balance;
+	scroll-margin-top: 5.5rem;
+}
+
+.prose h2 {
+	margin: 3rem 0 0.875rem;
+	padding-top: 1.5rem;
+	border-top: 1px solid var(--line);
+	font-size: 1.375rem;
+	font-weight: 600;
+	line-height: 1.25;
+	letter-spacing: -0.02em;
+}
+
+.prose h3 {
+	margin: 2rem 0 0.625rem;
+	font-size: 1.0625rem;
+	font-weight: 600;
+	letter-spacing: -0.01em;
+}
+
+.prose h4 {
+	margin: 1.5rem 0 0.5rem;
+	font-size: 0.9375rem;
+	font-weight: 600;
+}
+
+/* An anchor link appears on hover, the way a docs site usually offers one —
+   `#` stands in for a link glyph so it stays copy-pasteable. */
+.prose h2:hover::after,
+.prose h3:hover::after {
+	content: '#';
+	position: absolute;
+	left: -1.125rem;
+	color: var(--ink-tertiary);
+	font-weight: 400;
+	text-decoration: none;
+}
+
+@media (max-width: 640px) {
+	.prose h2:hover::after,
+	.prose h3:hover::after {
+		content: none;
+	}
+}
+
+/* --------------------------------------------------------------------- prose */
+.prose p {
+	margin: 0 0 1rem;
+}
+
+.prose a {
+	color: var(--ink);
+	text-decoration: underline;
+	text-decoration-color: var(--line-strong);
+	text-underline-offset: 2px;
+	transition: text-decoration-color 0.15s ease;
+}
+
+.prose a:hover {
+	text-decoration-color: var(--olive);
+}
+
+.prose strong {
+	color: var(--ink);
+	font-weight: 600;
+}
+
+.prose ul,
+.prose ol {
+	margin: 0 0 1rem;
+	padding-left: 1.375rem;
+}
+
+.prose li {
+	margin: 0.25rem 0;
+}
+
+.prose li::marker {
+	color: var(--ink-tertiary);
+}
+
+.prose hr {
+	margin: 2.5rem 0;
+	border: 0;
+	border-top: 1px solid var(--line);
+}
+
+.prose kbd {
+	padding: 0.0625rem 0.3125rem;
+	border: 1px solid var(--line-strong);
+	border-bottom-width: 2px;
+	border-radius: 0.25rem;
+	background: var(--paper-raised);
+	font-family: var(--font-mono);
+	font-size: 0.8125em;
+	color: var(--ink);
+	white-space: nowrap;
+}
+
+/* ---------------------------------------------------------------- blockquote
+ * Used throughout the guide as a callout (`> **Note:** …`). It gets a left rule
+ * rather than italics, because a paragraph of italic technical prose is much
+ * harder to read and the guide quotes paths and flags inside it.
+ * -------------------------------------------------------------------------- */
+.prose blockquote {
+	margin: 1.25rem 0;
+	padding: 0.8125rem 1rem;
+	border-left: 2px solid var(--olive);
+	border-radius: 0 0.5rem 0.5rem 0;
+	background: var(--paper-raised);
+	color: var(--ink-secondary);
+}
+
+.prose blockquote > :last-child {
+	margin-bottom: 0;
+}
+
+.prose blockquote p {
+	font-size: 0.875rem;
+	line-height: 1.7;
+}
+
+/* --------------------------------------------------------------------- tables
+ * A guide table is almost always wider than the column: flags, env vars, and
+ * key bindings. It scrolls inside its own box rather than pushing the whole
+ * article sideways, and the first column sticks so a long row still says which
+ * flag it belongs to.
+ * -------------------------------------------------------------------------- */
+.prose table {
+	display: block;
+	width: 100%;
+	margin: 1.25rem 0;
+	overflow-x: auto;
+	border: 1px solid var(--line);
+	border-radius: 0.625rem;
+	border-collapse: separate;
+	border-spacing: 0;
+	font-size: 0.8125rem;
+}
+
+.prose thead th {
+	position: sticky;
+	top: 0;
+	padding: 0.5rem 0.75rem;
+	border-bottom: 1px solid var(--line);
+	background: var(--paper-card);
+	text-align: left;
+	font-family: var(--font-mono);
+	font-size: 0.6875rem;
+	font-weight: 500;
+	letter-spacing: 0.02em;
+	color: var(--ink-tertiary);
+	white-space: nowrap;
+}
+
+.prose tbody td {
+	padding: 0.5rem 0.75rem;
+	border-bottom: 1px solid var(--line);
+	vertical-align: top;
+	line-height: 1.6;
+}
+
+.prose tbody tr:last-child td {
+	border-bottom: 0;
+}
+
+.prose tbody tr:hover td {
+	background: color-mix(in srgb, var(--paper-card) 60%, transparent);
+}
+
+/* Inline code inside a table cell must be allowed to wrap: a flag like
+ * `--hide-inline-diff` in a narrow column otherwise forces the table wider than
+ * the page for no reason. */
+.prose table code {
+	white-space: normal;
+	overflow-wrap: anywhere;
+}
+
+/* ---------------------------------------------------------------- inline code */
+.prose :not(pre) > code {
+	padding: 0.125em 0.375em;
+	border: 1px solid var(--line);
+	border-radius: 0.3125rem;
+	background: var(--paper-card);
+	font-family: var(--font-mono);
+	font-size: 0.84em;
+	color: var(--ink);
+	overflow-wrap: anywhere;
+}
+
+/* ----------------------------------------------------------------- code blocks
+ * Two kinds: highlighted code, and a transcript of the TUI. The transcript gets
+ * a softer frame and keeps its own spacing, because it is a picture of a screen
+ * rather than a snippet to copy.
+ * -------------------------------------------------------------------------- */
+.doc-code {
+	margin: 1.25rem 0;
+	border: 1px solid var(--line);
+	border-radius: 0.625rem;
+	background: var(--code-surface);
+	overflow: hidden;
+}
+
+.doc-code pre {
+	margin: 0;
+	padding: 0.875rem 1rem;
+	overflow-x: auto;
+	font-family: var(--font-mono);
+	font-size: 0.75rem;
+	line-height: 1.7;
+}
+
+/* At 0.75rem the guide's widest config examples fit the code column without a
+   horizontal scroll on a 1600px screen; at 0.8125rem they needed 185px more and
+   every `[mcp_servers]` table was clipped. Terminal and editor conventions both
+   put code at ~12px, so this is a normal reading size rather than a compromise. */
+@media (min-width: 1200px) {
+	.doc-code pre {
+		font-size: 0.78125rem;
+	}
+}
+
+.doc-code code {
+	font-family: inherit;
+}
+
+/* Shiki emits both themes inline; the page picks one with a data attribute so
+ * the toggle needs no re-highlight. */
+.doc-code .shiki,
+.doc-code pre.shiki {
+	background: transparent !important;
+}
+
+.doc-code .shiki span {
+	color: var(--shiki-light);
+}
+
+:root[data-theme='dark'] .doc-code .shiki span {
+	color: var(--shiki-dark);
+}
+
+.doc-frame {
+	margin: 1.25rem 0;
+	border: 1px solid var(--line);
+	border-radius: 0.625rem;
+	background: var(--paper-inset);
+	overflow: hidden;
+}
+
+.doc-transcript {
+	margin: 0;
+	padding: 0.875rem 1rem;
+	overflow-x: auto;
+	font-family: var(--font-mono);
+	font-size: 0.75rem;
+	line-height: 1.55;
+	color: var(--ink-secondary);
+	tab-size: 2;
+}
+
+/* ------------------------------------------------------------------------ images */
+.prose img {
+	max-width: 100%;
+	height: auto;
+	border-radius: 0.625rem;
+}
+
+/* ------------------------------------------------------------------- footnotes */
+.prose sup a {
+	text-decoration: none;
+}

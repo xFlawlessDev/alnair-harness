@@ -1,0 +1,17 @@
+{
+	"$schema": "node_modules/wrangler/config-schema.json",
+	"name": "alnair-landing",
+	"compatibility_date": "2026-10-01",
+
+	// The build is a folder of prerendered files. Workers static assets serve it
+	// as-is: no Worker script runs, so there is nothing to keep warm, nothing to
+	// cold-start, and no runtime to patch.
+	"assets": {
+		"directory": "./build",
+
+		// `wrangler pages deploy build` (page mode) serves `/id/index.html` for
+		// `/id`, but Workers assets need this explicitly: without it a request
+		// for `/id` 404s instead of resolving the directory index.
+		"html_handling": "auto-trailing-slash"
+	}
+}
