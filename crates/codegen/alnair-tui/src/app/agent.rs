@@ -398,6 +398,38 @@ pub struct GraphDisplayState {
     pub pause_message: Option<String>,
 }
 
+/// Codebase-index display state — the pager-side mirror of the shell's
+/// `CodebaseIndexUpdated` session notification.
+///
+/// Deliberately lean: the footer chip needs "is it usable, and how big is it".
+/// A chip that is drawn only sometimes is handled by `Option` on the view
+/// field, so this type exists only while a chip should be drawn at all.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CodebaseIndexDisplayState {
+    /// The wire `state` string: `building` | `ready` | `unavailable`.
+    ///
+    /// Kept as the wire spelling rather than an enum so a future state the
+    /// pager does not know renders as itself instead of being coerced into an
+    /// existing one.
+    pub state: String,
+    pub files: u32,
+    pub definitions: u32,
+    /// Machine-readable reason when `state == "unavailable"`.
+    pub reason: Option<String>,
+}
+
+impl CodebaseIndexDisplayState {
+    /// Whether the index can answer queries right now.
+    pub fn is_ready(&self) -> bool {
+        self.state == "ready"
+    }
+
+    /// Whether the index is still coming up.
+    pub fn is_building(&self) -> bool {
+        self.state == "building"
+    }
+}
+
 /// Display state for an active goal, populated from `GoalUpdated`
 /// session notifications emitted by the goal orchestrator.
 #[derive(Debug, Clone)]

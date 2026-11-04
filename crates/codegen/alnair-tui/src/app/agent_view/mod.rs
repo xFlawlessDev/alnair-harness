@@ -763,6 +763,13 @@ pub struct AgentView {
     /// Current graph orchestration state. Set by `GraphUpdated` session
     /// notifications, cleared on the `"cleared"` sentinel / new session.
     pub graph_state: Option<super::agent::GraphDisplayState>,
+    /// Current codebase-index state. Set by `CodebaseIndexUpdated`
+    /// notifications, cleared on the `"cleared"` tombstone.
+    ///
+    /// `None` means "draw no chip" — a session without codebase indexing must
+    /// not carry a permanent "off" marker in the footer, which would crowd out
+    /// `ctx` on a narrow terminal for the majority who never enable it.
+    pub codebase_index_state: Option<super::agent::CodebaseIndexDisplayState>,
     /// The consumed parked-wait marker slot for the current turn, if any.
     /// Keyed by prompt id: a new turn naturally invalidates the slot with no
     /// explicit clear site. See [`ParkedMarkerSlot`].

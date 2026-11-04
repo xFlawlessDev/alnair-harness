@@ -729,10 +729,14 @@ pub(crate) async fn spawn_session_actor(
     // Constructing the backend starts nothing; the index actor is spawned on
     // the first tool call, so a session that never asks a structural question
     // pays only for this struct.
+    let (codebase_status_tx, codebase_status_rx) = tokio::sync::mpsc::unbounded_channel::<
+        alnair_tools::types::codebase_backend::CodebaseStatus,
+    >();
     let codebase_backend = build_codebase_backend(
         tool_context.cwd.as_path(),
         &effective_config,
         &codebase_indexes,
+        codebase_status_tx,
     );
     // The index must follow the filesystem for as long as this session can ask
     // it questions. Without this, `codebase_search` starts an index that then
@@ -745,6 +749,10 @@ pub(crate) async fn spawn_session_actor(
     // watcher itself is shared per directory, so a session that never searches
     // pays only for a channel receiver.
     fs_watch_caps.codebase_tools = codebase_backend.is_some();
+    // Recorded before the backend moves into the rebuild spec: the reporter
+    // below needs the same answer, and re-checking after the move is not
+    // possible.
+    let codebase_tools_present = codebase_backend.is_some();
     let rebuild_spec = std::sync::Arc::new(crate::session::agent_rebuild::AgentRebuildSpec {
         working_directory: tool_context.cwd.as_path().to_path_buf(),
         terminal_backend: terminal_backend.clone(),
@@ -1261,6 +1269,19 @@ pub(crate) async fn spawn_session_actor(
         subagent_token_records: parking_lot::Mutex::new(HashMap::new()),
         workspace_ops: workspace_ops.clone(),
     });
+    // Tell the pager what the index is doing. When the session offers no
+    // backend at all, say so explicitly with a tombstone rather than leaving
+    // the chip to infer "never" from silence.
+    if codebase_tools_present {
+        session.spawn_codebase_status_reporter(codebase_status_rx);
+    } else {
+        let cleared_session = session.clone();
+        tokio::task::spawn_local(async move {
+            cleared_session
+                .send_xai_notification(crate::session::build_codebase_index_cleared())
+                .await;
+        });
+    }
     {
         let drainer_session = session.clone();
         let mut sampler_event_rx = sampler_event_rx;
@@ -1990,11 +2011,18 @@ fn resolve_codebase_tool_root(
 }
 
 /// Build the codebase backend for a session, or `None` when it is not offered.
+///
+/// The status sink lets the backend tell the pager when the index starts and
+/// when it becomes usable, so the footer chip is edge-triggered rather than
+/// polled.
 fn build_codebase_backend(
     cwd: &std::path::Path,
     config: &crate::agent::config::Config,
     indexes: &std::sync::Arc<
         parking_lot::Mutex<alnair_workspace::file_system::CodebaseIndexManager>,
+    >,
+    status_sink: tokio::sync::mpsc::UnboundedSender<
+        alnair_tools::types::codebase_backend::CodebaseStatus,
     >,
 ) -> Option<std::sync::Arc<dyn alnair_tools::types::codebase_backend::CodebaseBackend>> {
     let root = resolve_codebase_tool_root(cwd, &config.features.codebase_indexing)?;
@@ -2003,7 +2031,8 @@ fn build_codebase_backend(
         "codebase tools: backend attached (index starts on first use)"
     );
     Some(std::sync::Arc::new(
-        alnair_workspace::file_system::CodebaseBackendImpl::new(indexes.clone(), root),
+        alnair_workspace::file_system::CodebaseBackendImpl::new(indexes.clone(), root)
+            .with_status_sink(status_sink),
     ))
 }
 

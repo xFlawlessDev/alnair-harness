@@ -166,6 +166,9 @@ use extensions::*;
 #[path = "acp_session_impl/memory_dream.rs"]
 mod memory_dream;
 use memory_dream::*;
+#[path = "acp_session_impl/codebase_status.rs"]
+mod codebase_status;
+pub(crate) use codebase_status::*;
 #[path = "acp_session_impl/goal_support.rs"]
 mod goal_support;
 pub(crate) use goal_support::*;

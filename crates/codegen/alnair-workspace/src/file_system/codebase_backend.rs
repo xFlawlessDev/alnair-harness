@@ -56,6 +56,12 @@ pub struct CodebaseBackendImpl {
     /// Language ids the graph can parse, captured once. Reported to the caller
     /// so an empty answer can be attributed to coverage rather than absence.
     languages: Vec<String>,
+    /// Where state transitions are reported, if anyone is listening.
+    ///
+    /// A plain channel rather than a direct call so this crate keeps no
+    /// dependency on the shell's notification vocabulary: the shell drains it
+    /// on its own task and decides how to put it on the wire.
+    status_sink: Option<tokio::sync::mpsc::UnboundedSender<CodebaseStatus>>,
 }
 
 impl CodebaseBackendImpl {
@@ -77,6 +83,30 @@ impl CodebaseBackendImpl {
             root,
             handle: OnceLock::new(),
             languages,
+            status_sink: None,
+        }
+    }
+
+    /// Report state transitions to `sink`.
+    ///
+    /// Optional by design: the tools work identically without it, and a test or
+    /// a headless caller has no pager to inform. The sink is drained by the
+    /// shell on its own task.
+    pub fn with_status_sink(
+        mut self,
+        sink: tokio::sync::mpsc::UnboundedSender<CodebaseStatus>,
+    ) -> Self {
+        self.status_sink = Some(sink);
+        self
+    }
+
+    /// Push a state transition, ignoring "nobody is listening".
+    ///
+    /// A closed sink means the pager went away; the index keeps working, so
+    /// this must never be a hard error.
+    fn report(&self, status: CodebaseStatus) {
+        if let Some(sink) = &self.status_sink {
+            let _ = sink.send(status);
         }
     }
 
@@ -91,6 +121,8 @@ impl CodebaseBackendImpl {
                         event = "codebase_tool_index_started",
                         "codebase tools: started the index on first use"
                     );
+                    // `building` is reported from the caller, which runs on the
+                    // runtime and can wait for readiness — see `ensure`.
                 }
                 handle
             })
@@ -130,11 +162,23 @@ impl CodebaseBackend for CodebaseBackendImpl {
     }
 
     async fn ensure(&self) -> Result<CodebaseStatus, CodebaseError> {
+        let starting = self.handle.get().is_none();
         let handle = self.handle();
         let languages = self.languages.clone();
+
+        // Only announce `building` when this call is what starts the actor; a
+        // session that re-ensures an already-warm index would otherwise flash
+        // the chip on every query.
+        if starting {
+            self.report(CodebaseStatus {
+                languages: languages.clone(),
+                ..Default::default()
+            });
+        }
+
         // `get_stats` blocks until the actor finishes its initial build or cache
         // load, which is seconds on a cold repository. Off the runtime.
-        tokio::task::spawn_blocking(move || match handle.get_stats() {
+        let status = tokio::task::spawn_blocking(move || match handle.get_stats() {
             Some(stats) => CodebaseStatus {
                 indexed: true,
                 files: stats.files,
@@ -148,7 +192,12 @@ impl CodebaseBackend for CodebaseBackendImpl {
             },
         })
         .await
-        .map_err(|error| CodebaseError::IndexUnavailable(error.to_string()))
+        .map_err(|error| CodebaseError::IndexUnavailable(error.to_string()))?;
+
+        // Report the settled state — `ready` with real counts, or the
+        // unavailable shape when the actor answered with nothing.
+        self.report(status.clone());
+        Ok(status)
     }
 
     async fn search(

@@ -1381,6 +1381,18 @@ impl AgentView {
         }) {
             status.push("mcp", mcp_line);
         }
+        // Pushed before `context` so it sits to the left of the ctx meter — the
+        // meter is the value users watch most, and `AgentStatusBar` right-aligns
+        // the whole group, so anything appended after it would push it inward.
+        if let Some(code_line) = self.codebase_index_state.as_ref().and_then(|state| {
+            crate::views::agent_status::codebase_status_line(
+                state,
+                self.scrollback.animation_tick(),
+                &theme,
+            )
+        }) {
+            status.push("codebase", code_line);
+        }
         let ctx_used = self.context_state.as_ref().map(|c| c.used);
         let model_window = self.session.models.get_context_window();
         let ctx_total = self

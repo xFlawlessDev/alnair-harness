@@ -894,6 +894,34 @@ pub enum SessionUpdate {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         pause_message: Option<String>,
     },
+    /// Structural code-search index state for the pager's status chip.
+    ///
+    /// Wire tag `codebase_index_updated`. Emitted only when the state actually
+    /// changes — `building` when the actor starts, `ready` once it can answer,
+    /// `unavailable` when config or the git-root check rules it out — so the
+    /// chip is a report, not a spinner that never stops.
+    ///
+    /// Old pagers degrade to [`Self::Unknown`] silently.
+    CodebaseIndexUpdated {
+        /// `building` | `ready` | `unavailable` | `cleared`.
+        ///
+        /// `cleared` tells the pager to drop the chip (a new session, or the
+        /// index went away). Same sentinel convention as `GraphUpdated`.
+        state: String,
+        /// Files in the index. Zero while `building` or `unavailable`.
+        #[serde(default)]
+        files: u32,
+        /// Symbol definitions in the index.
+        #[serde(default)]
+        definitions: u32,
+        /// Language ids the index can parse, for "why did my search miss?".
+        #[serde(default)]
+        languages: Vec<String>,
+        /// Why the index is unavailable, when it is. Machine-readable
+        /// (`disabled_by_config`, `not_git_repo`); the pager owns the copy.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        reason: Option<String>,
+    },
     /// Catch-all for unrecognized session update types.
     /// Allows forward/backward compatibility when variants are added or removed.
     /// All fields from the unrecognized variant are discarded during deserialization.
@@ -2267,6 +2295,69 @@ mod tests {
         assert!(serde_json::from_str::<SessionUpdate>(missing_prompt_id).is_err());
         let missing_stop_reason = r#"{"sessionUpdate": "turn_completed", "prompt_id": "p-1"}"#;
         assert!(serde_json::from_str::<SessionUpdate>(missing_stop_reason).is_err());
+    }
+}
+
+#[cfg(test)]
+mod codebase_index_updated_wire_tests {
+    use super::*;
+
+    #[test]
+    fn codebase_index_updated_round_trips_with_snake_case_tag() {
+        let update = SessionUpdate::CodebaseIndexUpdated {
+            state: "ready".into(),
+            files: 2237,
+            definitions: 95_768,
+            languages: vec!["rust".into(), "typescript".into()],
+            reason: None,
+        };
+        let json = serde_json::to_value(&update).unwrap();
+        assert_eq!(json["sessionUpdate"], "codebase_index_updated");
+        assert_eq!(json["state"], "ready");
+        assert_eq!(json["files"], 2237);
+        // An absent reason must not serialize at all.
+        assert!(json.get("reason").is_none());
+        let back: SessionUpdate = serde_json::from_value(json).unwrap();
+        assert_eq!(back, update);
+    }
+
+    #[test]
+    fn codebase_index_updated_minimal_payload_fills_defaults() {
+        // Only the required field on the wire: a `cleared` tombstone carries no
+        // counts, and every counter must default rather than fail to parse.
+        let json = serde_json::json!({
+            "sessionUpdate": "codebase_index_updated",
+            "state": "cleared",
+        });
+        match serde_json::from_value::<SessionUpdate>(json).unwrap() {
+            SessionUpdate::CodebaseIndexUpdated {
+                state,
+                files,
+                definitions,
+                languages,
+                reason,
+            } => {
+                assert_eq!(state, "cleared");
+                assert_eq!(files, 0);
+                assert_eq!(definitions, 0);
+                assert!(languages.is_empty());
+                assert!(reason.is_none());
+            }
+            other => panic!("expected CodebaseIndexUpdated, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn an_unavailable_reason_survives_the_wire() {
+        let update = SessionUpdate::CodebaseIndexUpdated {
+            state: "unavailable".into(),
+            files: 0,
+            definitions: 0,
+            languages: vec![],
+            reason: Some("disabled_by_config".into()),
+        };
+        let json = serde_json::to_value(&update).unwrap();
+        assert_eq!(json["reason"], "disabled_by_config");
     }
 }
 

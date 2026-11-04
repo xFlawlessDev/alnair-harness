@@ -370,9 +370,112 @@ pub fn mcp_status_line(
     ]))
 }
 
+/// Build the compact codebase-index chip for the agent status bar.
+///
+/// Formats, by state:
+///
+/// | state | chip |
+/// |---|---|
+/// | `building` | `⠋ code` — spinner, no counts yet |
+/// | `ready` | `code: 2.2k` — file count, compacted |
+/// | `unavailable` | `code: off` |
+/// | anything else | `None` — draw nothing |
+///
+/// The count is the *indexed file* count rather than a symbol count because it
+/// is the number the user can compare against what they know about their repo;
+/// symbol totals are an implementation detail and are five digits in any real
+/// project.
+///
+/// Returns `None` for an unknown state instead of a placeholder chip: a state
+/// a future shell invents should disappear, not render as a misleading "off".
+pub fn codebase_status_line(
+    state: &crate::app::agent::CodebaseIndexDisplayState,
+    tick: u64,
+    theme: &Theme,
+) -> Option<Line<'static>> {
+    let dim_style = Style::default().fg(theme.gray_dim).bg(theme.bg_base);
+
+    if state.is_building() {
+        // Same braille cadence as `mcp_status_line` so two adjacent spinners in
+        // the same footer row never beat against each other.
+        let frames = crate::glyphs::braille_spinner_frames();
+        let frame_idx = (tick / SPINNER_DIVISOR) as usize % frames.len();
+        return Some(Line::from(vec![
+            Span::styled(format!("{} ", frames[frame_idx]), dim_style),
+            Span::styled("code", dim_style),
+        ]));
+    }
+
+    if state.is_ready() {
+        return Some(Line::from(Span::styled(
+            format!("code: {}", format_tokens_compact(state.files as i64)),
+            dim_style,
+        )));
+    }
+
+    if state.state == "unavailable" {
+        return Some(Line::from(Span::styled("code: off", dim_style)));
+    }
+
+    None
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn state(kind: &str, files: u32) -> crate::app::agent::CodebaseIndexDisplayState {
+        crate::app::agent::CodebaseIndexDisplayState {
+            state: kind.to_string(),
+            files,
+            definitions: 0,
+            reason: None,
+        }
+    }
+
+    fn chip_text(state: &crate::app::agent::CodebaseIndexDisplayState) -> String {
+        let theme = Theme::current();
+        codebase_status_line(state, 0, &theme)
+            .map(|line| {
+                line.spans
+                    .iter()
+                    .map(|s| s.content.as_ref())
+                    .collect::<String>()
+            })
+            .unwrap_or_default()
+    }
+
+    #[test]
+    fn a_ready_index_shows_a_compacted_file_count() {
+        assert_eq!(chip_text(&state("ready", 2_237)), "code: 2.2k");
+        assert_eq!(chip_text(&state("ready", 42)), "code: 42");
+    }
+
+    #[test]
+    fn a_building_index_shows_a_spinner_and_no_count() {
+        let text = chip_text(&state("building", 0));
+        assert!(text.ends_with(" code"), "spinner then label, got {text:?}");
+        assert!(
+            !text.contains(':'),
+            "no count before the index can answer, got {text:?}"
+        );
+    }
+
+    #[test]
+    fn an_unavailable_index_says_off() {
+        assert_eq!(chip_text(&state("unavailable", 0)), "code: off");
+    }
+
+    /// A state a future shell invents must vanish rather than render as a
+    /// misleading "off".
+    #[test]
+    fn an_unknown_state_renders_nothing() {
+        let theme = Theme::current();
+        assert!(
+            codebase_status_line(&state("teleporting", 0), 0, &theme).is_none(),
+            "unknown states must not claim the chip"
+        );
+    }
 
     #[test]
     fn tokens_compact_sub_thousand() {

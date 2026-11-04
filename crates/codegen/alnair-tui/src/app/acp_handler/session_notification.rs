@@ -1023,6 +1023,27 @@ pub(super) fn handle_session_notification(notif: &acp::ExtNotification, app: &mu
             }
             true
         }
+        XaiSessionUpdate::CodebaseIndexUpdated {
+            state,
+            files,
+            definitions,
+            reason,
+            ..
+        } => {
+            // `cleared` means this session has no index (or lost it): drop the
+            // state so the chip disappears entirely rather than claiming "off".
+            if state == "cleared" {
+                agent.codebase_index_state = None;
+            } else {
+                agent.codebase_index_state = Some(crate::app::agent::CodebaseIndexDisplayState {
+                    state,
+                    files,
+                    definitions,
+                    reason,
+                });
+            }
+            true
+        }
         _ => {
             tracing::trace!(
                 "Ignoring {}: {:?}",
