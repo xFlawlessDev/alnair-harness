@@ -21,6 +21,15 @@ const MIN_REVERSE_STEM_LEN: usize = 4;
 #[derive(Debug, Clone)]
 pub struct PathNotFoundHint {
     /// A corrected path from "dropped repo folder" detection.
+    ///
+    /// **Display space, always forward-slashed.** This is the spelling the model
+    /// is meant to retype, not a handle to the filesystem: it comes from
+    /// joining the *display* cwd with the corrected relative part, and no caller
+    /// may use it to open a file. Building it with `Path::join` would make the
+    /// separator depend on the host, so a Windows remap of
+    /// `/home/user/project` plus `src` produced `/home/user/project\src` —
+    /// a path that is neither valid on the host nor readable as the POSIX shape
+    /// the model reasons about.
     pub suggestion: Option<PathBuf>,
     /// Up to [`MAX_SIMILAR`] entries from the parent directory whose names
     /// are case-insensitive substring matches of the missing leaf.
@@ -79,18 +88,16 @@ pub async fn path_not_found_hint(path: &Path, cwd: &Path, display_cwd: &Path) ->
 
     // Remap resolved worktree path to display space so the model never
     // sees internal paths (e.g. /worktree/abc-123/...).
-    let suggestion = suggestion.map(|corrected| {
-        corrected
-            .strip_prefix(cwd)
-            .map(|rel| display_cwd.join(rel))
-            .unwrap_or_else(|_| {
-                tracing::warn!(
-                    corrected = %corrected.display(),
-                    cwd = %cwd.display(),
-                    "corrected path not under cwd; falling back to corrected path"
-                );
-                corrected
-            })
+    let suggestion = suggestion.map(|corrected| match corrected.strip_prefix(cwd) {
+        Ok(rel) => join_display_path(display_cwd, rel),
+        Err(_) => {
+            tracing::warn!(
+                corrected = %corrected.display(),
+                cwd = %cwd.display(),
+                "corrected path not under cwd; falling back to corrected path"
+            );
+            corrected
+        }
     });
 
     PathNotFoundHint {
@@ -98,6 +105,36 @@ pub async fn path_not_found_hint(path: &Path, cwd: &Path, display_cwd: &Path) ->
         similar,
         cwd_note,
     }
+}
+
+/// Join a relative path onto a display-space base with `/` separators.
+///
+/// `Path::join` would use the host separator, so a Windows run remapping
+/// `/home/user/project` plus `src` yields `/home/user/project\src`: mixed,
+/// invalid on the host, and unreadable as the POSIX shape the model works in.
+/// The result here is display text — the model is meant to retype it — so the
+/// separator is a presentation choice, and `/` is the one every model reads.
+///
+/// Components are joined one at a time because the base may itself be a
+/// multi-component relative path; string concatenation would get the separator
+/// between base and tail right but not inside the tail.
+fn join_display_path(base: &Path, tail: &Path) -> PathBuf {
+    let mut out = base.to_string_lossy().replace('\\', "/");
+
+    for component in tail.components() {
+        // Only normal components belong in a display path; `.` is noise and a
+        // `..` here would mean the correction escaped the cwd, which
+        // `try_suggest_under_cwd` has already ruled out.
+        let std::path::Component::Normal(part) = component else {
+            continue;
+        };
+        if !out.ends_with('/') {
+            out.push('/');
+        }
+        out.push_str(&part.to_string_lossy());
+    }
+
+    PathBuf::from(out)
 }
 
 /// Format a path-not-found error message.
@@ -377,5 +414,67 @@ mod tests {
         assert!(!output.contains("Did you mean"));
         assert!(!output.contains("Similar entries"));
         assert!(output.contains("Note: your current working directory is /project"));
+    }
+
+    // Display-space path joining
+
+    /// The remapped suggestion must never mix separators, whatever the host.
+    /// This is the invariant the integration test pins from one direction; here
+    /// it is asserted directly so a regression names the cause.
+    #[test]
+    fn display_join_never_mixes_separators() {
+        let tail = Path::new("src").join("main.rs");
+        let joined = join_display_path(Path::new("/home/user/project"), &tail);
+        let rendered = joined.to_string_lossy();
+        assert_eq!(rendered, "/home/user/project/src/main.rs");
+        assert!(
+            !rendered.contains('\\'),
+            "a display path must not carry a host separator: {rendered}"
+        );
+    }
+
+    /// A base that already ends in a separator must not gain a second one.
+    #[test]
+    fn display_join_does_not_double_the_separator() {
+        let joined = join_display_path(Path::new("/home/user/project/"), Path::new("src"));
+        assert_eq!(joined.to_string_lossy(), "/home/user/project/src");
+    }
+
+    /// A multi-component tail must be joined component by component; string
+    /// concatenation would leave the tail's own separators host-native.
+    #[test]
+    fn display_join_handles_a_multi_component_tail() {
+        let tail = Path::new("crates").join("a").join("lib.rs");
+        let joined = join_display_path(Path::new("/repo"), &tail);
+        assert_eq!(joined.to_string_lossy(), "/repo/crates/a/lib.rs");
+    }
+
+    /// A Windows-style base is normalized too, so a remap onto a host-native
+    /// display cwd still renders as POSIX.
+    #[test]
+    fn display_join_normalizes_a_backslashed_base() {
+        let joined = join_display_path(Path::new(r"C:\Users\dev\project"), Path::new("src"));
+        assert_eq!(joined.to_string_lossy(), "C:/Users/dev/project/src");
+    }
+
+    /// The whole remap, end to end: the resolved path must not leak and the
+    /// result must be display-space with `/`.
+    #[tokio::test]
+    async fn dropped_folder_remap_yields_a_posix_display_path() {
+        let tmp = TempDir::new().unwrap();
+        let resolved_cwd = tmp.path().join("worktree").join("project");
+        std::fs::create_dir_all(resolved_cwd.join("src")).unwrap();
+        let display_cwd = PathBuf::from("/home/user/project");
+
+        let resolved_missing = tmp.path().join("worktree").join("src");
+        let hint = path_not_found_hint(&resolved_missing, &resolved_cwd, &display_cwd).await;
+
+        let suggestion = hint
+            .suggestion
+            .expect("the dropped-folder pattern must fire")
+            .to_string_lossy()
+            .into_owned();
+        assert_eq!(suggestion, "/home/user/project/src");
+        assert!(!suggestion.contains("worktree"), "resolved path leaked");
     }
 }
