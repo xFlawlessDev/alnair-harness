@@ -231,11 +231,26 @@ pub(crate) struct FsWatchCapabilities {
     pub hunk_tracking: bool,
     pub code_nav: bool,
     pub git_head: bool,
+    /// The session has the codebase *tools*, so its index must stay fresh.
+    ///
+    /// Deliberately separate from [`Self::code_nav`], which is a client
+    /// capability: code navigation is a browser feature, so a TUI session
+    /// never sets it — and without this flag a TUI session's index would be
+    /// started by `codebase_search` and then never updated, silently serving
+    /// stale symbols for the rest of the session.
+    ///
+    /// Not part of [`CapabilityInputs`] because no client advertises it: it is
+    /// derived from the session's own toolset in `spawn_session_actor`.
+    pub codebase_tools: bool,
 }
 
 impl FsWatchCapabilities {
     pub(crate) fn needs_watcher(self) -> bool {
-        self.client_notify || self.hunk_tracking || self.code_nav || self.git_head
+        self.client_notify
+            || self.hunk_tracking
+            || self.code_nav
+            || self.git_head
+            || self.codebase_tools
     }
 
     pub(crate) fn none() -> Self {
@@ -243,12 +258,19 @@ impl FsWatchCapabilities {
     }
 
     /// Resolve the client's advertised signals into capabilities.
+    ///
+    /// `codebase_tools` is the one field this cannot resolve: no client
+    /// advertises it. It starts `false` and the session sets it once its
+    /// toolset is known — see [`Self::codebase_tools`]. A caller that forgets
+    /// leaves the index unfed, which is exactly the bug this field exists to
+    /// prevent, so the field is documented at both ends.
     pub(crate) fn resolve(inputs: CapabilityInputs) -> Self {
         Self {
             client_notify: inputs.client_notify,
             hunk_tracking: inputs.hunk_tracking,
             code_nav: inputs.code_nav,
             git_head: inputs.git_head_changed.unwrap_or(false),
+            codebase_tools: false,
         }
     }
 }
@@ -547,6 +569,24 @@ impl FsWatchPlan {
         let mode = cfg.mode;
         let fs_config = cfg.fs;
 
+        // The OS watcher is rooted at one directory, and the index consumer
+        // needs events for the whole *index*, which starts at the git root.
+        // Watching the session cwd would miss every edit outside it, so a
+        // session opened in `repo/crates/x/` would keep a stale index for the
+        // rest of the repository. Widen only when something actually needs the
+        // index: `client_notify` reports paths relative to the session cwd, so
+        // it must keep watching that.
+        let watch_root = if (caps.code_nav || caps.codebase_tools) && deps.index_root != deps.cwd {
+            tracing::debug!(
+                cwd = %deps.cwd.display(),
+                watch_root = %deps.index_root.display(),
+                "fs-notify: watching the index root, not the session cwd"
+            );
+            deps.index_root.clone()
+        } else {
+            deps.cwd.clone()
+        };
+
         let client_notify = caps.client_notify.then(|| ClientNotify {
             gateway: deps.gateway.clone(),
             session_id: deps.session_id.clone(),
@@ -563,8 +603,14 @@ impl FsWatchPlan {
             }
         });
 
-        // Index handle looked up per-event so a later-created index still receives events.
-        let index = caps.code_nav.then(|| CodebaseIndex {
+        // Built when either signal is on. `code_nav` is the editor's
+        // navigation, `codebase_tools` is this session's own index — a TUI
+        // session has the latter and not the former.
+        //
+        // The handle is looked up per-event, so this consumer is a no-op until
+        // the index actor actually exists: `get_or_create` is what starts it,
+        // and that only happens on the first `codebase_search`.
+        let index = (caps.code_nav || caps.codebase_tools).then(|| CodebaseIndex {
             indexes: deps.codebase_indexes,
             root: deps.index_root,
         });
@@ -587,7 +633,10 @@ impl FsWatchPlan {
             index,
             git_head,
             fs_config,
-            cwd: deps.cwd,
+            // The *watched* root, not the session cwd: consumers that translate
+            // absolute event paths into cwd-relative ones do their own
+            // `strip_prefix` against their own root.
+            cwd: watch_root,
         }
     }
 
@@ -1118,6 +1167,34 @@ mod tests {
         assert!(caps.client_notify && !caps.hunk_tracking && caps.code_nav && !caps.git_head);
     }
 
+    /// No client advertises `codebase_tools`, so `resolve` must never invent it.
+    /// The session sets it afterwards; a `true` here would make every session
+    /// pay for a watcher regardless of its toolset.
+    #[test]
+    fn resolve_never_claims_codebase_tools() {
+        for on in [false, true] {
+            assert!(
+                !FsWatchCapabilities::resolve(inputs(on, None)).codebase_tools,
+                "resolve must not derive a session property from client input"
+            );
+        }
+    }
+
+    /// The flag must be able to summon a watcher on its own: this is the TUI
+    /// case, where nothing else in the struct is set.
+    #[test]
+    fn codebase_tools_alone_requires_a_watcher() {
+        let caps = FsWatchCapabilities {
+            codebase_tools: true,
+            ..Default::default()
+        };
+        assert!(
+            caps.needs_watcher(),
+            "a session with codebase tools but no client watcher must still watch"
+        );
+        assert!(!FsWatchCapabilities::none().needs_watcher());
+    }
+
     #[test]
     fn git_head_dedup_key_identity() {
         let base = git_head_dedup_key(Some("main"), false, Some("/repo"));
@@ -1164,6 +1241,121 @@ mod tests {
             deps,
         );
         assert!(plan.hunk.is_none());
+    }
+
+    /// The TUI case: a session with codebase tools and *no* client watcher must
+    /// still get an index consumer, or its index goes stale after the first
+    /// search.
+    #[test]
+    fn codebase_tools_alone_build_the_index_consumer() {
+        let (tx, _rx) = mpsc::unbounded_channel();
+        let deps = FsWatchDeps {
+            gateway: crate::test_support::lsp_runtime::test_gateway(),
+            session_id: "s".into(),
+            cwd: PathBuf::from("/repo"),
+            index_root: PathBuf::from("/repo"),
+            hunk_tracker: HunkTrackerHandle::noop(),
+            hunk_tracking_enabled: false,
+            codebase_indexes: Arc::new(parking_lot::Mutex::new(CodebaseIndexManager::new())),
+            client_fs_config: None,
+            persistence_tx: tx,
+            last_reported_branch: Arc::new(parking_lot::Mutex::new(None)),
+        };
+        let plan = FsWatchPlan::build(
+            FsWatchCapabilities {
+                codebase_tools: true,
+                ..Default::default()
+            },
+            deps,
+        );
+        assert!(
+            plan.index.is_some(),
+            "codebase tools must build the index consumer without code_nav"
+        );
+    }
+
+    /// The converse: no index consumer when the session has neither the tools
+    /// nor the editor's navigation. Otherwise every session pays for a channel
+    /// receiver it never uses.
+    #[test]
+    fn no_index_consumer_without_either_signal() {
+        let (tx, _rx) = mpsc::unbounded_channel();
+        let deps = FsWatchDeps {
+            gateway: crate::test_support::lsp_runtime::test_gateway(),
+            session_id: "s".into(),
+            cwd: PathBuf::from("/repo"),
+            index_root: PathBuf::from("/repo"),
+            hunk_tracker: HunkTrackerHandle::noop(),
+            hunk_tracking_enabled: false,
+            codebase_indexes: Arc::new(parking_lot::Mutex::new(CodebaseIndexManager::new())),
+            client_fs_config: None,
+            persistence_tx: tx,
+            last_reported_branch: Arc::new(parking_lot::Mutex::new(None)),
+        };
+        let plan = FsWatchPlan::build(
+            FsWatchCapabilities {
+                git_head: true,
+                ..Default::default()
+            },
+            deps,
+        );
+        assert!(plan.index.is_none());
+    }
+
+    /// The watcher must be rooted where the *index* is rooted, or a session
+    /// opened in a subdirectory keeps a stale index for the rest of the
+    /// repository.
+    #[test]
+    fn the_watch_root_widens_to_the_index_root() {
+        let (tx, _rx) = mpsc::unbounded_channel();
+        let deps = FsWatchDeps {
+            gateway: crate::test_support::lsp_runtime::test_gateway(),
+            session_id: "s".into(),
+            cwd: PathBuf::from("/repo/crates/x"),
+            index_root: PathBuf::from("/repo"),
+            hunk_tracker: HunkTrackerHandle::noop(),
+            hunk_tracking_enabled: false,
+            codebase_indexes: Arc::new(parking_lot::Mutex::new(CodebaseIndexManager::new())),
+            client_fs_config: None,
+            persistence_tx: tx,
+            last_reported_branch: Arc::new(parking_lot::Mutex::new(None)),
+        };
+        let plan = FsWatchPlan::build(
+            FsWatchCapabilities {
+                codebase_tools: true,
+                ..Default::default()
+            },
+            deps,
+        );
+        assert_eq!(plan.cwd, PathBuf::from("/repo"));
+    }
+
+    /// Without codebase tools the watch root must stay the session cwd:
+    /// `client_notify` reports paths relative to it, so widening would change
+    /// what the editor receives.
+    #[test]
+    fn the_watch_root_stays_put_without_codebase_tools() {
+        let (tx, _rx) = mpsc::unbounded_channel();
+        let deps = FsWatchDeps {
+            gateway: crate::test_support::lsp_runtime::test_gateway(),
+            session_id: "s".into(),
+            cwd: PathBuf::from("/repo/crates/x"),
+            index_root: PathBuf::from("/repo"),
+            hunk_tracker: HunkTrackerHandle::noop(),
+            hunk_tracking_enabled: false,
+            codebase_indexes: Arc::new(parking_lot::Mutex::new(CodebaseIndexManager::new())),
+            client_fs_config: None,
+            persistence_tx: tx,
+            last_reported_branch: Arc::new(parking_lot::Mutex::new(None)),
+        };
+        let plan = FsWatchPlan::build(
+            FsWatchCapabilities {
+                git_head: true,
+                ..Default::default()
+            },
+            deps,
+        );
+        assert_eq!(plan.cwd, PathBuf::from("/repo/crates/x"));
     }
 
     fn batch() -> FsBatch {

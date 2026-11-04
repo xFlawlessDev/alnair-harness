@@ -118,7 +118,7 @@ pub(crate) async fn spawn_session_actor(
     origin_client: Option<crate::http::OriginClientInfo>,
     codebase_indexes: std::sync::Arc<parking_lot::Mutex<CodebaseIndexManager>>,
     code_nav_enabled: bool,
-    fs_watch_caps: fs_watch::FsWatchCapabilities,
+    mut fs_watch_caps: fs_watch::FsWatchCapabilities,
     feedback_base_url: Option<String>,
     client_terminal_capable: bool,
     client_fs_capable: bool,
@@ -734,6 +734,17 @@ pub(crate) async fn spawn_session_actor(
         &effective_config,
         &codebase_indexes,
     );
+    // The index must follow the filesystem for as long as this session can ask
+    // it questions. Without this, `codebase_search` starts an index that then
+    // never hears about edits — it answers confidently from a snapshot taken at
+    // the first call and goes progressively wrong for the rest of the session.
+    //
+    // Derived here rather than in `FsWatchCapabilities::resolve` because no
+    // client advertises it: it is a property of this session's toolset. The
+    // consumer it enables is a no-op until the index actor exists, and the OS
+    // watcher itself is shared per directory, so a session that never searches
+    // pays only for a channel receiver.
+    fs_watch_caps.codebase_tools = codebase_backend.is_some();
     let rebuild_spec = std::sync::Arc::new(crate::session::agent_rebuild::AgentRebuildSpec {
         working_directory: tool_context.cwd.as_path().to_path_buf(),
         terminal_backend: terminal_backend.clone(),
