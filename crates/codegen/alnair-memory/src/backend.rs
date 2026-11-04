@@ -352,7 +352,14 @@ impl alnair_tools::types::memory_backend::MemoryWriteBackend for MemoryBackendIm
         // property of the write path, not of `normalize_memory_content`, which
         // `/flush` also uses for multi-line summaries that always have a body.
         let payload = with_body_if_heading_only(content);
-        let content = payload;
+        // Stamp the note with the session that produced it.
+        //
+        // A note is read back as trusted context in future sessions, so a reader
+        // must be able to tell where it came from — an attacker who talks the
+        // agent into storing something leaves an auditable trace rather than an
+        // anonymous "fact". The marker is invisible in rendered markdown but
+        // greppable, which is what matters for a postmortem.
+        let content = stamp_provenance(&payload, &self.session_id);
         // Measured before the move: the closure owns the string.
         let bytes_written = content.trim().len();
 
@@ -445,6 +452,166 @@ fn with_body_if_heading_only(content: &str) -> String {
         // Too long to be a heading: a short heading keeps the note intact as the
         // body instead of duplicating it.
         format!("Note\n\n{trimmed}")
+    }
+}
+
+/// Append a provenance marker naming the session that produced a note.
+///
+/// Placed as an HTML comment so it never renders in the markdown a human reads,
+/// while staying greppable. `normalize_memory_content` preserves comments
+/// (they are stripped only by the scaffolding *filter*, which this function's
+/// output already survives because it carries a body).
+fn stamp_provenance(content: &str, session_id: &str) -> String {
+    let sid = if session_id.is_empty() {
+        "unknown"
+    } else {
+        session_id
+    };
+    // A session id is opaque; escape the comment terminator so a hostile id
+    // cannot close the comment and inject markdown into the note.
+    let sid = sid.replace("-->", "--&gt;");
+    format!("{content}\n\n<!-- alnair-memory: stored by session {sid} -->")
+}
+
+#[cfg(test)]
+mod heading_only_tests {
+    use super::{stamp_provenance, with_body_if_heading_only};
+    use crate::chunker::chunk_markdown;
+    use crate::search::is_content_free_for_tests;
+    use alnair_config_types::MemoryIndexConfig;
+
+    /// The property the whole helper exists for: after normalization, the chunk
+    /// must not be filtered out as scaffolding. This asserts the *outcome*
+    /// (survives the real filter) rather than the exact string, so the helper
+    /// can change shape without silently reintroducing the bug.
+    fn first_chunk_is_retrievable(note: &str) -> bool {
+        let prepared = with_body_if_heading_only(note);
+        // `append_to_memory` runs `normalize_memory_content` before writing; the
+        // index chunks whatever it produced. Reproduce that exact pipeline.
+        let normalized = crate::storage::normalize_memory_content(&prepared);
+        let chunks = chunk_markdown(&normalized, &MemoryIndexConfig::default());
+        // Every chunk must survive; a note is small enough to be one chunk.
+        !chunks.is_empty()
+            && chunks
+                .iter()
+                .all(|c| !is_content_free_for_tests(&c.text, "workspace"))
+    }
+
+    /// A single-line note used to become a bare `## note` heading, and the
+    /// search pipeline drops heading-only chunks as scaffolding — durable but
+    /// permanently unretrievable. This is the regression guard.
+    #[test]
+    fn a_single_line_note_survives_the_scaffolding_filter() {
+        assert!(
+            first_chunk_is_retrievable("Prefer tabs over spaces"),
+            "a single-line note must remain retrievable after normalization"
+        );
+    }
+
+    /// Proves the helper is what saves the note, not something incidental: the
+    /// *same* note WITHOUT the helper is dropped by the filter. If this ever
+    /// stops holding, the helper has become dead weight and the guard above is
+    /// asserting nothing.
+    #[test]
+    fn without_the_helper_a_single_line_note_would_be_filtered_out() {
+        let note = "Prefer tabs over spaces";
+        let normalized = crate::storage::normalize_memory_content(note);
+        let chunks = chunk_markdown(&normalized, &MemoryIndexConfig::default());
+        assert!(
+            chunks
+                .iter()
+                .all(|c| is_content_free_for_tests(&c.text, "workspace")),
+            "precondition: a bare heading must be scaffolding — otherwise the \
+             helper is unnecessary and this guard is vacuous. chunks: {chunks:?}"
+        );
+    }
+
+    /// The boundary case: a short line becomes its own heading plus body.
+    #[test]
+    fn a_short_note_is_duplicated_as_heading_and_body() {
+        assert_eq!(
+            with_body_if_heading_only("short note"),
+            "short note\n\nshort note"
+        );
+    }
+
+    /// A long single line cannot be a heading (`normalize_memory_content` would
+    /// truncate its meaning), so a generic heading carries it instead.
+    #[test]
+    fn a_long_single_line_gets_a_generic_heading() {
+        let long = "a".repeat(200);
+        let out = with_body_if_heading_only(&long);
+        assert!(out.starts_with("Note\n\n"), "got: {out}");
+        assert!(out.ends_with(&long), "the note must survive intact");
+        assert!(
+            first_chunk_is_retrievable(&long),
+            "a long note must remain retrievable"
+        );
+    }
+
+    /// Multi-line input is passed through: `normalize_memory_content` already
+    /// turns its first line into a heading and the rest into the body.
+    #[test]
+    fn multi_line_input_is_left_alone() {
+        let note = "## Decision\n\nConfig writers use replace_file.";
+        assert_eq!(with_body_if_heading_only(note), note);
+        assert!(first_chunk_is_retrievable(note));
+    }
+
+    /// An explicit heading is the caller's choice; do not second-guess it.
+    #[test]
+    fn an_explicit_heading_is_left_alone() {
+        let note = "# My heading";
+        assert_eq!(with_body_if_heading_only(note), note);
+    }
+
+    /// Surrounding whitespace must not defeat the single-line rule.
+    #[test]
+    fn whitespace_is_trimmed_before_classifying() {
+        assert_eq!(
+            with_body_if_heading_only("   short note \n "),
+            "short note\n\nshort note"
+        );
+    }
+
+    // Provenance
+
+    /// The note must name the session that wrote it, so a reader can audit where
+    /// a stored claim came from.
+    #[test]
+    fn a_note_carries_its_source_session() {
+        let stamped = stamp_provenance("a fact", "sess-abc123");
+        assert!(
+            stamped.contains("sess-abc123"),
+            "the note must name its source session: {stamped}"
+        );
+        assert!(
+            stamped.starts_with("a fact"),
+            "the note itself must come first: {stamped}"
+        );
+    }
+
+    /// An empty session id must not produce a dangling marker.
+    #[test]
+    fn an_empty_session_id_is_marked_unknown() {
+        assert!(stamp_provenance("a fact", "").contains("unknown"));
+    }
+
+    /// A hostile session id must not be able to close the HTML comment and
+    /// inject markdown into the note.
+    #[test]
+    fn a_session_id_cannot_escape_the_comment() {
+        let hostile = "x--> **injected** <!--";
+        let stamped = stamp_provenance("a fact", hostile);
+        assert_eq!(
+            stamped.matches("-->").count(),
+            1,
+            "exactly one comment terminator must survive: {stamped}"
+        );
+        assert!(
+            !stamped.contains("--> **injected**"),
+            "the escape must be neutralised: {stamped}"
+        );
     }
 }
 

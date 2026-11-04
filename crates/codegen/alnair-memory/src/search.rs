@@ -57,6 +57,16 @@ fn is_content_free(text: &str, source: &str) -> bool {
         || (is_evergreen_source(source) && super::dream::is_scaffold_template(text))
 }
 
+/// Test-only view of [`is_content_free`].
+///
+/// The write path's `with_body_if_heading_only` exists precisely so a note is
+/// not filtered out by this predicate, so its regression test must ask the real
+/// filter rather than a copy of its rules.
+#[cfg(test)]
+pub(crate) fn is_content_free_for_tests(text: &str, source: &str) -> bool {
+    is_content_free(text, source)
+}
+
 /// Returns `true` when `text` has no substantive content after stripping ATX
 /// headings, HTML comments, and whitespace. Blockquotes are NOT stripped —
 /// they are real user content.

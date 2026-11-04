@@ -1893,6 +1893,34 @@ mod tests {
             ],
             "a write backend must add memory_store and nothing else"
         );
+
+        // `inject_default_tools: false` hands the model an exact toolset, so no
+        // memory tool may be layered on even when both backends are present.
+        // This is what the compat harness relies on, where every advertised tool
+        // must match the model's trained schema.
+        let mut def = crate::config::AgentDefinition::default_alnair();
+        def.inject_default_tools = false;
+        let curated = AgentBuilder::new(
+            std::env::temp_dir(),
+            Arc::new(LocalTerminalBackend::new()),
+            ToolNotificationHandle::noop(),
+        )
+        .from_definition(def)
+        .with_memory_backend(Arc::new(NoopRead))
+        .with_memory_write_backend(Arc::new(NoopWrite))
+        .build()
+        .await
+        .unwrap()
+        .tool_definitions()
+        .await
+        .into_iter()
+        .map(|d| d.function.name)
+        .filter(|n| n.starts_with("memory_"))
+        .collect::<Vec<_>>();
+        assert!(
+            curated.is_empty(),
+            "a curated toolset must receive no memory tool, got: {curated:?}"
+        );
     }
     /// Build a default agent under a session allowlist + the agent's own
     /// allowlist, returning the effective (short) tool names.
