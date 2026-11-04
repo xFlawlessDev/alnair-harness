@@ -458,7 +458,11 @@ mod tests {
             script.contains("$ErrorActionPreference = 'Continue'"),
             "a terminating preference turns an optional property into a dead button: {script}"
         );
-        for property in ["Description", "UseDescriptionForTitle", "ShowNewFolderButton"] {
+        for property in [
+            "Description",
+            "UseDescriptionForTitle",
+            "ShowNewFolderButton",
+        ] {
             let guarded = format!("try {{ $dialog.{property} =");
             assert!(
                 script.contains(&guarded),
