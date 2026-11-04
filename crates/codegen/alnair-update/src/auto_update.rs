@@ -1111,7 +1111,7 @@ fn extract_alnair_binary_blocking(archive: &Path, dest_tmp: &Path) -> Result<()>
     for i in 0..zip.len() {
         let mut entry = zip.by_index(i)?;
         let base_name = entry
-            .name()
+            .name()?
             .rsplit(['/', '\\'])
             .next()
             .unwrap_or_default()

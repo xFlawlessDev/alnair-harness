@@ -10,13 +10,17 @@ ignore = [
     # (public-key operation; Marvin concerns private-key decryption). The
     # entire OIDC stack is replaced by the Kimi device flow in M1.
     { id = "RUSTSEC-2023-0071", reason = "verification-only use; auth stack replaced in M1" },
+    # crypto-bigint: constant-time operations execute secret-dependent
+    # branches. Reached only through elliptic-curve/ecdsa/p256 in the same
+    # verification-only path above — a verifier holds no private scalar.
+    # The fix is in crypto-bigint 0.6, which elliptic-curve 0.13 cannot use.
+    { id = "RUSTSEC-2026-0387", reason = "verification-only use via jsonwebtoken; no secret in a verifier" },
     # quick-xml 0.39 (two advisories): pinned by wayland-scanner 0.31.10
     # (latest), a build-time proc-macro parsing vendored Wayland protocol
     # XML — no attacker-controlled input reaches it.
     { id = "RUSTSEC-2026-0194", reason = "build-time parse of vendored XML via wayland-scanner" },
     { id = "RUSTSEC-2026-0206", reason = "build-time parse of vendored XML via wayland-scanner" },
     # Unmaintained transitive dependencies with no upstream fix available.
-    { id = "RUSTSEC-2025-0052", reason = "async-std via dark-light 2 (latest); theme detection" },
     { id = "RUSTSEC-2025-0012", reason = "backoff via async-openai (latest)" },
     { id = "RUSTSEC-2024-0384", reason = "instant via backoff via async-openai (latest)" },
     { id = "RUSTSEC-2025-0141", reason = "bincode 1 via syntect (latest); local cache format" },
@@ -25,6 +29,15 @@ ignore = [
     { id = "RUSTSEC-2026-0192", reason = "rustybuzz via pdf_oxide/resvg (latest); local rendering" },
     { id = "RUSTSEC-2026-0195", reason = "ttf-parser via fontdb/resvg (latest); local font parsing" },
     { id = "RUSTSEC-2024-0320", reason = "yaml-rust via syntect (latest); parses bundled syntax defs" },
+    # zbus 5 and its split-out crates: reached on Linux through dark-light's
+    # XDG-portal theme detection, whose latest release (3.0.0) still requires
+    # zbus ^5. zbus 6 merged these crates back, but the pin moves with
+    # dark-light, not with this workspace.
+    { id = "RUSTSEC-2026-0371", reason = "zbus 5 via dark-light 3; Linux theme detection" },
+    { id = "RUSTSEC-2026-0370", reason = "zbus 5 via dark-light 3; Linux theme detection" },
+    { id = "RUSTSEC-2026-0372", reason = "zbus 5 via dark-light 3; Linux theme detection" },
+    # serde_yaml is deprecated and archived; its parser is vendored inside it.
+    { id = "RUSTSEC-2024-0449", reason = "serde_yaml 0.9 (deprecated) via alnair-agent; bundled parser" },
 ]
 
 [licenses]

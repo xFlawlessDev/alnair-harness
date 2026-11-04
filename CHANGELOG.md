@@ -13,6 +13,80 @@ what the Alnair fork adds, changes, or removes.
 
 Nothing yet.
 
+## [0.1.6] — 2026-11-04
+
+### Added
+
+- **Structural code search.** `codebase_search` finds a symbol's declaration by
+  name and `codebase_context` reads it back, so the agent no longer has to
+  `grep` for an identifier it already knows and wade through comments, string
+  literals and call sites. Both are backed by an index over the git root that
+  starts lazily on the first call and is shared across sessions in the same
+  repository. Lazy substring search would be useless on its own, so results are
+  ranked: exact matches first, then prefix, then substring, with usage
+  frequency ordering within a tier. An empty result says which languages the
+  index could parse, so "not indexed" does not read as "does not exist" — and
+  an FFI binding (`extern "C" { fn … }`) is now found like any other function.
+- **The index stays current, and says where it is.** Every session that owns the
+  codebase tools now feeds the index from filesystem events, and a session
+  opened in a subdirectory watches the whole repository rather than its own
+  subtree. The agent footer gains a `code` chip opposite the context meter:
+  a spinner while the index builds, `code: <files>` once it can answer,
+  `code: ready` when the count is known only from an earlier process's cache,
+  and nothing at all in a session without an index. The index lives at the git
+  root, so a fresh session in an already-indexed repository reports it as ready
+  instead of starting a second one.
+- **The model can write durable memory.** `memory_store` records a note in the
+  workspace's memory mid-turn; until now the only ways in were `/flush`, the
+  session-end hook and `/dream`, none of which the model drives. Writes are
+  classified as edits, so a read-only subagent cannot poison future sessions,
+  and the tool only appears when a write backend is present — the tool list is
+  byte-identical for anyone who has not opted into memory. A note that looks
+  like it carries a credential is refused rather than redacted, and the refusal
+  never repeats the value.
+- **A marketing site with the user guide.** `landing/` is a fully prerendered
+  SvelteKit site in English and Indonesian, deployed separately from the binary.
+  Its `/docs/` section is generated from the guide the binary embeds, so the
+  published manual cannot drift from the shipped one. Pages carry canonical,
+  hreflang and social metadata, plus a generated sitemap and structured data.
+
+### Changed
+
+- Note provenance: a note written to memory carries an HTML comment naming the
+  session that stored it, invisible in rendered markdown but greppable when a
+  claim needs tracing.
+- Dependency refresh for the advisory gate. `zip` moved to 9 (one copy instead
+  of 3 and 8), `pdf_oxide`/`office_oxide` to their current releases,
+  `pulldown-cmark`, `tokio`, `zstd`, `libz-sys`, `ctutils` and `dark-light` were
+  updated, and a yanked `async-executor` was replaced. `dark-light` 3 drops
+  `async-std` and `ashpd`; its `detect()` contract is unchanged. The `zip` 9
+  bump changed two call sites in `read_file` and the updater, where file names
+  are now fallible.
+
+### Fixed
+
+- **Path suggestions keep their display form on Windows.** A corrected
+  `path_not_found` hint joined the model-facing cwd with the host separator, so
+  `/home/user/project` plus `src` became `/home/user/project\src` — neither a
+  valid Windows path nor the POSIX shape the model would retype.
+- **The workspace boundary check ignored `..`.** `resolve_under_root` counted
+  path depth from the filesystem root, so an absolute path's own ancestors
+  padded the count, `..` could never drive it negative, and the escape check
+  never fired. It is now a prefix test on lexically normalized paths.
+- **Credential redaction missed two shapes.** Word-boundary anchoring did not
+  match `DB_PASSWORD=…` because `_` is a word character, the `.env` rule missed
+  the same shape inside a source comment, and `github_pat_` tokens were not
+  matched at all. The rules now live in one place shared by code search and
+  memory writes.
+- **A heading-only memory note was permanently unretrievable.** Such a note
+  normalized to a bare heading, and the search pipeline drops heading-only
+  chunks as scaffolding; the write path gives it a body.
+- **The `tool_meta.schema.json` assertion depended on feature unification** —
+  it compared rendered bytes, passed alone and failed in a full sweep. It now
+  compares a key-sorted rendering.
+- `landing/` passes its own lint: the Google Search Console verification stub
+  is excluded from Prettier, since its bytes are the verification token.
+
 ## [0.1.5] — 2026-10-29
 
 ### Added
