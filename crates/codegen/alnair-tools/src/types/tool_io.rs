@@ -80,6 +80,8 @@ pub enum ToolInput {
     MemorySearch(MemorySearchInput),
     MemoryGet(MemoryGetInput),
     MemoryStore(MemoryStoreInput),
+    CodebaseSearch(crate::implementations::codebase::types::CodebaseSearchInput),
+    CodebaseContext(crate::implementations::codebase::types::CodebaseContextInput),
     SearchTool(SearchToolInput),
     UseTool(UseToolInput),
     EnterPlanMode(EnterPlanModeInput),

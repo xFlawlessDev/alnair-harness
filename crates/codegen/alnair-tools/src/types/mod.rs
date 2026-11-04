@@ -1,6 +1,7 @@
 pub mod agents_md_tracker;
 pub mod api_key_provider;
 pub mod claude_alias;
+pub mod codebase_backend;
 pub mod compat;
 pub mod config_source;
 pub mod context;
@@ -24,6 +25,10 @@ pub mod tool_metadata;
 pub mod web_provider;
 pub use api_key_provider::{ApiKeyProvider, SharedApiKeyProvider};
 pub use claude_alias::{alnair_names, alnair_names_for, claude_names_for, kind_for};
+pub use codebase_backend::{
+    CodebaseBackend, CodebaseError, CodebaseHit, CodebaseHitKind, CodebaseMatchKind,
+    CodebaseSearchOutcome, CodebaseSnippet, CodebaseStatus, CodebaseSymbol,
+};
 pub use compat::{
     COMPAT_CELLS, CompatCell, CompatConfig, CompatConfigToml, CompatRemoteKey, CompatSurface,
     CompatVendor, VendorCompat, VendorCompatToml,

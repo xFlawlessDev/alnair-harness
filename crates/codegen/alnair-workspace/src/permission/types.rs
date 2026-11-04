@@ -256,6 +256,15 @@ impl From<&alnair_tools::types::ToolInput> for AccessKind {
         match input {
             ToolInput::ReadFile(r) => AccessKind::Read(Some(r.path.clone())),
             ToolInput::ListDir(l) => AccessKind::Read(Some(l.target_directory.clone())),
+            // A structural search reads only what the index already parsed, so
+            // it is a Read. `codebase_context` names a file, so it carries the
+            // path — the permission layer can then apply the same deny globs it
+            // applies to `read_file`.
+            ToolInput::CodebaseSearch(cs) => AccessKind::Grep {
+                path: cs.path_prefix.clone(),
+                glob: None,
+            },
+            ToolInput::CodebaseContext(cc) => AccessKind::Read(Some(cc.path.clone())),
             ToolInput::Grep(g) => AccessKind::Grep {
                 path: g.path.clone(),
                 glob: g.glob.clone(),
@@ -283,6 +292,10 @@ impl From<&alnair_tools::types::ToolInput> for AccessKind {
                 input: u.tool_input.clone(),
             },
             ToolInput::WebFetch(wf) => AccessKind::WebFetch(wf.url.clone()),
+            // A durable memory write is a write. Without this arm it fell into
+            // the catch-all and was classified as a read, so the permission
+            // layer could not gate it with the edit rules.
+            ToolInput::MemoryStore(_) => AccessKind::Edit("MEMORY.md".to_string()),
             ToolInput::Dynamic(_) => AccessKind::Read(None),
             #[allow(unreachable_patterns)]
             _ => AccessKind::Read(None),

@@ -2,8 +2,10 @@
 //! refusal.
 //!
 //! Everything here is a pure function over the note text so the rules can be
-//! table-tested without touching a filesystem or a backend. The same module is
-//! intended to be reused by the (deferred) codebase snippet renderer.
+//! table-tested without touching a filesystem or a backend. Credential
+//! *detection* lives in [`crate::implementations::secrets`] because the
+//! codebase snippet renderer needs the same rules; this module owns only what
+//! `memory_store` does about a hit (refuse the write).
 //!
 //! ## Why refuse rather than redact
 //!
@@ -14,7 +16,7 @@
 //! (`"the key lives in 1Password item X"`), which is what durable memory should
 //! contain anyway.
 
-use std::sync::LazyLock;
+use crate::implementations::secrets;
 
 /// Maximum characters a single `memory_store` call may append.
 ///
@@ -59,66 +61,12 @@ impl Rejection {
     }
 }
 
-/// A credential pattern the write path refuses.
-struct SecretRule {
-    /// Human name used in the error message. Must not contain the value.
-    name: &'static str,
-    pattern: regex::Regex,
-}
-
-/// Patterns that mark a note as containing a credential.
-///
-/// Deliberately narrow: a false positive costs one retry, a false negative puts
-/// a live credential into a file that is injected into every future session.
-/// Each pattern is anchored on a recognizable prefix or an assignment shape, so
-/// prose *about* credentials (which is what memory should hold) passes.
-static SECRET_RULES: LazyLock<Vec<SecretRule>> = LazyLock::new(|| {
-    let rule = |name: &'static str, re: &str| SecretRule {
-        name,
-        pattern: regex::Regex::new(re).expect("secret-detection pattern must compile"),
-    };
-    vec![
-        rule(
-            "a private key block",
-            r"-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----",
-        ),
-        rule("an AWS access key id", r"\b(?:AKIA|ASIA)[0-9A-Z]{16}\b"),
-        rule(
-            "a GitHub token",
-            r"\b(?:gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,})",
-        ),
-        rule("an API key", r"\bsk-(?:ant-)?[A-Za-z0-9_-]{20,}"),
-        rule(
-            "a credential assignment",
-            r"(?i)\b(?:api[_-]?key|apikey|secret|password|passwd|token)\b\s*[:=]\s*\S{12,}",
-        ),
-        rule("a bearer token", r"(?i)\bbearer\s+[A-Za-z0-9._~+/=-]{20,}"),
-        // A URL carrying userinfo (`scheme://user:pass@host`) is a credential
-        // whatever variable holds it.
-        rule(
-            "a URL with embedded credentials",
-            r"[A-Za-z][A-Za-z0-9+.-]*://[^\s/:@]+:[^\s/@]+@",
-        ),
-        // An `.env`-shaped line only counts when the KEY names a credential.
-        // Matching every `UPPER=value` line refused ordinary notes that document
-        // a constant (`MAX_STORE_CHARS=4000`) — exactly the knowledge this tool
-        // exists to keep. Values that *look* secret are caught by the rules
-        // above; this one catches the opaque-value case (`DB_PASSWORD=hunter2…`).
-        rule(
-            "a .env-style credential line",
-            r"(?m)^[A-Z0-9_]*(?:KEY|TOKEN|SECRET|PASSWORD|PASSWD|CREDENTIAL|AUTH)[A-Z0-9_]*=.{12,}$",
-        ),
-    ]
-});
-
 /// Whether `content` contains something that looks like a credential.
 ///
-/// Returns the rule's name, never the match.
+/// Delegates to [`secrets::detect_secret`]: the codebase snippet renderer needs
+/// the same rules, and a second copy of the pattern list would drift.
 pub fn detect_secret(content: &str) -> Option<&'static str> {
-    SECRET_RULES
-        .iter()
-        .find(|rule| rule.pattern.is_match(content))
-        .map(|rule| rule.name)
+    secrets::detect_secret(content)
 }
 
 /// Validate a note before it reaches the filesystem or the backend.

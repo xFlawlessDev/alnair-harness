@@ -1,6 +1,7 @@
 pub mod alnair;
 pub mod alnair_concise;
 pub mod alnair_hashline;
+pub mod codebase;
 pub mod codex;
 pub mod cursor_rules_on_read;
 pub mod editor_infra;
@@ -9,6 +10,7 @@ pub mod memory;
 pub mod opencode;
 pub mod read_file;
 pub mod search_tool;
+pub mod secrets;
 pub mod skills;
 pub mod task_output;
 pub mod use_tool;

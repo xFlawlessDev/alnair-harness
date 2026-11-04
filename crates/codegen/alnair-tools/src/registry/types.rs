@@ -249,6 +249,14 @@ pub struct SessionContext {
     /// mutate durable memory by construction. When `Some`, `memory_store` is
     /// usable; when `None` it reports that memory is not enabled.
     pub memory_write_backend: Option<Arc<dyn crate::types::memory_backend::MemoryWriteBackend>>,
+    /// Optional structural code-search backend.
+    ///
+    /// When `Some`, `codebase_search` and `codebase_context` are usable; when
+    /// `None` they report that indexing is unavailable and point at `grep`.
+    /// Deliberately optional rather than always-present: the backend starts an
+    /// index actor on first use, and a session that never asks a structural
+    /// question should never pay for one.
+    pub codebase_backend: Option<Arc<dyn crate::types::codebase_backend::CodebaseBackend>>,
     /// Optional web search configuration. When `Enabled`, a `WebSearchClient`
     /// is created and injected into `Resources` so the `web_search` tool can
     /// call the Responses API. When `Disabled` (default), the tool returns a
@@ -696,6 +704,8 @@ impl ToolRegistryBuilder {
         b.register::<crate::implementations::memory::search_tool::MemorySearchImpl>();
         b.register::<crate::implementations::memory::get_tool::MemoryGetImpl>();
         b.register::<crate::implementations::memory::store_tool::MemoryStoreImpl>();
+        b.register::<crate::implementations::codebase::search_tool::CodebaseSearchImpl>();
+        b.register::<crate::implementations::codebase::context_tool::CodebaseContextImpl>();
         b.register::<crate::implementations::search_tool::SearchTool>();
         b.register_with_params::<
                 crate::implementations::use_tool::UseTool,
@@ -975,6 +985,9 @@ impl ToolRegistryBuilder {
         }
         if let Some(memory_write_backend) = ctx.memory_write_backend {
             resources.insert(memory_write_backend);
+        }
+        if let Some(codebase_backend) = ctx.codebase_backend {
+            resources.insert(codebase_backend);
         }
         if let Some(target) = ctx.web_target.clone()
             && let Ok(client) = crate::implementations::web_search::client::WebSearchClient::new(
@@ -1960,6 +1973,7 @@ mod tests {
             state_path: tmp.path().join("state.json"),
             memory_backend: None,
             memory_write_backend: None,
+            codebase_backend: None,
             web_search_config: crate::implementations::web_search::WebSearchConfig::default(),
             web_fetch_config: crate::implementations::alnair::web_fetch::WebFetchConfig::default(),
             web_target: None,

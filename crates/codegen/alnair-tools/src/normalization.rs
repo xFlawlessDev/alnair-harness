@@ -96,6 +96,18 @@ pub fn canonical_input(input: &ToolInput) -> Option<serde_json::Value> {
             (field::PATTERN, req(&g.pattern)),
             (field::PATH, opt(g.path.as_ref())),
         ]),
+        // The symbol fragment is the analogue of `grep`'s pattern, and the
+        // optional path prefix is the analogue of its path — so a consumer that
+        // groups searches can read both tools the same way.
+        ToolInput::CodebaseSearch(s) => obj([
+            (field::PATTERN, req(&s.query)),
+            (field::PATH, opt(s.path_prefix.as_ref())),
+        ]),
+        // The path and starting line, which is exactly what a "jump to
+        // location" UI needs.
+        ToolInput::CodebaseContext(c) => {
+            obj([(field::PATH, req(&c.path)), (field::OFFSET, opt(c.line))])
+        }
         ToolInput::TodoWrite(_)
         | ToolInput::Skill(_)
         | ToolInput::MCPTool(_)

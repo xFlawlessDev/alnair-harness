@@ -91,6 +91,16 @@ pub enum ToolKind {
     /// it is the only memory tool that mutates state, so it must gate as an Edit
     /// and must never be counted as read-only.
     MemoryStore,
+    /// Structural symbol lookup over the parsed code graph.
+    ///
+    /// Its own kind rather than sharing `Search`: `TemplateRenderer`'s `by_kind`
+    /// map holds one tool name per kind, and these two answer different
+    /// questions (a symbol vs. file text), so sharing would silently redirect
+    /// `${{ tools.by_kind.search }}`.
+    CodebaseSearch,
+    /// Bounded file window around a location. Separate from `CodebaseSearch`
+    /// for the same reason: one discovers, the other reads.
+    CodebaseContext,
     Task,
     /// Fan-out sibling of [`ToolKind::Task`]: its own kind because
     /// `TemplateRenderer`'s `by_kind` map holds ONE tool name per kind, so

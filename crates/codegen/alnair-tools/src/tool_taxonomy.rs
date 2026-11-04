@@ -56,6 +56,8 @@ impl ToolKind {
             ToolKind::MemorySearch => "Memory Search",
             ToolKind::MemoryGet => "Memory Read",
             ToolKind::MemoryStore => "Memory Write",
+            ToolKind::CodebaseSearch => "Code Search",
+            ToolKind::CodebaseContext => "Code Read",
             ToolKind::Task => "Subagent",
             ToolKind::AgentSwarm => "Subagent Swarm",
             ToolKind::EnterPlan => "Enter Plan Mode",
@@ -82,6 +84,8 @@ impl ToolKind {
             | ToolKind::List
             | ToolKind::MemorySearch
             | ToolKind::MemoryGet
+            | ToolKind::CodebaseSearch
+            | ToolKind::CodebaseContext
             | ToolKind::WebSearch
             | ToolKind::WebFetch
             | ToolKind::EnterPlan
@@ -324,16 +328,25 @@ mod tests {
     }
     /// The checked-in schema (the artifact non-Rust consumers codegen from) must
     /// track the type. Regenerate with `UPDATE_TOOL_META_SCHEMA=1`.
+    ///
+    /// The comparison is on a *sorted* rendering, not on bytes. `serde_json`'s
+    /// object key order depends on whether the `preserve_order` feature is
+    /// unified in, and which crates participate in a build is not a property the
+    /// schema has any opinion about — an order-sensitive compare therefore
+    /// passed when this crate was tested alone and failed in a workspace sweep,
+    /// where another member turned `preserve_order` on for everyone. Sorting
+    /// both sides keeps the assertion about content, which is what a codegen
+    /// consumer actually reads.
     #[test]
     fn tool_meta_schema_is_up_to_date() {
         let generator = schemars::generate::SchemaSettings::draft07().into_generator();
         let schema = serde_json::to_value(generator.into_root_schema_for::<CanonicalToolMeta>())
             .expect("schema serializes");
-        let generated = format!("{}\n", serde_json::to_string_pretty(&schema).unwrap());
         if std::env::var("UPDATE_TOOL_META_SCHEMA").is_ok() {
+            let rendered = format!("{}\n", serde_json::to_string_pretty(&schema).unwrap());
             std::fs::write(
                 concat!(env!("CARGO_MANIFEST_DIR"), "/schema/tool_meta.schema.json"),
-                &generated,
+                &rendered,
             )
             .unwrap();
             return;
@@ -343,11 +356,31 @@ mod tests {
         if let Some(values) = expected["definitions"]["ToolNamespace"]["enum"].as_array_mut() {
             values.retain(|v| v != "cursor");
         }
-        let expected = format!("{}\n", serde_json::to_string_pretty(&expected).unwrap());
         assert_eq!(
-            generated, expected,
+            canonical_json(&schema),
+            canonical_json(&expected),
             "tool_meta.schema.json is stale; regenerate with UPDATE_TOOL_META_SCHEMA=1"
         );
+    }
+
+    /// Render a JSON value with every object's keys sorted, so two equivalent
+    /// documents compare equal regardless of insertion order.
+    fn canonical_json(value: &serde_json::Value) -> serde_json::Value {
+        match value {
+            serde_json::Value::Object(map) => {
+                let mut sorted = serde_json::Map::new();
+                let mut keys: Vec<&String> = map.keys().collect();
+                keys.sort();
+                for key in keys {
+                    sorted.insert(key.clone(), canonical_json(&map[key]));
+                }
+                serde_json::Value::Object(sorted)
+            }
+            serde_json::Value::Array(items) => {
+                serde_json::Value::Array(items.iter().map(canonical_json).collect())
+            }
+            other => other.clone(),
+        }
     }
     #[test]
     fn merge_into_nests_under_one_key_and_preserves_existing() {

@@ -91,6 +91,8 @@ pub(crate) const ALL_TOOL_KINDS: &[ToolKind] = &[
     ToolKind::MemorySearch,
     ToolKind::MemoryGet,
     ToolKind::MemoryStore,
+    ToolKind::CodebaseSearch,
+    ToolKind::CodebaseContext,
     ToolKind::Task,
     ToolKind::AgentSwarm,
     ToolKind::EnterPlan,
@@ -128,7 +130,12 @@ pub(crate) fn kind_allowed(mode: CapabilityMode, kind: ToolKind) -> bool {
         Plan | EnterPlan | ExitPlan | AskUser | Skill | SearchTool | GoalUpdate => true,
 
         // Read class.
-        Read | MemoryGet | MemorySearch => {
+        //
+        // `CodebaseSearch`/`CodebaseContext` are read-only over an index the
+        // process already holds; they are in the Read class, not Search,
+        // because they cannot reach the network and cannot touch the
+        // filesystem beyond the files the index already parsed.
+        Read | MemoryGet | MemorySearch | CodebaseSearch | CodebaseContext => {
             matches!(mode, M::ReadOnly | M::ReadWrite | M::Execute)
         }
 
