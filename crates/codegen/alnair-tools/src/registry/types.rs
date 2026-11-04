@@ -242,6 +242,13 @@ pub struct SessionContext {
     /// When `Some`, injected into `Resources` so `memory_search` / `memory_get`
     /// tools can access it. When `None`, the tools return "not enabled".
     pub memory_backend: Option<Arc<dyn crate::types::memory_backend::MemoryBackend>>,
+    /// Optional memory *write* backend.
+    ///
+    /// Kept separate from [`Self::memory_backend`] so the read-only injection and
+    /// compaction-recovery paths — which are handed only the read trait — cannot
+    /// mutate durable memory by construction. When `Some`, `memory_store` is
+    /// usable; when `None` it reports that memory is not enabled.
+    pub memory_write_backend: Option<Arc<dyn crate::types::memory_backend::MemoryWriteBackend>>,
     /// Optional web search configuration. When `Enabled`, a `WebSearchClient`
     /// is created and injected into `Resources` so the `web_search` tool can
     /// call the Responses API. When `Disabled` (default), the tool returns a
@@ -688,6 +695,7 @@ impl ToolRegistryBuilder {
         b.register::<opencode::OpenCodeSkillTool>();
         b.register::<crate::implementations::memory::search_tool::MemorySearchImpl>();
         b.register::<crate::implementations::memory::get_tool::MemoryGetImpl>();
+        b.register::<crate::implementations::memory::store_tool::MemoryStoreImpl>();
         b.register::<crate::implementations::search_tool::SearchTool>();
         b.register_with_params::<
                 crate::implementations::use_tool::UseTool,
@@ -964,6 +972,9 @@ impl ToolRegistryBuilder {
         }
         if let Some(memory_backend) = ctx.memory_backend {
             resources.insert(memory_backend);
+        }
+        if let Some(memory_write_backend) = ctx.memory_write_backend {
+            resources.insert(memory_write_backend);
         }
         if let Some(target) = ctx.web_target.clone()
             && let Ok(client) = crate::implementations::web_search::client::WebSearchClient::new(
@@ -1948,6 +1959,7 @@ mod tests {
             skills: vec![],
             state_path: tmp.path().join("state.json"),
             memory_backend: None,
+            memory_write_backend: None,
             web_search_config: crate::implementations::web_search::WebSearchConfig::default(),
             web_fetch_config: crate::implementations::alnair::web_fetch::WebFetchConfig::default(),
             web_target: None,

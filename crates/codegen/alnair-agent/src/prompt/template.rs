@@ -481,6 +481,7 @@ mod tests {
             (ToolKind::Read, "read_file".to_string()),
             (ToolKind::MemorySearch, "memory_search".to_string()),
             (ToolKind::MemoryGet, "memory_get".to_string()),
+            (ToolKind::MemoryStore, "memory_store".to_string()),
         ]
         .into();
         let r = TemplateRenderer::new(tools, HashMap::new());
@@ -847,6 +848,7 @@ mod tests {
             ToolKind::Monitor,
             ToolKind::MemorySearch,
             ToolKind::MemoryGet,
+            ToolKind::MemoryStore,
         ];
         let mut subsets: Vec<Vec<ToolKind>> = vec![vec![], optional.to_vec()];
         for i in 0..optional.len() {

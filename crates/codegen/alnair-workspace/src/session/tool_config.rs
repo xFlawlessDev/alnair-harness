@@ -291,6 +291,7 @@ impl SessionContextFactory for WorkspaceSessionContextFactory {
             skills: vec![],
             state_path: PathBuf::new(),
             memory_backend: None,
+            memory_write_backend: None,
             web_search_config: alnair_tools::implementations::web_search::WebSearchConfig::default(
             ),
             web_fetch_config: build_web_fetch_config(),
@@ -387,6 +388,7 @@ pub mod test_support {
                 skills: vec![],
                 state_path: session_root.join("tool_state.json"),
                 memory_backend: None,
+                memory_write_backend: None,
                 web_search_config: Default::default(),
                 web_fetch_config: Default::default(),
                 web_target: None,

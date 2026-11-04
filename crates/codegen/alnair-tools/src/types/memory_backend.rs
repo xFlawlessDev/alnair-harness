@@ -146,6 +146,85 @@ pub trait MemoryBackend: Send + Sync {
     }
 }
 
+/// Where a durable memory note is written.
+///
+/// A mirror of `alnair_memory::storage::MemoryScope`: `alnair-tools` cannot
+/// depend on `alnair-memory` (that crate already depends on this one), so the
+/// write trait is expressed in this crate's vocabulary and the backend impl
+/// converts. Keep the variants in lockstep — the conversion is exhaustive, so a
+/// new variant on either side is a compile error rather than a silent drop.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum MemoryWriteScope {
+    /// Workspace-scoped `MEMORY.md` — specific to one project. The default,
+    /// because a project decision stored globally leaks into unrelated repos.
+    #[default]
+    Workspace,
+    /// Global `MEMORY.md` — shared across every workspace.
+    Global,
+}
+
+impl MemoryWriteScope {
+    /// The `scope` wire value accepted by the `memory_store` tool.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Workspace => "workspace",
+            Self::Global => "global",
+        }
+    }
+
+    /// Parse a tool-supplied scope. Unknown values are rejected rather than
+    /// defaulted: silently writing to the wrong scope is unrecoverable (the
+    /// note lands in a file the user does not expect to look at).
+    pub fn parse(value: &str) -> Option<Self> {
+        match value {
+            "workspace" => Some(Self::Workspace),
+            "global" => Some(Self::Global),
+            _ => None,
+        }
+    }
+}
+
+/// Result of a successful [`MemoryWriteBackend::append`].
+#[derive(Debug, Clone)]
+pub struct AppendOutcome {
+    /// Absolute path of the `MEMORY.md` that received the note.
+    pub path: String,
+    /// Bytes appended (after normalization).
+    pub bytes_written: usize,
+    /// Whether the note is already searchable. `false` means the markdown write
+    /// succeeded but the inline reindex did not, so retrieval will catch up on
+    /// the next search or watcher tick. The note is durable either way.
+    pub indexed: bool,
+}
+
+/// Write half of the memory backend.
+///
+/// Deliberately separate from [`MemoryBackend`]: that trait is documented as
+/// read-only and is handed to the first-turn injection and post-compaction
+/// recovery paths, which must not be able to mutate durable state. A caller
+/// holding only `Arc<dyn MemoryBackend>` therefore cannot write by
+/// construction.
+#[async_trait::async_trait]
+pub trait MemoryWriteBackend: Send + Sync {
+    /// Append `content` to the durable `MEMORY.md` for `scope`, then index it.
+    ///
+    /// Implementations must not echo `content` back in errors.
+    async fn append(
+        &self,
+        scope: MemoryWriteScope,
+        content: &str,
+    ) -> Result<AppendOutcome, Box<dyn std::error::Error + Send + Sync>>;
+
+    /// Whether a consolidation pass currently owns the memory files.
+    ///
+    /// `memory_store` refuses while this is `true`: appending into a file that
+    /// dream is about to rewrite loses the note. Defaults to `false` for
+    /// backends that have no consolidation step.
+    fn is_consolidating(&self) -> bool {
+        false
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -197,6 +276,39 @@ mod tests {
         let note = format_staleness_note("session", ts);
         assert!(note.starts_with("**Stale ("), "expected Stale, got: {note}");
         assert!(note.contains("week"), "expected weeks unit, got: {note}");
+    }
+
+    // MemoryWriteScope
+
+    /// The tool's wire spelling and the enum must agree in both directions, or a
+    /// stored note lands in a scope the model did not ask for.
+    #[test]
+    fn write_scope_round_trips_through_its_wire_spelling() {
+        for scope in [MemoryWriteScope::Workspace, MemoryWriteScope::Global] {
+            assert_eq!(
+                MemoryWriteScope::parse(scope.as_str()),
+                Some(scope),
+                "{scope:?} must parse back from its own as_str()"
+            );
+        }
+    }
+
+    #[test]
+    fn write_scope_defaults_to_workspace() {
+        // Global memory is shared across every repository, so the default must
+        // never be Global: a project decision would leak into unrelated repos.
+        assert_eq!(MemoryWriteScope::default(), MemoryWriteScope::Workspace);
+    }
+
+    #[test]
+    fn write_scope_rejects_unknown_values() {
+        for bad in ["", "Global", "WORKSPACE", "project", "session"] {
+            assert_eq!(
+                MemoryWriteScope::parse(bad),
+                None,
+                "{bad:?} must be rejected, not defaulted"
+            );
+        }
     }
 
     #[test]

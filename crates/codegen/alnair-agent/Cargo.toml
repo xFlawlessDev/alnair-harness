@@ -37,6 +37,10 @@ default-bazel = []
 tempfile = { workspace = true }
 serde_json = { workspace = true }
 serial_test = { workspace = true }
+# The builder tests implement `MemoryBackend` / `MemoryWriteBackend` with a
+# no-op double to assert which memory tools reach the toolset. Both traits are
+# `#[async_trait]`, so the impl side needs the same macro.
+async-trait = { workspace = true }
 
 [lints]
 workspace = true

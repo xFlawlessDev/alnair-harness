@@ -27,7 +27,7 @@ use crate::implementations::codex::grep_files::tool::CodexGrepFilesInput;
 use crate::implementations::codex::list_dir::tool::CodexListDirInput;
 use crate::implementations::codex::read_file::tool::CodexReadFileInput;
 use crate::implementations::lsp::LspToolInput;
-use crate::implementations::memory::types::{MemoryGetInput, MemorySearchInput};
+use crate::implementations::memory::types::{MemoryGetInput, MemorySearchInput, MemoryStoreInput};
 use crate::implementations::opencode::write::WriteInput;
 use crate::implementations::search_tool::SearchToolInput;
 use crate::implementations::skills::skill::SkillInput;
@@ -79,6 +79,7 @@ pub enum ToolInput {
     CodexReadFile(CodexReadFileInput),
     MemorySearch(MemorySearchInput),
     MemoryGet(MemoryGetInput),
+    MemoryStore(MemoryStoreInput),
     SearchTool(SearchToolInput),
     UseTool(UseToolInput),
     EnterPlanMode(EnterPlanModeInput),

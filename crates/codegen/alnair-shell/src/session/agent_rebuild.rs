@@ -56,6 +56,7 @@ use alnair_tools::notification::ToolNotificationHandle;
 use alnair_tools::types::SharedApiKeyProvider;
 use alnair_tools::types::compat::CompatConfig;
 use alnair_tools::types::memory_backend::MemoryBackend;
+use alnair_tools::types::memory_backend::MemoryWriteBackend;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -90,6 +91,9 @@ pub(crate) struct AgentRebuildSpec {
     pub memory_global_path: Option<String>,
     pub memory_workspace_path: Option<String>,
     pub memory_backend: Option<Arc<dyn MemoryBackend>>,
+    /// Write half of the memory backend; `None` leaves `memory_store` out of the
+    /// toolset while keeping the read tools usable.
+    pub memory_write_backend: Option<Arc<dyn MemoryWriteBackend>>,
     pub web_search_config: WebSearchConfig,
     pub backend_search: bool,
     pub web_fetch_config: WebFetchConfig,
@@ -186,6 +190,7 @@ impl AgentRebuildSpec {
             memory_global_path,
             memory_workspace_path,
             memory_backend,
+            memory_write_backend,
             web_search_config,
             backend_search,
             web_fetch_config,
@@ -274,6 +279,9 @@ impl AgentRebuildSpec {
         }
         if let Some(memory_backend) = memory_backend.clone() {
             builder = builder.with_memory_backend(memory_backend);
+        }
+        if let Some(memory_write_backend) = memory_write_backend.clone() {
+            builder = builder.with_memory_write_backend(memory_write_backend);
         }
         if let Some(lsp) = lsp.clone() {
             builder = builder.with_lsp(lsp);
@@ -382,6 +390,7 @@ pub(crate) fn test_rebuild_spec_default() -> Arc<AgentRebuildSpec> {
         memory_global_path: None,
         memory_workspace_path: None,
         memory_backend: None,
+        memory_write_backend: None,
         web_search_config: WebSearchConfig::default(),
         backend_search: false,
         web_fetch_config: WebFetchConfig::Disabled,

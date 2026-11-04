@@ -15,7 +15,8 @@ use std::sync::Arc;
 use alnair_tools::types::memory_backend::{MemoryBackend, MemorySearchResult};
 
 use super::embedding::EmbeddingProvider as _;
-use super::storage::MemoryStorage;
+use super::index::MemoryIndex;
+use super::storage::{MemoryScope as MemoryStorageScope, MemoryStorage};
 use super::watcher::MemoryFileWatcher;
 
 /// The session's embedding credentials, bound to the one endpoint they may
@@ -306,6 +307,144 @@ impl MemoryBackendImpl {
         }
         backend.embedding_credentials = params.embedding_credentials.clone();
         backend
+    }
+}
+
+/// Write half of the backend, implemented on the same type.
+///
+/// Kept in its own `impl` block (and its own trait) because
+/// [`alnair_tools::types::memory_backend::MemoryBackend`] is documented as
+/// read-only and is handed to the first-turn injection and post-compaction
+/// recovery paths. Those callers hold `Arc<dyn MemoryBackend>` and therefore
+/// cannot reach these methods.
+#[async_trait::async_trait]
+impl alnair_tools::types::memory_backend::MemoryWriteBackend for MemoryBackendImpl {
+    #[tracing::instrument(
+        name = "memory.append",
+        skip_all,
+        fields(session_id = %self.session_id, scope = scope.as_str(), chars = content.chars().count())
+    )]
+    async fn append(
+        &self,
+        scope: alnair_tools::types::memory_backend::MemoryWriteScope,
+        content: &str,
+    ) -> Result<
+        alnair_tools::types::memory_backend::AppendOutcome,
+        Box<dyn std::error::Error + Send + Sync>,
+    > {
+        use alnair_tools::types::memory_backend::MemoryWriteScope;
+
+        // The tool layer speaks its own scope enum (it cannot depend on this
+        // crate); convert exhaustively so a new variant on either side is a
+        // compile error rather than a silently mis-scoped write.
+        let storage_scope = match scope {
+            MemoryWriteScope::Workspace => MemoryStorageScope::Workspace,
+            MemoryWriteScope::Global => MemoryStorageScope::Global,
+        };
+
+        let storage = self.storage.clone();
+        let db_path = self.db_path.clone();
+        let embed_dims = self.embed_config.as_ref().map_or(1024, |ec| ec.dimensions);
+        // A single-line note normalizes to a bare `## <note>` heading, and the
+        // search pipeline deliberately drops heading-only chunks as scaffolding
+        // (`search::is_structurally_empty`). Written as-is it would be durable
+        // but permanently unretrievable, so give such a note a body. This is a
+        // property of the write path, not of `normalize_memory_content`, which
+        // `/flush` also uses for multi-line summaries that always have a body.
+        let payload = with_body_if_heading_only(content);
+        let content = payload;
+        // Measured before the move: the closure owns the string.
+        let bytes_written = content.trim().len();
+
+        // `append_to_memory` and `reindex_file` are both blocking (file I/O and
+        // SQLite), so they run on one blocking task: the note must be indexed
+        // before the tool reports success, or a same-turn `memory_search` would
+        // miss it whenever the watcher is disabled.
+        let result = tokio::task::spawn_blocking(move || {
+            storage.append_to_memory(storage_scope, &content)?;
+            let path = match storage_scope {
+                MemoryStorageScope::Workspace => storage.workspace_memory_file(),
+                MemoryStorageScope::Global => storage.global_memory_file(),
+            };
+            let source = storage.classify_source(&path);
+            let indexed = MemoryIndex::open_or_create(
+                &db_path,
+                storage.clone(),
+                alnair_config_types::MemoryIndexConfig::default(),
+                embed_dims,
+            )
+            .and_then(|mut index| index.reindex_file(&path, source))
+            .map(|_| ())
+            .is_ok();
+            Ok::<_, std::io::Error>((path, indexed))
+        })
+        .await
+        .map_err(|e| -> Box<dyn std::error::Error + Send + Sync> {
+            Box::new(std::io::Error::other(format!(
+                "memory append task failed: {e}"
+            )))
+        })?;
+
+        let (path, indexed) = result?;
+        Ok(alnair_tools::types::memory_backend::AppendOutcome {
+            path: path.to_string_lossy().into_owned(),
+            bytes_written,
+            indexed,
+        })
+    }
+
+    fn is_consolidating(&self) -> bool {
+        // `try_acquire` returns `Some(_)` when the lock was free and is now
+        // taken; we immediately release it, so this is a pure probe. A dream
+        // pass that is mid-flight holds the lock, and appending into a file it
+        // is about to rewrite would lose the note.
+        let lock = super::dream_lock::DreamLock::new(self.storage.workspace_dir());
+        match lock.try_acquire(self.stale_claim_secs.max(1) as u64) {
+            Ok(Some(prior)) => {
+                let _ = lock.rollback(prior);
+                false
+            }
+            Ok(None) => true,
+            // A probe failure must not block writes: the dream lock is advisory
+            // and losing a write is worse than a rare interleave.
+            Err(_) => false,
+        }
+    }
+}
+
+/// Ensure a note that normalizes to a bare heading still has a body.
+///
+/// `MemoryStorage::append_to_memory` wraps a single-line note as `## <note>`
+/// (see `normalize_memory_content` rule 2). That chunk is *heading-only*, and
+/// `search::is_structurally_empty` filters those out as scaffolding — so a note
+/// written that way would never come back from `memory_search`.
+///
+/// The fix belongs here rather than in `normalize_memory_content`, because that
+/// function also serves `/flush`, whose input is a multi-line summary that
+/// already has a body and whose shape must not change.
+fn with_body_if_heading_only(content: &str) -> String {
+    /// First line longer than this makes `normalize_memory_content` fall back to
+    /// a generic `## Note` heading (its rule 4).
+    const SHORT_LINE: usize = 80;
+
+    let trimmed = content.trim();
+    // Multi-line notes keep their own structure; `normalize_memory_content`
+    // turns the first line into the heading and the rest into the body.
+    if trimmed.contains('\n') {
+        return trimmed.to_string();
+    }
+    // Already an explicit heading: leave the user's structure alone. A heading
+    // with no body is the caller's choice.
+    if trimmed.starts_with('#') {
+        return trimmed.to_string();
+    }
+    if trimmed.chars().count() <= SHORT_LINE {
+        // `## <note>` plus the note as its body.
+        format!("{trimmed}\n\n{trimmed}")
+    } else {
+        // Too long to be a heading: a short heading keeps the note intact as the
+        // body instead of duplicating it.
+        format!("Note\n\n{trimmed}")
     }
 }
 
@@ -1474,6 +1613,236 @@ mod index_embedding_tests {
             missing_after.len(),
             missing.len() - 1,
             "one fewer chunk should be missing after embedding"
+        );
+    }
+
+    // ---------------------------------------------------------------------
+    // MemoryWriteBackend
+    // ---------------------------------------------------------------------
+
+    use crate::backend::{EndpointScopedCredentials, MemoryBackendImpl, MemoryBackendParams};
+    use crate::init_sqlite_vec;
+    use alnair_config_types::MemorySearchConfig;
+    use alnair_tools::types::memory_backend::{
+        MemoryBackend as _, MemoryWriteBackend, MemoryWriteScope,
+    };
+    use tempfile::TempDir;
+
+    fn write_test_storage(tmp: &TempDir) -> MemoryStorage {
+        let global = tmp.path().join("memory");
+        let workspace = global.join("test_ws");
+        MemoryStorage::with_paths(global, workspace)
+    }
+
+    fn write_test_params(session_id: &str) -> MemoryBackendParams {
+        MemoryBackendParams {
+            session_id: session_id.to_string(),
+            embed_config: None,
+            embed_base_url: String::new(),
+            embed_api_key: None,
+            search_config: MemorySearchConfig::default(),
+            watcher: None,
+            stale_claim_secs: 60,
+            search_source: "tool",
+            embedding_credentials: EndpointScopedCredentials::none(),
+        }
+    }
+
+    /// The note must land in the workspace `MEMORY.md` and be searchable by a
+    /// *different* backend over the same directory — that is the whole point of
+    /// durable memory.
+    #[tokio::test]
+    async fn append_writes_the_workspace_memory_file() {
+        let tmp = TempDir::new().unwrap();
+        init_sqlite_vec();
+        let storage = write_test_storage(&tmp);
+        let params = write_test_params("writer-session");
+        let backend = MemoryBackendImpl::from_session_params(storage.clone(), &params);
+
+        let outcome = backend
+            .append(
+                MemoryWriteScope::Workspace,
+                "Decision: config writers use replace_file",
+            )
+            .await
+            .unwrap();
+
+        let expected = storage.workspace_memory_file();
+        assert_eq!(
+            outcome.path,
+            expected.to_string_lossy(),
+            "append must report the file it wrote"
+        );
+        assert!(outcome.bytes_written > 0, "bytes_written must be reported");
+        assert!(
+            expected.exists(),
+            "workspace MEMORY.md must exist after append"
+        );
+
+        let written = std::fs::read_to_string(&expected).unwrap();
+        assert!(
+            written.contains("config writers use replace_file"),
+            "note must be in the file, got: {written}"
+        );
+    }
+
+    /// A second session (fresh backend, same storage root) must find the note.
+    /// This is the cross-session contract, and it must hold with no watcher.
+    #[tokio::test]
+    async fn a_note_stored_by_one_session_is_searchable_from_another() {
+        let tmp = TempDir::new().unwrap();
+        init_sqlite_vec();
+        let storage = write_test_storage(&tmp);
+
+        let writer = MemoryBackendImpl::from_session_params(
+            storage.clone(),
+            &write_test_params("session-a"),
+        );
+        writer
+            .append(
+                MemoryWriteScope::Workspace,
+                "Gotcha: dirs::home_dir ignores HOME on Windows",
+            )
+            .await
+            .unwrap();
+        drop(writer);
+
+        let reader = MemoryBackendImpl::from_session_params(
+            storage.clone(),
+            &write_test_params("session-b"),
+        );
+        // The index must already contain the chunk: `append` reindexes inline, so
+        // a second backend opening the same database sees it with no watcher.
+        assert!(
+            reader.total_chunks().unwrap() > 0,
+            "append must leave an indexed chunk behind; file={:?}",
+            std::fs::read_to_string(storage.workspace_memory_file()).unwrap_or_default()
+        );
+        let results = reader
+            .search("dirs home_dir Windows", 5, 0.0)
+            .await
+            .unwrap();
+        assert!(
+            !results.is_empty(),
+            "a later session must retrieve the note without a watcher"
+        );
+        assert!(
+            results[0].snippet.contains("home_dir"),
+            "the retrieved chunk must be the note, got: {:?}",
+            results[0].snippet
+        );
+    }
+
+    /// Global scope writes the global `MEMORY.md`, not the workspace one.
+    #[tokio::test]
+    async fn append_global_targets_the_global_file() {
+        let tmp = TempDir::new().unwrap();
+        init_sqlite_vec();
+        let storage = write_test_storage(&tmp);
+        let backend = MemoryBackendImpl::from_session_params(
+            storage.clone(),
+            &write_test_params("global-writer"),
+        );
+
+        let outcome = backend
+            .append(MemoryWriteScope::Global, "Prefer tabs everywhere")
+            .await
+            .unwrap();
+
+        assert_eq!(
+            outcome.path,
+            storage.global_memory_file().to_string_lossy(),
+            "global scope must write the global file"
+        );
+        assert!(
+            !storage.workspace_memory_file().exists(),
+            "workspace file must be untouched"
+        );
+    }
+
+    /// Repeated appends accumulate; they do not replace.
+    #[tokio::test]
+    async fn appends_accumulate() {
+        let tmp = TempDir::new().unwrap();
+        init_sqlite_vec();
+        let storage = write_test_storage(&tmp);
+        let backend = MemoryBackendImpl::from_session_params(
+            storage.clone(),
+            &write_test_params("accumulate"),
+        );
+
+        backend
+            .append(MemoryWriteScope::Workspace, "First fact")
+            .await
+            .unwrap();
+        backend
+            .append(MemoryWriteScope::Workspace, "Second fact")
+            .await
+            .unwrap();
+
+        let written = std::fs::read_to_string(storage.workspace_memory_file()).unwrap();
+        assert!(written.contains("First fact"), "first note lost: {written}");
+        assert!(
+            written.contains("Second fact"),
+            "second note missing: {written}"
+        );
+    }
+
+    /// The note is indexed inline, so a same-process search sees it even when no
+    /// watcher exists. `indexed: true` is what the tool reports to the model.
+    #[tokio::test]
+    async fn append_reports_indexed_when_no_watcher_is_configured() {
+        let tmp = TempDir::new().unwrap();
+        init_sqlite_vec();
+        let storage = write_test_storage(&tmp);
+        let backend =
+            MemoryBackendImpl::from_session_params(storage, &write_test_params("indexed-check"));
+
+        let outcome = backend
+            .append(MemoryWriteScope::Workspace, "Indexed inline fact")
+            .await
+            .unwrap();
+        assert!(
+            outcome.indexed,
+            "the note must be indexed by the append itself"
+        );
+    }
+
+    /// A free dream lock means no consolidation is running.
+    #[tokio::test]
+    async fn not_consolidating_when_the_lock_is_free() {
+        let tmp = TempDir::new().unwrap();
+        init_sqlite_vec();
+        let storage = write_test_storage(&tmp);
+        std::fs::create_dir_all(storage.workspace_dir()).unwrap();
+        let backend =
+            MemoryBackendImpl::from_session_params(storage, &write_test_params("lock-free"));
+        assert!(!backend.is_consolidating());
+    }
+
+    /// A lock held by a live process means consolidation is running, and the
+    /// write path must refuse rather than append into a file about to be
+    /// rewritten.
+    #[tokio::test]
+    async fn consolidating_while_a_live_lock_is_held() {
+        let tmp = TempDir::new().unwrap();
+        init_sqlite_vec();
+        let storage = write_test_storage(&tmp);
+        std::fs::create_dir_all(storage.workspace_dir()).unwrap();
+        let backend = MemoryBackendImpl::from_session_params(
+            storage.clone(),
+            &write_test_params("lock-held"),
+        );
+
+        // Acquire and keep the lock (this process is alive, so the lock is not
+        // considered stale).
+        let lock = crate::dream_lock::DreamLock::new(storage.workspace_dir());
+        let prior = lock.try_acquire(3600).unwrap();
+        assert!(prior.is_some(), "precondition: the lock must be acquirable");
+
+        assert!(
+            backend.is_consolidating(),
+            "a held lock must read as consolidating"
         );
     }
 }

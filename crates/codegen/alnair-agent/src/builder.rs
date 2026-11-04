@@ -86,6 +86,9 @@ pub struct AgentBuilder {
     session_env: Option<Arc<HashMap<String, String>>>,
     state_path: Option<PathBuf>,
     memory_backend: Option<Arc<dyn alnair_tools::types::memory_backend::MemoryBackend>>,
+    /// Write half of the memory backend. `None` disables `memory_store` while
+    /// leaving the read tools usable.
+    memory_write_backend: Option<Arc<dyn alnair_tools::types::memory_backend::MemoryWriteBackend>>,
     web_search_config: alnair_tools::implementations::web_search::WebSearchConfig,
     /// When true, web search and X search are sent as native server-side
     /// tools for execution by the agentic sampler, instead of being
@@ -213,6 +216,7 @@ impl AgentBuilder {
             session_env: None,
             state_path: None,
             memory_backend: None,
+            memory_write_backend: None,
             web_search_config: Default::default(),
             backend_search: false,
             web_fetch_config: Default::default(),
@@ -384,6 +388,20 @@ impl AgentBuilder {
         backend: Arc<dyn alnair_tools::types::memory_backend::MemoryBackend>,
     ) -> Self {
         self.memory_backend = Some(backend);
+        self
+    }
+    /// Set the memory *write* backend, enabling the `memory_store` tool.
+    ///
+    /// Separate from [`Self::with_memory_backend`] on purpose: a session can read
+    /// memory without being allowed to write it (the read trait is also handed to
+    /// the first-turn injection path, which must never mutate durable state).
+    /// Setting this without a read backend has no effect, because `memory_store`
+    /// is only pushed inside the `memory_backend.is_some()` gate.
+    pub fn with_memory_write_backend(
+        mut self,
+        backend: Arc<dyn alnair_tools::types::memory_backend::MemoryWriteBackend>,
+    ) -> Self {
+        self.memory_write_backend = Some(backend);
         self
     }
     /// Set a custom filesystem backend for the ToolBridge.
@@ -680,6 +698,14 @@ impl AgentBuilder {
                 tool_config
                     .tools
                     .push((&memory::get_tool::MemoryGetImpl).into());
+                // The write tool needs its own backend: the read trait is
+                // documented as read-only and is also handed to the first-turn
+                // injection path, which must not be able to mutate memory.
+                if self.memory_write_backend.is_some() {
+                    tool_config
+                        .tools
+                        .push((&memory::store_tool::MemoryStoreImpl).into());
+                }
             }
             if self.web_search_config.is_enabled() {
                 use alnair_tools::implementations::alnair;
@@ -715,9 +741,13 @@ impl AgentBuilder {
                 "{alnair_ns}:{}",
                 alnair_tools::implementations::memory::MEMORY_GET_TOOL_NAME
             );
-            tool_config
-                .tools
-                .retain(|tc| tc.id != mem_search_id && tc.id != mem_get_id);
+            let mem_store_id = format!(
+                "{alnair_ns}:{}",
+                alnair_tools::implementations::memory::MEMORY_STORE_TOOL_NAME
+            );
+            tool_config.tools.retain(|tc| {
+                tc.id != mem_search_id && tc.id != mem_get_id && tc.id != mem_store_id
+            });
         }
         if !self.ask_user_question_enabled {
             let ask_user_id = format!(
@@ -1002,6 +1032,7 @@ impl AgentBuilder {
                 skills: skill_info.clone(),
                 state_path,
                 memory_backend: self.memory_backend,
+                memory_write_backend: self.memory_write_backend,
                 web_search_config: self.web_search_config,
                 web_fetch_config: self.web_fetch_config,
                 web_target: self.web_target,
@@ -1743,6 +1774,125 @@ mod tests {
         .build()
         .await
         .unwrap()
+    }
+
+    /// `memory_store` must appear exactly when a *write* backend is present, and
+    /// never otherwise. The read tools gate on the read backend, so the three
+    /// combinations below are the whole truth table that matters:
+    ///
+    /// - no read backend  → none of the three (memory is off)
+    /// - read only        → search + get, no store
+    /// - read + write     → all three
+    #[tokio::test]
+    async fn memory_store_is_gated_on_the_write_backend() {
+        use alnair_tools::computer::local::LocalTerminalBackend;
+        use alnair_tools::notification::ToolNotificationHandle;
+        use alnair_tools::types::memory_backend::{MemoryBackend, MemoryWriteBackend};
+        use std::sync::Arc;
+
+        /// Minimal read backend; never called by these assertions.
+        struct NoopRead;
+        #[async_trait::async_trait]
+        impl MemoryBackend for NoopRead {
+            async fn search(
+                &self,
+                _q: &str,
+                _max: usize,
+                _min: f64,
+            ) -> Result<
+                Vec<alnair_tools::types::memory_backend::MemorySearchResult>,
+                Box<dyn std::error::Error + Send + Sync>,
+            > {
+                Ok(vec![])
+            }
+            fn get(
+                &self,
+                _p: &str,
+                _f: Option<usize>,
+                _l: Option<usize>,
+            ) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
+                Ok(String::new())
+            }
+            fn total_chunks(&self) -> Result<usize, Box<dyn std::error::Error + Send + Sync>> {
+                Ok(0)
+            }
+        }
+
+        /// Minimal write backend; never called by these assertions.
+        struct NoopWrite;
+        #[async_trait::async_trait]
+        impl MemoryWriteBackend for NoopWrite {
+            async fn append(
+                &self,
+                _scope: alnair_tools::types::memory_backend::MemoryWriteScope,
+                _content: &str,
+            ) -> Result<
+                alnair_tools::types::memory_backend::AppendOutcome,
+                Box<dyn std::error::Error + Send + Sync>,
+            > {
+                Ok(alnair_tools::types::memory_backend::AppendOutcome {
+                    path: String::new(),
+                    bytes_written: 0,
+                    indexed: true,
+                })
+            }
+        }
+        async fn names(
+            read: Option<Arc<dyn MemoryBackend>>,
+            write: Option<Arc<dyn MemoryWriteBackend>>,
+        ) -> Vec<String> {
+            let mut builder = AgentBuilder::new(
+                std::env::temp_dir(),
+                Arc::new(LocalTerminalBackend::new()),
+                ToolNotificationHandle::noop(),
+            )
+            .from_definition(crate::config::AgentDefinition::default_alnair());
+            if let Some(read) = read {
+                builder = builder.with_memory_backend(read);
+            }
+            if let Some(write) = write {
+                builder = builder.with_memory_write_backend(write);
+            }
+            builder
+                .build()
+                .await
+                .unwrap()
+                .tool_definitions()
+                .await
+                .into_iter()
+                .map(|d| d.function.name)
+                .filter(|n| n.starts_with("memory_"))
+                .collect()
+        }
+
+        // Memory off: none of the three tools, so a non-opted-in user sees a
+        // byte-identical tool list to before this feature existed.
+        assert!(
+            names(None, None).await.is_empty(),
+            "memory off must not advertise any memory tool"
+        );
+
+        // Read-only memory: search + get, but no write path.
+        let mut read_only = names(Some(Arc::new(NoopRead)), None).await;
+        read_only.sort();
+        assert_eq!(
+            read_only,
+            vec!["memory_get".to_string(), "memory_search".to_string()],
+            "a read-only memory session must not advertise memory_store"
+        );
+
+        // Read + write: all three.
+        let mut full = names(Some(Arc::new(NoopRead)), Some(Arc::new(NoopWrite))).await;
+        full.sort();
+        assert_eq!(
+            full,
+            vec![
+                "memory_get".to_string(),
+                "memory_search".to_string(),
+                "memory_store".to_string()
+            ],
+            "a write backend must add memory_store and nothing else"
+        );
     }
     /// Build a default agent under a session allowlist + the agent's own
     /// allowlist, returning the effective (short) tool names.

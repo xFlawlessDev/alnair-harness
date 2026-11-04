@@ -1541,6 +1541,25 @@ impl SessionActor {
                 vec![],
                 vec![],
             ),
+            // Without this arm the catch-all below titles a durable write "Tool
+            // call", so the user sees a memory note being persisted with no
+            // indication of what was written or where it went.
+            ToolInput::MemoryStore(ms) => {
+                // First line only: the note can be up to MAX_STORE_CHARS long,
+                // and a title is a one-line summary.
+                let first_line = ms.content.lines().next().unwrap_or_default().trim();
+                let end = first_line
+                    .char_indices()
+                    .nth(60)
+                    .map_or(first_line.len(), |(i, _)| i);
+                let scope = ms.scope.as_deref().unwrap_or("workspace");
+                (
+                    format!("Memory store ({scope}): \"{}\"", &first_line[..end]),
+                    acp::ToolKind::Edit,
+                    vec![],
+                    vec![],
+                )
+            }
             ToolInput::HashlineEdit(he) => (
                 format!("Edit `{}`", he.file_path),
                 acp::ToolKind::Edit,

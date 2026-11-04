@@ -45,7 +45,7 @@ impl SessionActor {
         bridge: &alnair_tools::bridge::ToolBridge,
     ) -> Result<(), String> {
         use alnair_tools::implementations::memory::{
-            MEMORY_GET_TOOL_NAME, MEMORY_SEARCH_TOOL_NAME,
+            MEMORY_GET_TOOL_NAME, MEMORY_SEARCH_TOOL_NAME, MEMORY_STORE_TOOL_NAME,
         };
 
         bridge
@@ -64,6 +64,14 @@ impl SessionActor {
             )
             .await
             .map_err(|e| format!("failed to register memory_get: {e}"))?;
+        bridge
+            .register_mcp_tools(
+                MEMORY_STORE_TOOL_NAME.to_owned(),
+                alnair_tools::implementations::memory::store_tool::MemoryStoreImpl,
+                None,
+            )
+            .await
+            .map_err(|e| format!("failed to register memory_store: {e}"))?;
         Ok(())
     }
 

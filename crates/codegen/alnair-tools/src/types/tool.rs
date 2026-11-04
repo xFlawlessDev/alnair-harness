@@ -87,6 +87,10 @@ pub enum ToolKind {
     Skill,
     MemorySearch,
     MemoryGet,
+    /// Durable write into cross-session memory. Its own kind, not `MemorySearch`:
+    /// it is the only memory tool that mutates state, so it must gate as an Edit
+    /// and must never be counted as read-only.
+    MemoryStore,
     Task,
     /// Fan-out sibling of [`ToolKind::Task`]: its own kind because
     /// `TemplateRenderer`'s `by_kind` map holds ONE tool name per kind, so

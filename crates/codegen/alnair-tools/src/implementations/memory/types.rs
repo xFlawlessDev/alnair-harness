@@ -51,3 +51,28 @@ pub struct MemoryGetOutput {
     /// File content (optionally line-limited).
     pub content: String,
 }
+
+/// Input for the `memory_store` tool.
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
+pub struct MemoryStoreInput {
+    /// The note to remember. One fact per call: a decision, a convention, a
+    /// non-obvious gotcha, or where something lives.
+    ///
+    /// Write it so a future session can act on it without re-deriving the
+    /// context — name the file, the symbol, or the command involved.
+    pub content: String,
+    /// Where to store it. `workspace` (default) is scoped to this project;
+    /// `global` is shared across every project.
+    ///
+    /// Prefer `workspace`: a project-specific decision stored globally leaks
+    /// into unrelated repositories.
+    #[serde(default)]
+    pub scope: Option<String>,
+}
+
+/// Output schema for `memory_store` (used for JSON Schema generation only).
+#[derive(Debug, JsonSchema)]
+pub struct MemoryStoreOutput {
+    /// Confirmation naming the file that received the note.
+    pub result: String,
+}

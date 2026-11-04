@@ -583,6 +583,9 @@ pub(crate) async fn spawn_session_actor(
     let mut memory_backend_params_for_session: Option<crate::session::memory::MemoryBackendParams> =
         None;
     let mut memory_search_counter: Option<std::sync::Arc<std::sync::atomic::AtomicU64>> = None;
+    let mut memory_write_backend_for_spec: Option<
+        std::sync::Arc<dyn alnair_tools::types::memory_backend::MemoryWriteBackend>,
+    > = None;
     let memory_backend_for_spec: Option<
         std::sync::Arc<dyn alnair_tools::types::memory_backend::MemoryBackend>,
     > = if let Some(ref storage) = memory_storage_for_session {
@@ -645,8 +648,14 @@ pub(crate) async fn spawn_session_actor(
         );
         memory_search_counter = Some(backend.search_counter.clone());
         let watcher_started = params.watcher.is_some();
+        // One concrete backend, two trait objects. The read half is what the
+        // injection and compaction-recovery paths receive; the write half is
+        // what `memory_store` receives. Keeping them separate is what makes
+        // "read paths cannot write" a type-level fact rather than a convention.
+        let backend = std::sync::Arc::new(backend);
+        memory_write_backend_for_spec = Some(backend.clone());
         let backend: std::sync::Arc<dyn alnair_tools::types::memory_backend::MemoryBackend> =
-            std::sync::Arc::new(backend);
+            backend;
         memory_backend_params_for_session = Some(params);
         if watcher_config.enabled && !watcher_started {
             tracing::warn!(
@@ -725,6 +734,7 @@ pub(crate) async fn spawn_session_actor(
             .as_ref()
             .map(|s| s.workspace_memory_file().to_string_lossy().into_owned()),
         memory_backend: memory_backend_for_spec,
+        memory_write_backend: memory_write_backend_for_spec,
         web_search_config: web_search_config.clone(),
         backend_search: backend_tools_enabled,
         web_fetch_config: web_fetch_config.clone(),

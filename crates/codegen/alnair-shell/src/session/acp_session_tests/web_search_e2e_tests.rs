@@ -66,6 +66,7 @@ async fn web_toolset(
         skills: vec![],
         state_path: std::env::temp_dir().join("alnair-web-provider-target/state.json"),
         memory_backend: None,
+        memory_write_backend: None,
         web_search_config: search,
         web_fetch_config: fetch,
         web_target: target,

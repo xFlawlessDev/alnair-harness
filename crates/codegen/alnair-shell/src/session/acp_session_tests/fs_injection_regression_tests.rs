@@ -54,6 +54,7 @@ async fn tool_bridge_routes_writes_through_injected_fs() {
         skills: vec![],
         state_path: std::env::temp_dir().join("alnair-test-fs/tool_state.json"),
         memory_backend: None,
+        memory_write_backend: None,
         web_search_config: Default::default(),
         web_fetch_config: Default::default(),
         web_target: None,

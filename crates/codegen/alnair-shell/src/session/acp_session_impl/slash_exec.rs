@@ -732,11 +732,19 @@ impl SessionActor {
                                 );
                             *self.memory.search_counter.borrow_mut() =
                                 Some(backend.search_counter.clone());
+                            let backend = std::sync::Arc::new(backend);
+                            // Two trait objects over one backend: the read half
+                            // feeds the read tools and the injection paths, the
+                            // write half feeds `memory_store`.
+                            let write_backend: std::sync::Arc<
+                                dyn alnair_tools::types::memory_backend::MemoryWriteBackend,
+                            > = backend.clone();
                             let backend: std::sync::Arc<
                                 dyn alnair_tools::types::memory_backend::MemoryBackend,
-                            > = std::sync::Arc::new(backend);
+                            > = backend;
                             let bridge = self.agent.borrow().tool_bridge().clone();
                             bridge.update_resource(backend.clone()).await;
+                            bridge.update_resource(write_backend).await;
                             if let Err(e) = self.register_memory_tools(&bridge).await {
                                 tracing::warn!(error = %e, "memory tool registration failed during toggle");
                             }
@@ -757,6 +765,11 @@ impl SessionActor {
                         alnair_tools::implementations::memory::MEMORY_GET_TOOL_NAME,
                     ) {
                         tracing::debug!("memory_get tool was not registered during unregister");
+                    }
+                    if !bridge.unregister_tool_by_name(
+                        alnair_tools::implementations::memory::MEMORY_STORE_TOOL_NAME,
+                    ) {
+                        tracing::debug!("memory_store tool was not registered during unregister");
                     }
                     *self.memory.storage.borrow_mut() = None;
                     *self.memory.search_counter.borrow_mut() = None;

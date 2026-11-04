@@ -161,6 +161,7 @@ dependencies = [
  "alnair-token-estimation",
  "alnair-tool-types",
  "alnair-tools",
+ "async-trait",
  "chrono",
  "dirs 6.0.0",
  "dunce",

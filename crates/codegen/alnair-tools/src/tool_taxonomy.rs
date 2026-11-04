@@ -55,6 +55,7 @@ impl ToolKind {
             ToolKind::Skill => "Skill",
             ToolKind::MemorySearch => "Memory Search",
             ToolKind::MemoryGet => "Memory Read",
+            ToolKind::MemoryStore => "Memory Write",
             ToolKind::Task => "Subagent",
             ToolKind::AgentSwarm => "Subagent Swarm",
             ToolKind::EnterPlan => "Enter Plan Mode",
@@ -103,6 +104,7 @@ impl ToolKind {
             | ToolKind::UseTool
             | ToolKind::Monitor
             | ToolKind::GoalUpdate
+            | ToolKind::MemoryStore
             | ToolKind::Other => false,
         }
     }

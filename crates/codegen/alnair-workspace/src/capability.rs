@@ -90,6 +90,7 @@ pub(crate) const ALL_TOOL_KINDS: &[ToolKind] = &[
     ToolKind::Skill,
     ToolKind::MemorySearch,
     ToolKind::MemoryGet,
+    ToolKind::MemoryStore,
     ToolKind::Task,
     ToolKind::AgentSwarm,
     ToolKind::EnterPlan,
@@ -140,7 +141,7 @@ pub(crate) fn kind_allowed(mode: CapabilityMode, kind: ToolKind) -> bool {
         Lsp | ListDir | List => matches!(mode, M::ReadOnly | M::ReadWrite | M::Execute),
 
         // Edit class.
-        Edit | Write | Delete | Move | DeployApp => matches!(mode, M::ReadWrite),
+        Edit | Write | Delete | Move | DeployApp | MemoryStore => matches!(mode, M::ReadWrite),
 
         // Bash / shell.
         Execute => matches!(mode, M::Execute),
@@ -237,6 +238,38 @@ mod tests {
                 "read", "search", "inspect", "edit", "write", "bash", "bg", "plan", "ask", "other"
             ]
         );
+    }
+
+    /// `memory_store` writes durable state, so it must gate exactly as the other
+    /// edit-class kinds do: allowed in `ReadWrite` and `All`, dropped in
+    /// `ReadOnly` and `Execute`. A read-only subagent that could write memory
+    /// would be able to poison every future session in the workspace.
+    #[test]
+    fn memory_store_gates_as_an_edit() {
+        let cfg = make_cfg(vec![
+            test_support::tc("search", Some(ToolKind::MemorySearch)),
+            test_support::tc("get", Some(ToolKind::MemoryGet)),
+            test_support::tc("store", Some(ToolKind::MemoryStore)),
+        ]);
+        let ids = |mode: CapabilityMode| -> Vec<String> {
+            mode.filter(&cfg).tools.into_iter().map(|t| t.id).collect()
+        };
+
+        assert_eq!(
+            ids(CapabilityMode::ReadOnly),
+            vec!["search", "get"],
+            "a read-only agent must not be able to write memory"
+        );
+        assert_eq!(
+            ids(CapabilityMode::Execute),
+            vec!["search", "get"],
+            "an execute agent must not be able to write memory"
+        );
+        assert_eq!(
+            ids(CapabilityMode::ReadWrite),
+            vec!["search", "get", "store"]
+        );
+        assert_eq!(ids(CapabilityMode::All), vec!["search", "get", "store"]);
     }
 
     #[test]
