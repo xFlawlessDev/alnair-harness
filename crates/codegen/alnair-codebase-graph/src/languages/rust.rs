@@ -46,6 +46,19 @@ pub fn rust_lang() -> TSLanguageConfig {
         (function_item
             name: (identifier) @name.definition.function) @definition.function
         
+        ; Foreign function declarations: `extern "C" { fn read(...); }`.
+        ;
+        ; An FFI binding is a real declaration that call sites resolve to, and
+        ; omitting it produced the tool's one true false negative in the
+        ; retrieval benchmark: `CFPreferencesAppValueIsForced` exists, is
+        ; exported, and was answered "no such symbol". The node is
+        ; `function_signature_item` inside an `extern` block — distinct from
+        ; `function_item`, which is why the rule above never matched it.
+        (foreign_mod_item
+            (declaration_list
+                (function_signature_item
+                    name: (identifier) @name.definition.function))) @definition.function
+        
         ; trait definitions
         (trait_item
             name: (type_identifier) @name.definition.interface) @definition.interface

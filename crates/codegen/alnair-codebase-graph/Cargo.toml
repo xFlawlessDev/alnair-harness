@@ -20,6 +20,10 @@ path = "src/bin/bench_index.rs"
 name = "bench_file_listing"
 path = "src/bin/bench_file_listing.rs"
 
+[[bin]]
+name = "codebase_bench"
+path = "src/bin/codebase_bench.rs"
+
 [dependencies]
 # Path utilities
 dunce = { workspace = true }
