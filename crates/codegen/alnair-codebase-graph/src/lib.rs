@@ -77,7 +77,9 @@ pub mod interner;
 pub mod languages;
 pub mod manager;
 pub mod navigation;
+pub mod ranking;
 pub mod scope_graph;
+pub mod search;
 pub mod types;
 
 // Re-exports for convenient access
@@ -92,11 +94,18 @@ pub use manager::{
     load_index, save_index, save_index_async, try_lock,
 };
 pub use navigation::{Location, NavigationError, NavigationResult, Navigator};
+pub use ranking::{RankOptions, RankedHit, rank_hits};
 pub use scope_graph::{
     LocalDef, LocalImport, LocalScope, NodeKind, QueryVersion, Reference, ScopeGraph,
     ScopeGraphIndex, ScopeGraphResult, Symbol, SymbolId, build_scope_graph, extract_symbols_fast,
 };
-pub use types::{FileMeta, IndexStats, Position, Range, SymbolAlias, SymbolOccurrence};
+pub use search::{
+    DEFAULT_SEARCH_LIMIT, DEFAULT_SITES_PER_SYMBOL, MAX_SEARCH_LIMIT, MatchKind, SymbolMatch,
+    SymbolQuery, SymbolSearch, SymbolSite,
+};
+pub use types::{
+    FileMeta, IndexCoverage, IndexStats, Position, Range, SymbolAlias, SymbolOccurrence,
+};
 
 // String interning for memory-efficient storage
 pub use interner::{StringId, StringInterner};

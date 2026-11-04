@@ -32,6 +32,45 @@ impl IndexStats {
     }
 }
 
+/// What an index actually covers.
+///
+/// A search that finds nothing is ambiguous: the symbol may not exist, or the
+/// file that defines it may be outside what the index can read. This type is
+/// the second half of that answer — the languages the index parses and how much
+/// it has parsed — so a caller can say "not in the index" instead of "does not
+/// exist".
+///
+/// Deliberately reports only what is known. Files skipped for being binary,
+/// empty, larger than [`crate::MAX_INDEXABLE_FILE_SIZE`], or written in an
+/// unlisted language are *not* counted anywhere, so the absence of a language
+/// from [`Self::languages`] is the honest signal that its files are invisible
+/// to search.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct IndexCoverage {
+    /// Files currently indexed.
+    pub files: usize,
+    /// Symbol definitions currently indexed.
+    pub definitions: usize,
+    /// Symbol references currently indexed.
+    pub references: usize,
+    /// Language ids the index can parse, sorted (`go`, `javascript`, …).
+    pub languages: Vec<String>,
+}
+
+impl IndexCoverage {
+    /// Build from stats plus the registry's language ids.
+    pub fn new(stats: IndexStats, mut languages: Vec<String>) -> Self {
+        languages.sort();
+        languages.dedup();
+        Self {
+            files: stats.files,
+            definitions: stats.definitions,
+            references: stats.references,
+            languages,
+        }
+    }
+}
+
 /// A symbol with its line number (1-indexed).
 /// Uses Arc<str> to avoid extra allocation when merging into index.
 #[derive(Debug, Clone, PartialEq, Eq)]

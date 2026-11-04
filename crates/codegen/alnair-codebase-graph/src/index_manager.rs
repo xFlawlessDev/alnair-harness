@@ -145,6 +145,18 @@ pub enum IndexCommand {
         context_file: Option<PathBuf>,
         response_tx: tokio::sync::oneshot::Sender<Vec<SymbolLocation>>,
     },
+    /// Find symbols by name fragment, ranked, with their sites.
+    ///
+    /// Runs inside the actor rather than taking a snapshot: a snapshot pins an
+    /// `Arc` of the whole index, and the next file event then pays a full
+    /// copy-on-write clone. Every direct-query command exists to avoid exactly
+    /// that.
+    SearchSymbols {
+        query: crate::search::SymbolQuery,
+        response_tx: tokio::sync::oneshot::Sender<crate::search::SymbolSearch>,
+    },
+    /// What the index covers: stats plus the languages it can parse.
+    GetCoverage(tokio::sync::oneshot::Sender<crate::types::IndexCoverage>),
     /// Background refresh: reindex stale/new files discovered in background
     BackgroundRefresh {
         /// Files that need reindexing (stale or new)
@@ -330,6 +342,31 @@ impl IndexManagerHandle {
     }
 
     // Async Query APIs
+
+    /// Find symbols by name fragment, ranked, with their best sites (async).
+    ///
+    /// Answers without taking a snapshot, so it never pins an `Arc` of the whole
+    /// index — see [`IndexCommand::SearchSymbols`].
+    pub async fn search_symbols(
+        &self,
+        query: crate::search::SymbolQuery,
+    ) -> Result<crate::search::SymbolSearch, channel::SendError<IndexCommand>> {
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        self.command_tx.send(IndexCommand::SearchSymbols {
+            query,
+            response_tx: tx,
+        })?;
+        Ok(rx.await.expect("IndexManager dropped before responding"))
+    }
+
+    /// What the index covers: stats plus the languages it can parse.
+    ///
+    /// `None` when the actor has stopped.
+    pub fn get_coverage(&self) -> Option<crate::types::IndexCoverage> {
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        self.command_tx.send(IndexCommand::GetCoverage(tx)).ok()?;
+        rx.blocking_recv().ok()
+    }
 
     /// Go to definition at the given position (async).
     ///
@@ -943,6 +980,22 @@ impl IndexManager {
                 let _ = response_tx.send(self.index.has_definition(&symbol));
                 true
             }
+            IndexCommand::SearchSymbols { query, response_tx } => {
+                let _ = response_tx.send(self.index.search_symbols(&query));
+                true
+            }
+            IndexCommand::GetCoverage(response_tx) => {
+                let (files, definitions, references) = self.index.stats();
+                let _ = response_tx.send(crate::types::IndexCoverage::new(
+                    IndexStats::new(files, definitions, references),
+                    self.registry
+                        .all_configs()
+                        .iter()
+                        .map(|config| config.primary_language_id().to_string())
+                        .collect(),
+                ));
+                true
+            }
             IndexCommand::Shutdown => {
                 tracing::debug!("Shutdown requested");
                 false
@@ -1109,10 +1162,12 @@ impl IndexManager {
         for path in stale_files {
             let path_ref = Path::new(&path);
             if self.registry.is_supported(path_ref) {
-                self.reindex_file(path_ref);
+                // `stale_files` was computed from the cache's own metadata, so
+                // the guard inside `reindex_file` normally short-circuits here
+                // only when the file changed back between the scan and now.
+                let _ = self.reindex_file(path_ref);
             }
         }
-
         tracing::info!(
             stale = stale_count,
             deleted = deleted_count,
@@ -1135,8 +1190,11 @@ impl IndexManager {
             match kind {
                 FileEventKind::Created | FileEventKind::Modified => {
                     if self.should_index(&path, &root) {
-                        self.reindex_file(&path);
-                        self.updates_processed += 1;
+                        // Only a file that actually changed counts as an update;
+                        // a duplicate event for an unchanged file is a no-op, and
+                        // counting it would make the cache-save throttle and the
+                        // stats disagree with the work done.
+                        self.updates_processed += usize::from(self.reindex_file(&path));
                     }
                 }
                 FileEventKind::Removed => {
@@ -1151,8 +1209,7 @@ impl IndexManager {
                     // Renames are passed through without coalescing since they
                     // need both from/to paths which are handled at the event level.
                     if self.should_index(&path, &root) {
-                        self.reindex_file(&path);
-                        self.updates_processed += 1;
+                        self.updates_processed += usize::from(self.reindex_file(&path));
                     }
                 }
             }
@@ -1177,34 +1234,41 @@ impl IndexManager {
     /// Old entries are removed before re-extraction. If the file can't be
     /// read/parsed (transient error, binary, oversized), it stays absent
     /// from the index until the next successful reindex.
-    fn reindex_file(&mut self, path: &Path) {
+    ///
+    /// Returns whether the index was touched. An unchanged file is skipped
+    /// before any work happens — see [`Self::is_unchanged_since_indexed`].
+    fn reindex_file(&mut self, path: &Path) -> bool {
         let rel_path = to_relative_path(&self.config.root_path, path);
         let rel_str = rel_path.to_string_lossy();
+
+        if self.is_unchanged_since_indexed(&rel_path) {
+            return false;
+        }
 
         Arc::make_mut(&mut self.index).remove_file(Path::new(rel_str.as_ref()));
 
         let Some(lang_config) = self.registry.for_file_path(path) else {
-            return;
+            return true;
         };
         let lang_id_str = lang_config.primary_language_id();
 
         let metadata = match std::fs::metadata(path) {
             Ok(m) => m,
-            Err(_) => return,
+            Err(_) => return true,
         };
         if metadata.len() == 0 || metadata.len() > MAX_INDEXABLE_FILE_SIZE {
-            return;
+            return true;
         }
 
         // Check binary using a small prefix read to avoid loading large files
         // into memory just to discover they contain null bytes.
         if is_binary_file(path) {
-            return;
+            return true;
         }
 
         let content = match std::fs::read(path) {
             Ok(c) => c,
-            Err(_) => return,
+            Err(_) => return true,
         };
 
         // Populate parser/query caches on miss
@@ -1221,13 +1285,13 @@ impl IndexManager {
         }
 
         let Some(parser) = self.parser_cache.get_mut(lang_id_str) else {
-            return;
+            return true;
         };
         let Some(tree) = parser.parse(&content, None) else {
-            return;
+            return true;
         };
         let Some(query) = self.query_cache.get(lang_id_str) else {
-            return;
+            return true;
         };
 
         // Intern path once, then extract and intern symbols directly from
@@ -1238,6 +1302,31 @@ impl IndexManager {
 
         // Use already-obtained metadata (avoids re-stat and relative path CWD issues)
         Arc::make_mut(&mut self.index).set_file_meta(&rel_str, FileMeta::from_metadata(&metadata));
+        true
+    }
+
+    /// Whether the stored metadata already describes the file on disk.
+    ///
+    /// This is the same size+mtime comparison [`FileMeta::is_stale`] uses, and
+    /// the same one [`background_index_refresh`] uses to decide a cached file
+    /// is current — so the event path and the validation pass can never
+    /// disagree about what "unchanged" means. Before this guard, every
+    /// `Modified` event tore the file's symbols out and re-parsed it, even when
+    /// the write had not changed a byte (an editor save-on-focus, a `git
+    /// checkout` of the same revision, a formatter that produced identical
+    /// output).
+    ///
+    /// The comparison is size plus mtime at nanosecond resolution. A file whose
+    /// content changes while both stay identical is invisible to it; that is
+    /// the same blind spot the background refresh has always had, and no
+    /// cheaper signal (hash, ctime) is available without reading the file we
+    /// are trying to avoid reading.
+    fn is_unchanged_since_indexed(&self, rel_path: &Path) -> bool {
+        let Some(meta) = self.index.get_file_meta(&rel_path.to_string_lossy()) else {
+            // Never indexed (new file, or previously skipped): always parse.
+            return false;
+        };
+        !meta.is_stale(&self.config.root_path.join(rel_path))
     }
 
     /// Remove a file from the index.
