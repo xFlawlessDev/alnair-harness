@@ -89,6 +89,10 @@ pub struct AgentBuilder {
     /// Write half of the memory backend. `None` disables `memory_store` while
     /// leaving the read tools usable.
     memory_write_backend: Option<Arc<dyn alnair_tools::types::memory_backend::MemoryWriteBackend>>,
+    /// Structural code-search backend. `None` leaves `codebase_search` and
+    /// `codebase_context` out of the toolset entirely, rather than registering
+    /// them to fail at call time.
+    codebase_backend: Option<Arc<dyn alnair_tools::types::codebase_backend::CodebaseBackend>>,
     web_search_config: alnair_tools::implementations::web_search::WebSearchConfig,
     /// When true, web search and X search are sent as native server-side
     /// tools for execution by the agentic sampler, instead of being
@@ -217,6 +221,7 @@ impl AgentBuilder {
             state_path: None,
             memory_backend: None,
             memory_write_backend: None,
+            codebase_backend: None,
             web_search_config: Default::default(),
             backend_search: false,
             web_fetch_config: Default::default(),
@@ -402,6 +407,18 @@ impl AgentBuilder {
         backend: Arc<dyn alnair_tools::types::memory_backend::MemoryWriteBackend>,
     ) -> Self {
         self.memory_write_backend = Some(backend);
+        self
+    }
+    /// Set the structural code-search backend, enabling `codebase_search` and
+    /// `codebase_context`.
+    ///
+    /// The backend is cheap to construct and starts its index lazily, so a
+    /// session that never asks a structural question never pays for one.
+    pub fn with_codebase_backend(
+        mut self,
+        backend: Arc<dyn alnair_tools::types::codebase_backend::CodebaseBackend>,
+    ) -> Self {
+        self.codebase_backend = Some(backend);
         self
     }
     /// Set a custom filesystem backend for the ToolBridge.
@@ -707,6 +724,15 @@ impl AgentBuilder {
                         .push((&memory::store_tool::MemoryStoreImpl).into());
                 }
             }
+            if self.codebase_backend.is_some() {
+                use alnair_tools::implementations::codebase;
+                tool_config
+                    .tools
+                    .push((&codebase::search_tool::CodebaseSearchImpl).into());
+                tool_config
+                    .tools
+                    .push((&codebase::context_tool::CodebaseContextImpl).into());
+            }
             if self.web_search_config.is_enabled() {
                 use alnair_tools::implementations::alnair;
                 tool_config.tools.push((&alnair::WebSearchTool).into());
@@ -748,6 +774,26 @@ impl AgentBuilder {
             tool_config.tools.retain(|tc| {
                 tc.id != mem_search_id && tc.id != mem_get_id && tc.id != mem_store_id
             });
+        }
+        // Belt-and-braces for the codebase tools, mirroring the memory strip
+        // above. Strictly redundant today — the push is inside the
+        // `inject_default_tools` + `codebase_backend.is_some()` gate — but a
+        // tool that survives a rebuild without its backend reports
+        // "not available" for the rest of the session, so the symmetry is
+        // worth one retain.
+        if self.codebase_backend.is_none() {
+            let alnair_ns = alnair_tools::types::tool::ToolNamespace::Alnair.to_string();
+            let code_search_id = format!(
+                "{alnair_ns}:{}",
+                alnair_tools::implementations::codebase::CODEBASE_SEARCH_TOOL_NAME
+            );
+            let code_context_id = format!(
+                "{alnair_ns}:{}",
+                alnair_tools::implementations::codebase::CODEBASE_CONTEXT_TOOL_NAME
+            );
+            tool_config
+                .tools
+                .retain(|tc| tc.id != code_search_id && tc.id != code_context_id);
         }
         if !self.ask_user_question_enabled {
             let ask_user_id = format!(
@@ -1033,6 +1079,7 @@ impl AgentBuilder {
                 state_path,
                 memory_backend: self.memory_backend,
                 memory_write_backend: self.memory_write_backend,
+                codebase_backend: self.codebase_backend,
                 web_search_config: self.web_search_config,
                 web_fetch_config: self.web_fetch_config,
                 web_target: self.web_target,
@@ -1920,6 +1967,123 @@ mod tests {
         assert!(
             curated.is_empty(),
             "a curated toolset must receive no memory tool, got: {curated:?}"
+        );
+    }
+
+    /// `codebase_search` / `codebase_context` appear exactly when a codebase
+    /// backend is present, and never otherwise.
+    ///
+    /// The backend is what starts an index actor on first use, so "registered
+    /// without a backend" is not a harmless state: the tools would report
+    /// "not available" for the whole session while still occupying two slots in
+    /// every tool list the model sees.
+    #[tokio::test]
+    async fn codebase_tools_are_gated_on_the_backend() {
+        use alnair_tools::computer::local::LocalTerminalBackend;
+        use alnair_tools::notification::ToolNotificationHandle;
+        use alnair_tools::types::codebase_backend::{
+            CodebaseBackend, CodebaseError, CodebaseSearchOutcome, CodebaseSnippet, CodebaseStatus,
+        };
+        use std::path::Path;
+        use std::sync::Arc;
+
+        /// Minimal backend; never called by these assertions.
+        struct NoopCodebase;
+
+        #[async_trait::async_trait]
+        impl CodebaseBackend for NoopCodebase {
+            fn root(&self) -> &Path {
+                Path::new(".")
+            }
+            fn status(&self) -> CodebaseStatus {
+                CodebaseStatus::default()
+            }
+            async fn ensure(&self) -> Result<CodebaseStatus, CodebaseError> {
+                Ok(CodebaseStatus::default())
+            }
+            async fn search(
+                &self,
+                _query: &str,
+                _limit: usize,
+                _include_references: bool,
+                _path_prefix: Option<&str>,
+            ) -> Result<CodebaseSearchOutcome, CodebaseError> {
+                Ok(CodebaseSearchOutcome::default())
+            }
+            async fn snippet(
+                &self,
+                _path: &str,
+                _line: usize,
+                _max_lines: usize,
+                _max_bytes: usize,
+            ) -> Result<Option<CodebaseSnippet>, CodebaseError> {
+                Ok(None)
+            }
+        }
+
+        async fn names(backend: Option<Arc<dyn CodebaseBackend>>) -> Vec<String> {
+            let mut builder = AgentBuilder::new(
+                std::env::temp_dir(),
+                Arc::new(LocalTerminalBackend::new()),
+                ToolNotificationHandle::noop(),
+            )
+            .from_definition(crate::config::AgentDefinition::default_alnair());
+            if let Some(backend) = backend {
+                builder = builder.with_codebase_backend(backend);
+            }
+            let mut names: Vec<String> = builder
+                .build()
+                .await
+                .unwrap()
+                .tool_definitions()
+                .await
+                .into_iter()
+                .map(|d| d.function.name)
+                .filter(|n| n.starts_with("codebase_"))
+                .collect();
+            names.sort();
+            names
+        }
+
+        assert!(
+            names(None).await.is_empty(),
+            "no backend must advertise no codebase tool"
+        );
+        assert_eq!(
+            names(Some(Arc::new(NoopCodebase))).await,
+            vec![
+                "codebase_context".to_string(),
+                "codebase_search".to_string()
+            ],
+            "a backend must advertise exactly the two codebase tools"
+        );
+
+        // A curated toolset must stay byte-identical: the compat harness needs
+        // every advertised tool to match the model's trained schema. The list is
+        // spelled out because a curated definition with no tools is rejected
+        // before the gate is even reached.
+        let mut def = crate::config::AgentDefinition::default_alnair();
+        def.inject_default_tools = false;
+        def.tool_config.tools = vec![(&alnair_tools::implementations::alnair::ReadFileTool).into()];
+        let curated: Vec<String> = AgentBuilder::new(
+            std::env::temp_dir(),
+            Arc::new(LocalTerminalBackend::new()),
+            ToolNotificationHandle::noop(),
+        )
+        .from_definition(def)
+        .with_codebase_backend(Arc::new(NoopCodebase))
+        .build()
+        .await
+        .expect("a curated toolset with one tool builds")
+        .tool_definitions()
+        .await
+        .into_iter()
+        .map(|d| d.function.name)
+        .filter(|n| n.starts_with("codebase_"))
+        .collect();
+        assert!(
+            curated.is_empty(),
+            "a curated toolset must receive no codebase tool, got: {curated:?}"
         );
     }
     /// Build a default agent under a session allowlist + the agent's own

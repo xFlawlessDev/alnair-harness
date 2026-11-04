@@ -54,6 +54,7 @@ use alnair_tools::implementations::lsp::LspBackend;
 use alnair_tools::implementations::web_search::WebSearchConfig;
 use alnair_tools::notification::ToolNotificationHandle;
 use alnair_tools::types::SharedApiKeyProvider;
+use alnair_tools::types::codebase_backend::CodebaseBackend;
 use alnair_tools::types::compat::CompatConfig;
 use alnair_tools::types::memory_backend::MemoryBackend;
 use alnair_tools::types::memory_backend::MemoryWriteBackend;
@@ -94,6 +95,10 @@ pub(crate) struct AgentRebuildSpec {
     /// Write half of the memory backend; `None` leaves `memory_store` out of the
     /// toolset while keeping the read tools usable.
     pub memory_write_backend: Option<Arc<dyn MemoryWriteBackend>>,
+    /// Structural code-search backend. `None` leaves both codebase tools out of
+    /// the toolset; the tools are gated on this field, not on a config flag, so
+    /// a session that cannot index never advertises them.
+    pub codebase_backend: Option<Arc<dyn CodebaseBackend>>,
     pub web_search_config: WebSearchConfig,
     pub backend_search: bool,
     pub web_fetch_config: WebFetchConfig,
@@ -191,6 +196,7 @@ impl AgentRebuildSpec {
             memory_workspace_path,
             memory_backend,
             memory_write_backend,
+            codebase_backend,
             web_search_config,
             backend_search,
             web_fetch_config,
@@ -282,6 +288,9 @@ impl AgentRebuildSpec {
         }
         if let Some(memory_write_backend) = memory_write_backend.clone() {
             builder = builder.with_memory_write_backend(memory_write_backend);
+        }
+        if let Some(codebase_backend) = codebase_backend.clone() {
+            builder = builder.with_codebase_backend(codebase_backend);
         }
         if let Some(lsp) = lsp.clone() {
             builder = builder.with_lsp(lsp);
@@ -391,6 +400,7 @@ pub(crate) fn test_rebuild_spec_default() -> Arc<AgentRebuildSpec> {
         memory_workspace_path: None,
         memory_backend: None,
         memory_write_backend: None,
+        codebase_backend: None,
         web_search_config: WebSearchConfig::default(),
         backend_search: false,
         web_fetch_config: WebFetchConfig::Disabled,

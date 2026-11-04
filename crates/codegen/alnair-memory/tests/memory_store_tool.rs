@@ -61,6 +61,7 @@ fn context_with_memory(
         state_path: tmp.path().join("state.json"),
         memory_backend: read,
         memory_write_backend: write,
+        codebase_backend: None,
         web_search_config: alnair_tools::implementations::web_search::WebSearchConfig::default(),
         web_fetch_config: alnair_tools::implementations::alnair::web_fetch::WebFetchConfig::default(
         ),

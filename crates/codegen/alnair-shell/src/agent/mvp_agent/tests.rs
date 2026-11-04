@@ -640,6 +640,7 @@ async fn file_toolset_override_e2e_to_finalized_toolset() {
         state_path: tmp.path().join("state.json"),
         memory_backend: None,
         memory_write_backend: None,
+        codebase_backend: None,
         web_search_config: alnair_tools::implementations::web_search::WebSearchConfig::default(),
         web_fetch_config: Default::default(),
         web_target: None,

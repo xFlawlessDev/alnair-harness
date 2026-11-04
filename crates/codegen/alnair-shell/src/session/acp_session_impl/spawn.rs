@@ -716,6 +716,24 @@ pub(crate) async fn spawn_session_actor(
             chat_state_handle.clone(),
         ) as alnair_tools::types::web_provider::SharedWebTargetProvider
     });
+    let mut effective_config = crate::config::load_effective_config()
+        .ok()
+        .and_then(|raw| crate::agent::config::Config::new_from_toml_cfg(&raw).ok())
+        .unwrap_or_default();
+    effective_config.remote_settings = remote_settings.clone();
+    // Structural code search. Gated exactly like the editor's code navigation
+    // (config + git root), but the *client type* gate is deliberately absent:
+    // code nav is web-only because it is a browser feature, while these are
+    // model-facing tools that must work in the TUI and in headless runs.
+    //
+    // Constructing the backend starts nothing; the index actor is spawned on
+    // the first tool call, so a session that never asks a structural question
+    // pays only for this struct.
+    let codebase_backend = build_codebase_backend(
+        tool_context.cwd.as_path(),
+        &effective_config,
+        &codebase_indexes,
+    );
     let rebuild_spec = std::sync::Arc::new(crate::session::agent_rebuild::AgentRebuildSpec {
         working_directory: tool_context.cwd.as_path().to_path_buf(),
         terminal_backend: terminal_backend.clone(),
@@ -735,6 +753,7 @@ pub(crate) async fn spawn_session_actor(
             .map(|s| s.workspace_memory_file().to_string_lossy().into_owned()),
         memory_backend: memory_backend_for_spec,
         memory_write_backend: memory_write_backend_for_spec,
+        codebase_backend,
         web_search_config: web_search_config.clone(),
         backend_search: backend_tools_enabled,
         web_fetch_config: web_fetch_config.clone(),
@@ -975,11 +994,6 @@ pub(crate) async fn spawn_session_actor(
     let (goal_update_tx, goal_update_rx) = tokio::sync::mpsc::unbounded_channel::<
         alnair_tools::implementations::alnair::update_goal::UpdateGoalEnvelope,
     >();
-    let mut effective_config = crate::config::load_effective_config()
-        .ok()
-        .and_then(|raw| crate::agent::config::Config::new_from_toml_cfg(&raw).ok())
-        .unwrap_or_default();
-    effective_config.remote_settings = remote_settings.clone();
     let goal_classifier_max_runs = effective_config.resolve_goal_classifier_max_runs().value;
     let goal_strategist_every = effective_config
         .resolve_goal_strategist_every(goal_classifier_max_runs)
@@ -1916,6 +1930,124 @@ fn select_terminal_backend_kind(
         TerminalBackendKind::LocalNonPersistent
     }
 }
+/// Resolve the index root for the codebase *tools*, or `None` when structural
+/// search must not be offered.
+///
+/// Mirrors `MvpAgent::resolve_codebase_index`'s config and git-root gates, and
+/// deliberately drops its `ClientType::AlnairWeb` gate: code navigation is a
+/// browser feature, while `codebase_search` is a model-facing tool that must
+/// work in the TUI and in headless runs.
+///
+/// Returns the git root when the workspace has one, because that is the same
+/// root the editor's index uses — two indexes over one repository would double
+/// the memory for no benefit. A non-git workspace is only indexed when config
+/// explicitly names it with glob patterns, which is the documented way to
+/// index a plain directory.
+fn resolve_codebase_tool_root(
+    cwd: &std::path::Path,
+    setting: &crate::agent::config::CodebaseIndexingSetting,
+) -> Option<std::path::PathBuf> {
+    use crate::agent::config::CodebaseIndexingSetting;
+
+    let git_root = alnair_workspace::session::git::find_git_root_from_path(cwd).ok();
+
+    match (setting, &git_root) {
+        (CodebaseIndexingSetting::Enabled(false), _) => None,
+        (CodebaseIndexingSetting::Enabled(true), None) => {
+            tracing::info!(
+                cwd = %cwd.display(),
+                skip_reason = "not_git_repo",
+                "codebase tools: no index (workspace is not a git repository)"
+            );
+            None
+        }
+        (CodebaseIndexingSetting::Enabled(true), Some(root)) => Some(root.clone()),
+        (CodebaseIndexingSetting::Patterns(_), _) => {
+            let check_path = git_root.as_deref().unwrap_or(cwd);
+            if setting.should_index(check_path) {
+                Some(git_root.unwrap_or_else(|| cwd.to_path_buf()))
+            } else {
+                tracing::info!(
+                    cwd = %cwd.display(),
+                    skip_reason = "disabled_by_config",
+                    "codebase tools: no index (workspace not matched by config globs)"
+                );
+                None
+            }
+        }
+    }
+}
+
+/// Build the codebase backend for a session, or `None` when it is not offered.
+fn build_codebase_backend(
+    cwd: &std::path::Path,
+    config: &crate::agent::config::Config,
+    indexes: &std::sync::Arc<
+        parking_lot::Mutex<alnair_workspace::file_system::CodebaseIndexManager>,
+    >,
+) -> Option<std::sync::Arc<dyn alnair_tools::types::codebase_backend::CodebaseBackend>> {
+    let root = resolve_codebase_tool_root(cwd, &config.features.codebase_indexing)?;
+    tracing::info!(
+        root = %root.display(),
+        "codebase tools: backend attached (index starts on first use)"
+    );
+    Some(std::sync::Arc::new(
+        alnair_workspace::file_system::CodebaseBackendImpl::new(indexes.clone(), root),
+    ))
+}
+
+#[cfg(test)]
+mod codebase_tool_root_tests {
+    use super::resolve_codebase_tool_root;
+    use crate::agent::config::CodebaseIndexingSetting;
+
+    #[test]
+    fn disabled_config_never_yields_a_root() {
+        let dir = tempfile::tempdir().unwrap();
+        assert_eq!(
+            resolve_codebase_tool_root(dir.path(), &CodebaseIndexingSetting::Enabled(false)),
+            None,
+            "codebase_indexing = false must leave the tools unregistered"
+        );
+    }
+
+    #[test]
+    fn a_non_git_directory_is_refused_under_the_default_setting() {
+        let dir = tempfile::tempdir().unwrap();
+        assert_eq!(
+            resolve_codebase_tool_root(dir.path(), &CodebaseIndexingSetting::Enabled(true)),
+            None,
+            "the default setting indexes git repos only"
+        );
+    }
+
+    #[test]
+    fn a_glob_that_matches_a_non_git_directory_still_indexes_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let pattern = format!("{}*", dir.path().to_string_lossy());
+        assert_eq!(
+            resolve_codebase_tool_root(
+                dir.path(),
+                &CodebaseIndexingSetting::Patterns(vec![pattern])
+            ),
+            Some(dir.path().to_path_buf()),
+            "an explicit pattern is the documented way to index a plain directory"
+        );
+    }
+
+    #[test]
+    fn a_glob_that_does_not_match_yields_nothing() {
+        let dir = tempfile::tempdir().unwrap();
+        assert_eq!(
+            resolve_codebase_tool_root(
+                dir.path(),
+                &CodebaseIndexingSetting::Patterns(vec!["/definitely/not/here".to_string()]),
+            ),
+            None
+        );
+    }
+}
+
 #[cfg(test)]
 mod terminal_backend_select_tests {
     use super::{TerminalBackendKind, select_terminal_backend_kind};

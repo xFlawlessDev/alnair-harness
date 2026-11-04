@@ -849,6 +849,8 @@ mod tests {
             ToolKind::MemorySearch,
             ToolKind::MemoryGet,
             ToolKind::MemoryStore,
+            ToolKind::CodebaseSearch,
+            ToolKind::CodebaseContext,
         ];
         let mut subsets: Vec<Vec<ToolKind>> = vec![vec![], optional.to_vec()];
         for i in 0..optional.len() {

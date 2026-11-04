@@ -1521,6 +1521,31 @@ impl SessionActor {
                 vec![],
                 vec![],
             ),
+            // Without these arms the catch-all titles both "Tool call", which
+            // hides the one thing the user needs to judge the result: what was
+            // searched, and where.
+            ToolInput::CodebaseSearch(cs) => {
+                let end = cs
+                    .query
+                    .char_indices()
+                    .nth(60)
+                    .map_or(cs.query.len(), |(i, _)| i);
+                (
+                    format!("Code search: \"{}\"", &cs.query[..end]),
+                    acp::ToolKind::Search,
+                    vec![],
+                    vec![],
+                )
+            }
+            ToolInput::CodebaseContext(cc) => (
+                format!("Code read: {}:{}", cc.path, cc.line.unwrap_or(1)),
+                acp::ToolKind::Read,
+                vec![
+                    acp::ToolCallLocation::new(cc.path.clone())
+                        .line(cc.line.map(|line| line as u32)),
+                ],
+                vec![],
+            ),
             ToolInput::MemorySearch(ms) => {
                 let end = ms
                     .query
