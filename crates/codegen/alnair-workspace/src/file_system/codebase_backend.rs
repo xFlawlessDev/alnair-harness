@@ -110,6 +110,38 @@ impl CodebaseBackendImpl {
         }
     }
 
+    /// Report a status for an index that already exists, without starting one.
+    ///
+    /// Returns the reported status, or `None` when this workspace has no live
+    /// index. That is the normal state for a repo nobody has searched yet, and
+    /// staying silent there matters: this runs at spawn time for every session,
+    /// and eagerly building an index for a session that will never ask a
+    /// structural question is exactly the cost the lazy start exists to avoid.
+    ///
+    /// The case this exists for: several sessions in one repository share a
+    /// single index (`CodebaseIndexManager` is keyed by git root). A session
+    /// that never calls `codebase_search` still *has* a warm index — from a
+    /// sibling session in the same process — and a footer that stays empty
+    /// reads as "the feature is unavailable" when it is in fact ready.
+    pub fn report_existing_status(&self) -> Option<CodebaseStatus> {
+        let handle = match self.handle.get() {
+            Some(handle) => Arc::clone(handle),
+            // Only consult the manager; `get` never spawns, so this cannot turn
+            // a passive status read into a first-use start.
+            None => self.manager.lock().get(&self.root)?,
+        };
+        let stats = handle.get_stats()?;
+        let status = CodebaseStatus {
+            indexed: true,
+            files: stats.files,
+            definitions: stats.definitions,
+            references: stats.references,
+            languages: self.languages.clone(),
+        };
+        self.report(status.clone());
+        Some(status)
+    }
+
     /// The index handle, starting the actor on first use.
     fn handle(&self) -> Arc<IndexManagerHandle> {
         self.handle
@@ -379,20 +411,43 @@ fn resolve_under_root(root: &Path, path: &str) -> Result<PathBuf, CodebaseError>
     };
 
     // Lexical normalization only: `canonicalize` would resolve symlinks and make
-    // a legitimate in-repo symlink look like an escape. `..` components are the
-    // case that matters and they are visible without touching the filesystem.
-    let mut depth = 0i32;
-    for component in joined.components() {
-        match component {
-            std::path::Component::ParentDir => depth -= 1,
-            std::path::Component::Normal(_) => depth += 1,
-            _ => {}
-        }
-        if depth < 0 {
-            return Err(CodebaseError::PathOutsideRoot(path.to_string()));
-        }
+    // a legitimate in-repo symlink look like an escape. `..` is the case that
+    // matters, and it is resolvable without touching the filesystem.
+    //
+    // The check is a prefix test on the NORMALIZED paths rather than a running
+    // depth counter. A counter has to decide where zero is — the filesystem
+    // root, the index root, with or without the Windows drive prefix — and each
+    // of those choices got this wrong: `..` never reached negative because the
+    // ancestors padded the count. Normalizing both sides first and comparing
+    // makes "did it leave the root?" the only question asked.
+    let normalized_root = normalize_lexically(root);
+    let normalized_joined = normalize_lexically(&joined);
+    if !normalized_joined.starts_with(&normalized_root) {
+        return Err(CodebaseError::PathOutsideRoot(path.to_string()));
     }
     Ok(joined)
+}
+
+/// Resolve `.` and `..` without touching the filesystem.
+///
+/// `Component::ParentDir` is dropped by popping the last normal component, so
+/// the result is comparable with `starts_with`. A `..` that would climb above
+/// the path's own root is kept, which makes such a path fail a prefix test
+/// rather than silently resolving to the parent.
+fn normalize_lexically(path: &Path) -> PathBuf {
+    let mut out = PathBuf::new();
+    for component in path.components() {
+        match component {
+            std::path::Component::ParentDir => {
+                if !out.pop() {
+                    out.push("..");
+                }
+            }
+            std::path::Component::CurDir => {}
+            other => out.push(other),
+        }
+    }
+    out
 }
 
 #[cfg(test)]
@@ -481,6 +536,27 @@ mod tests {
     fn a_relative_escape_is_refused() {
         let dir = tempfile::tempdir().unwrap();
         let error = resolve_under_root(dir.path(), "../outside.rs").unwrap_err();
+        assert!(matches!(error, CodebaseError::PathOutsideRoot(_)));
+    }
+
+    /// The depth counter runs from the index root, so a `..` that climbs back
+    /// into the root is allowed while one that leaves it is refused. Before the
+    /// counter started at the root's own depth, the absolute path's ancestors
+    /// padded it and *neither* case was ever detected.
+    #[test]
+    fn a_dotdot_that_stays_inside_the_root_is_allowed() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("src")).unwrap();
+        let resolved = resolve_under_root(dir.path(), "src/../lib.rs").unwrap();
+        assert!(resolved.ends_with("lib.rs"));
+    }
+
+    #[test]
+    fn a_dotdot_that_climbs_out_of_the_root_is_refused() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("src")).unwrap();
+        // Two levels up from `root/src` leaves the root.
+        let error = resolve_under_root(dir.path(), "src/../../outside.rs").unwrap_err();
         assert!(matches!(error, CodebaseError::PathOutsideRoot(_)));
     }
 

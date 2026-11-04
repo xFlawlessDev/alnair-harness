@@ -14,6 +14,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Weak};
 
 use alnair_codebase_graph::{IndexManager, IndexManagerConfig, IndexManagerHandle};
+use alnair_tools::types::codebase_backend::CodebaseStatus;
 
 use alnair_tools::util::alnair_home::alnair_home;
 
@@ -96,6 +97,46 @@ impl CodebaseIndexManager {
         self.indexes.get(cwd).and_then(Weak::upgrade)
     }
 
+    /// A status for an index this repository already has, without starting one.
+    ///
+    /// Two sources, cheapest first:
+    ///
+    /// 1. A live actor in this process — the shared-index case, where a sibling
+    ///    session in the same repo already built it.
+    /// 2. The on-disk cache metadata, for an index built in an *earlier*
+    ///    process. Reading it here is a `stat`, not a parse: the byte length of
+    ///    `goto_index.bin` is not a file count, so this reports the cache's
+    ///    existence rather than a symbol total.
+    ///
+    /// Deliberately never calls `get_or_create`: a footer that starts an index
+    /// build would make opening a session pay for a feature the user never
+    /// asked for.
+    pub fn existing_status(&self, cwd: &Path) -> Option<CodebaseStatus> {
+        if let Some(handle) = self.get(cwd)
+            && let Some(stats) = handle.get_stats()
+        {
+            return Some(CodebaseStatus {
+                indexed: true,
+                files: stats.files,
+                definitions: stats.definitions,
+                references: stats.references,
+                languages: Vec::new(),
+            });
+        }
+
+        // A cache from a previous process. `files` is unknown without loading
+        // it, so the status carries `indexed: true` and zero counts; the chip
+        // renders readiness from `indexed`, not from the count.
+        let cache = get_index_cache_path(cwd);
+        std::fs::metadata(cache).ok().map(|_| CodebaseStatus {
+            indexed: true,
+            files: 0,
+            definitions: 0,
+            references: 0,
+            languages: Vec::new(),
+        })
+    }
+
     /// Returns the number of currently-live indexes (test helper).
     #[cfg(test)]
     pub(crate) fn active_count(&self) -> usize {
@@ -118,6 +159,64 @@ mod tests {
         // Should contain URL-encoded path
         assert!(cache_path.to_string_lossy().contains("%2F"));
         assert!(cache_path.to_string_lossy().ends_with("goto_index.bin"));
+    }
+
+    /// A repository nobody has indexed reports nothing, and — the load-bearing
+    /// half — does not start an index either.
+    ///
+    /// The footer chip calls this at spawn time for every session. If it
+    /// spawned, opening a session would pay for an index build the user never
+    /// asked for, which is the exact cost the lazy start exists to avoid.
+    #[test]
+    fn existing_status_is_none_and_starts_nothing_for_a_fresh_repo() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().to_path_buf();
+        let mut mgr = CodebaseIndexManager::new();
+
+        assert!(mgr.existing_status(&root).is_none());
+        assert_eq!(
+            mgr.active_count(),
+            0,
+            "reporting status must never spawn an index actor"
+        );
+    }
+
+    /// The shared-index case: one session built the index, a sibling session in
+    /// the same repository asks for its status and finds it ready.
+    #[test]
+    fn existing_status_sees_a_sibling_sessions_index() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().to_path_buf();
+        std::fs::write(root.join("lib.rs"), "fn alpha() {}\n").unwrap();
+
+        let mut mgr = CodebaseIndexManager::new();
+        let (handle, _) = mgr.get_or_create(root.clone());
+
+        let status = mgr
+            .existing_status(&root)
+            .expect("a live index must be reported");
+        assert!(status.indexed);
+        assert_eq!(status.files, 1, "the count comes from the live actor");
+        drop(handle);
+    }
+
+    /// A cache written by an earlier process reports readiness without loading
+    /// the index, so it carries no counts. `indexed` is what the chip renders
+    /// from.
+    #[test]
+    fn existing_status_reports_a_cache_from_a_previous_process() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().to_path_buf();
+        let cache = get_index_cache_path(&root);
+        std::fs::create_dir_all(cache.parent().unwrap()).unwrap();
+        std::fs::write(&cache, b"stub").unwrap();
+
+        let mgr = CodebaseIndexManager::new();
+        let status = mgr
+            .existing_status(&root)
+            .expect("an on-disk cache must be reported");
+        assert!(status.indexed);
+        assert_eq!(status.files, 0, "the cache is not parsed just to count");
     }
 
     // Lazy-start mechanic tests

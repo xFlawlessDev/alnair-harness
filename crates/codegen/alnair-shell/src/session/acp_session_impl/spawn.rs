@@ -732,6 +732,9 @@ pub(crate) async fn spawn_session_actor(
     let (codebase_status_tx, codebase_status_rx) = tokio::sync::mpsc::unbounded_channel::<
         alnair_tools::types::codebase_backend::CodebaseStatus,
     >();
+    // A second handle to the same channel, kept so an initial status can be
+    // sent *after* the reporter is draining — see `report_existing_codebase_status`.
+    let codebase_status_tx_for_initial = codebase_status_tx.clone();
     let codebase_backend = build_codebase_backend(
         tool_context.cwd.as_path(),
         &effective_config,
@@ -1274,6 +1277,18 @@ pub(crate) async fn spawn_session_actor(
     // the chip to infer "never" from silence.
     if codebase_tools_present {
         session.spawn_codebase_status_reporter(codebase_status_rx);
+        // Announce an index that already exists (a sibling session in this
+        // repository may have built one). Sent here, not at backend
+        // construction, because the channel had no reader yet and the message
+        // would have been dropped.
+        //
+        // `report_existing_status` never starts an index: a repo nobody has
+        // searched reports nothing, which keeps the lazy start intact.
+        report_existing_codebase_status(
+            &codebase_status_tx_for_initial,
+            &codebase_indexes,
+            &index_root_for_session,
+        );
     } else {
         let cleared_session = session.clone();
         tokio::task::spawn_local(async move {
@@ -2030,10 +2045,34 @@ fn build_codebase_backend(
         root = %root.display(),
         "codebase tools: backend attached (index starts on first use)"
     );
-    Some(std::sync::Arc::new(
-        alnair_workspace::file_system::CodebaseBackendImpl::new(indexes.clone(), root)
-            .with_status_sink(status_sink),
-    ))
+    let backend = alnair_workspace::file_system::CodebaseBackendImpl::new(indexes.clone(), root)
+        .with_status_sink(status_sink);
+
+    Some(std::sync::Arc::new(backend))
+}
+
+/// Announce an index this repository already has, without starting one.
+///
+/// Several sessions share one index per git root, so a session that has never
+/// searched can still have a warm one from a sibling — or from an earlier
+/// process, via the on-disk cache. Leaving the footer empty in that case reads
+/// as "the feature is unavailable" when it is in fact ready, which is exactly
+/// how the chip looked broken.
+///
+/// `root` must be the same root the backend indexes, or the two would describe
+/// different repositories.
+fn report_existing_codebase_status(
+    sink: &tokio::sync::mpsc::UnboundedSender<
+        alnair_tools::types::codebase_backend::CodebaseStatus,
+    >,
+    indexes: &std::sync::Arc<
+        parking_lot::Mutex<alnair_workspace::file_system::CodebaseIndexManager>,
+    >,
+    root: &std::path::Path,
+) {
+    if let Some(status) = indexes.lock().existing_status(root) {
+        let _ = sink.send(status);
+    }
 }
 
 #[cfg(test)]

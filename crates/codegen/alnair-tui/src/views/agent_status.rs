@@ -407,8 +407,15 @@ pub fn codebase_status_line(
     }
 
     if state.is_ready() {
+        // A ready index whose file count we did not read (a warm cache from an
+        // earlier process reports readiness without loading the index) shows
+        // the bare label rather than a misleading `code: 0`.
         return Some(Line::from(Span::styled(
-            format!("code: {}", format_tokens_compact(state.files as i64)),
+            if state.files == 0 {
+                "code: ready".to_string()
+            } else {
+                format!("code: {}", format_tokens_compact(state.files as i64))
+            },
             dim_style,
         )));
     }
@@ -449,6 +456,14 @@ mod tests {
     fn a_ready_index_shows_a_compacted_file_count() {
         assert_eq!(chip_text(&state("ready", 2_237)), "code: 2.2k");
         assert_eq!(chip_text(&state("ready", 42)), "code: 42");
+    }
+
+    /// A warm cache from an earlier process reports readiness without loading
+    /// the index, so it has no file count. `code: 0` would be a lie; the bare
+    /// label is the honest rendering.
+    #[test]
+    fn a_ready_index_without_a_count_omits_the_number() {
+        assert_eq!(chip_text(&state("ready", 0)), "code: ready");
     }
 
     #[test]
