@@ -64,7 +64,7 @@ fn target_dir() -> PathBuf {
 fn local_alnair_binary_path() -> PathBuf {
     target_dir()
         .join("debug")
-        .join(format!("alnair-tui{}", std::env::consts::EXE_SUFFIX))
+        .join(format!("alnair{}", std::env::consts::EXE_SUFFIX))
 }
 
 fn ensure_local_alnair_binary(binary: &Path) {
@@ -72,28 +72,30 @@ fn ensure_local_alnair_binary(binary: &Path) {
         return;
     }
 
+    // The shipping binary lives in `alnair-bin` ([[bin]] name = "alnair").
+    // This used to build `alnair-tui`, which no longer produces that target.
     let cargo = std::env::var("CARGO").unwrap_or_else(|_| "cargo".to_string());
     let output = Command::new(&cargo)
         .current_dir(workspace_root())
-        .args(["build", "-p", "alnair-tui", "--bin", "alnair-tui"])
+        .args(["build", "-p", "alnair-bin", "--bin", "alnair"])
         .output()
-        .unwrap_or_else(|e| panic!("failed to spawn {cargo} to build alnair-tui: {e}"));
+        .unwrap_or_else(|e| panic!("failed to spawn {cargo} to build alnair: {e}"));
 
     assert!(
         output.status.success(),
-        "failed to build alnair-tui for lifecycle tests (exit {:?})\nstdout:\n{}\nstderr:\n{}",
+        "failed to build alnair for lifecycle tests (exit {:?})\nstdout:\n{}\nstderr:\n{}",
         output.status.code(),
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr),
     );
     assert!(
         binary.exists(),
-        "alnair-tui build completed but binary missing at {}",
+        "alnair build completed but binary missing at {}",
         binary.display()
     );
 }
 
-/// Resolve the alnair binary, building `alnair-tui` on demand if neither
+/// Resolve the alnair binary, building `alnair-bin` on demand if neither
 /// `ALNAIR_BINARY` (CI) nor cargo's own path points at an existing file.
 pub fn alnair_binary() -> PathBuf {
     if let Ok(path) = std::env::var("ALNAIR_BINARY") {
@@ -102,7 +104,7 @@ pub fn alnair_binary() -> PathBuf {
         return p;
     }
 
-    if let Ok(path) = std::env::var("CARGO_BIN_EXE_alnair-tui") {
+    if let Ok(path) = std::env::var("CARGO_BIN_EXE_alnair") {
         let p = PathBuf::from(path);
         if p.exists() {
             return p;

@@ -374,6 +374,60 @@ impl AlnairStdioClient {
             .unwrap_or_else(|_| panic!("prompt timed out\nstderr:\n{}", self.stderr()))
     }
 
+    /// `session/list`, optionally filtered to one working directory.
+    pub async fn list_sessions_with_timeout(
+        &self,
+        cwd: Option<&Path>,
+    ) -> acp::Result<acp::ListSessionsResponse> {
+        tokio::time::timeout(
+            Duration::from_secs(20),
+            self.conn
+                .list_sessions(acp::ListSessionsRequest::new().cwd(cwd.map(|p| p.to_path_buf()))),
+        )
+        .await
+        .unwrap_or_else(|_| panic!("session/list timed out\nstderr:\n{}", self.stderr()))
+    }
+
+    /// `session/close`. An explicit close finalizes the agent-side session; the
+    /// transcript on disk is expected to survive it.
+    pub async fn close_session_with_timeout(
+        &self,
+        session_id: &acp::SessionId,
+    ) -> acp::Result<acp::CloseSessionResponse> {
+        tokio::time::timeout(
+            Duration::from_secs(20),
+            self.conn
+                .close_session(acp::CloseSessionRequest::new(session_id.clone())),
+        )
+        .await
+        .unwrap_or_else(|_| panic!("session/close timed out\nstderr:\n{}", self.stderr()))
+    }
+
+    /// `session/set_config_option` with a string value.
+    pub async fn set_config_option_with_timeout(
+        &self,
+        session_id: &acp::SessionId,
+        config_id: &str,
+        value: &str,
+    ) -> acp::Result<acp::SetSessionConfigOptionResponse> {
+        tokio::time::timeout(
+            Duration::from_secs(20),
+            self.conn
+                .set_session_config_option(acp::SetSessionConfigOptionRequest::new(
+                    session_id.clone(),
+                    acp::SessionConfigId::new(config_id),
+                    acp::SessionConfigValueId::new(value),
+                )),
+        )
+        .await
+        .unwrap_or_else(|_| {
+            panic!(
+                "session/set_config_option timed out\nstderr:\n{}",
+                self.stderr()
+            )
+        })
+    }
+
     pub async fn load_session_with_timeout(
         &self,
         session_id: &acp::SessionId,
