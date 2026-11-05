@@ -166,7 +166,20 @@ pub fn test_env_cmd_tokio(
         // Mirrors `leader.rs` and the pty-harness `env_for_pager`.
         .env("ALNAIR_SHARE_DIR", home.join(".alnair"))
         .env("ALNAIR_CODE_BASE_URL", mock_url)
+        // Inference base URL for the custom-endpoint path below, which resolves
+        // it under its own rule (`resolve_inference_base_url`) and appends the
+        // wire path itself. Without it a custom-endpoint model inherits an
+        // empty base and the turn leaves for the public host.
         .env("ALNAIR_API_BASE_URL", mock_url)
+        // Point the model catalog at the mock. Without this the child resolves
+        // `ModelFetchAuth::Platforms` and falls back to the bundled Kimi table,
+        // so a session's default model is a real Kimi id and the first turn
+        // leaves for the real endpoint (401).
+        //
+        // No `/v1` suffix: `resolve_models_list_url` and
+        // `resolve_inference_base_url` each append their own path, and the wire
+        // builder appends `/v1/<route>`, so the mock's routes arrive intact.
+        .env("ALNAIR_MODELS_BASE_URL", mock_url)
         .env("ALNAIR_API_KEY", "test-key-for-ci")
         .env("ALNAIR_TELEMETRY_ENABLED", "false")
         .env("ALNAIR_FEEDBACK_ENABLED", "false")
