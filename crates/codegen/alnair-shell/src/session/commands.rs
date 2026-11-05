@@ -145,6 +145,18 @@ pub enum SessionCommand {
         session_mode: acp::SessionModeId,
         responds_to: oneshot::Sender<()>,
     },
+    /// Change only the session's reasoning effort, leaving the model untouched
+    /// (`session/set_config_option` with an effort option id).
+    ///
+    /// Deliberately narrow: it must not re-resolve sampling credentials, rewrite
+    /// the system prompt, or rebuild the harness. Those belong to
+    /// [`SessionCommand::SetSessionModel`], and running them for an
+    /// effort-only change was the source of past model-switch damage.
+    SetReasoningEffort {
+        /// `None` clears the override so the model/global default applies.
+        effort: Option<alnair_sampling_types::ReasoningEffort>,
+        responds_to: oneshot::Sender<()>,
+    },
     SetSessionModel {
         sampling_config: alnair_sampler::SamplerConfig,
         /// The catalog KEY the picker resolved (`{platform}/{model}` for a

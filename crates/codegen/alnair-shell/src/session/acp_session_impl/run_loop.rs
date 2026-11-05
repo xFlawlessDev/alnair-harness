@@ -297,6 +297,8 @@ pub(super) async fn run_session(
                    SessionActor::maybe_start_running_task(session.clone(), completion_tx
                    .clone()). await; } SessionCommand::SessionMode { session_mode, responds_to }
                    => { session.handle_session_mode(session_mode). await; let _ = responds_to
+                   .send(()); } SessionCommand::SetReasoningEffort { effort, responds_to } => {
+                   session.handle_set_reasoning_effort(effort). await; let _ = responds_to
                    .send(()); } SessionCommand::SetSessionModel { sampling_config, catalog_key,
                    use_concise, apply_prompt_override, skip_prompt_rewrite,
                    auto_compact_threshold_percent, responds_to } => { let updated_model_id =

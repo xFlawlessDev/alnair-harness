@@ -196,6 +196,28 @@ impl AlnairStdioClient {
             .await
             .expect("initialize failed");
 
+        // Capabilities a client decides its behaviour from. Asserted here
+        // because this helper is the single `initialize` every integration test
+        // goes through: a capability that silently stops being advertised makes
+        // compliant clients drop the input (images) or skip the feature
+        // (session/list), which is invisible in a transcript-only assertion.
+        let agent_caps = &init_resp.agent_capabilities;
+        assert!(
+            agent_caps.prompt_capabilities.image,
+            "agent must advertise PromptCapabilities.image: the prompt parser \
+             accepts ContentBlock::Image, and a spec-compliant client will not \
+             send images to an agent that does not advertise them"
+        );
+        assert!(
+            !agent_caps.prompt_capabilities.audio,
+            "agent must not advertise PromptCapabilities.audio: audio blocks are \
+             rejected, so advertising them invites a guaranteed failure"
+        );
+        assert!(
+            agent_caps.session_capabilities.list.is_some(),
+            "agent must advertise sessionCapabilities.list: session/list has a handler"
+        );
+
         let api_key_method = init_resp
             .auth_methods
             .iter()

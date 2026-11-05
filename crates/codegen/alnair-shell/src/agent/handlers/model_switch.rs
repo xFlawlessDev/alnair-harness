@@ -116,23 +116,7 @@ pub(crate) async fn apply(
             // renames xhigh→max), but the menu has no xhigh-valued row, so
             // display/active-row would drift from the model vocabulary and
             // the stale token would be re-persisted forever. Migrate once.
-            let eff = if eff == alnair_sampling_types::ReasoningEffort::Xhigh
-                && !agent
-                    .models_manager
-                    .model_offers_effort(model_id.0.as_ref(), eff)
-                && agent.models_manager.model_offers_effort(
-                    model_id.0.as_ref(),
-                    alnair_sampling_types::ReasoningEffort::Max,
-                ) {
-                tracing::info!(
-                    session_id = % session_id.0,
-                    "set_session_model: migrating legacy xhigh override to max \
-                     (model menu offers max, not xhigh)"
-                );
-                alnair_sampling_types::ReasoningEffort::Max
-            } else {
-                eff
-            };
+            let eff = migrate_legacy_xhigh_effort(agent, model_id.0.as_ref(), eff);
             tracing::info!(
                 session_id = % session_id.0, effort = % eff,
                 "set_session_model: applying reasoning_effort override from meta"
@@ -241,6 +225,37 @@ pub(crate) async fn apply(
         .cloned(),
     ))
 }
+/// Migrate a legacy `xhigh` effort to `max` when the model's live menu no
+/// longer offers `xhigh` but does offer `max`.
+///
+/// Shared by every path that applies an effort to a model — the
+/// `_meta.reasoningEffort` override on `set_session_model` and
+/// `session/set_config_option` — so the migration cannot be fixed in one place
+/// and forgotten in the other. Both spellings reach the wire identically
+/// (`kimi_compat` renames `xhigh`→`max`), but the menu has no `xhigh` row, so an
+/// unmigrated value would leave the picker's active row pointing at a value the
+/// model does not list and re-persist the stale token forever.
+pub(crate) fn migrate_legacy_xhigh_effort(
+    agent: &MvpAgent,
+    model_id: &str,
+    effort: alnair_sampling_types::ReasoningEffort,
+) -> alnair_sampling_types::ReasoningEffort {
+    if effort == alnair_sampling_types::ReasoningEffort::Xhigh
+        && !agent.models_manager.model_offers_effort(model_id, effort)
+        && agent
+            .models_manager
+            .model_offers_effort(model_id, alnair_sampling_types::ReasoningEffort::Max)
+    {
+        tracing::info!(
+            model_id,
+            "migrating legacy xhigh effort to max \
+             (model menu offers max, not xhigh)"
+        );
+        return alnair_sampling_types::ReasoningEffort::Max;
+    }
+    effort
+}
+
 /// Broadcast a `ModelChanged` to every client subscribed to this session so
 /// followers mirror the new model. The originating client ignores its own echo
 /// (gated by `model_switch_pending`). Broadcast-only — no eventId, not persisted.

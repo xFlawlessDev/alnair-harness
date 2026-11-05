@@ -2,6 +2,45 @@ use super::*;
 use crate::agent::models_fetch::DEFAULT_CONTEXT_WINDOW;
 use alnair_chat_state::conversation_util::replace_or_insert_system_head;
 impl SessionActor {
+    /// Apply an effort-only change to the session's sampling config.
+    ///
+    /// Reads the current config, swaps `reasoning_effort`, and writes it back —
+    /// nothing else. No credential resolution, no prompt rewrite, no harness
+    /// rebuild: the model is unchanged, so all of that would be noise at best
+    /// and a regression at worst.
+    pub(super) async fn handle_set_reasoning_effort(
+        &self,
+        effort: Option<alnair_sampling_types::ReasoningEffort>,
+    ) {
+        let Some(mut cfg) = self.chat_state_handle.get_sampling_config().await else {
+            tracing::warn!(
+                session_id = % self.session_info.id.0,
+                "set_reasoning_effort: session has no sampling config; ignoring"
+            );
+            return;
+        };
+        cfg.reasoning_effort = effort;
+        tracing::info!(
+            session_id = % self.session_info.id.0,
+            model = % cfg.model,
+            effort = ? effort,
+            "set_reasoning_effort: applying effort-only change"
+        );
+        self.chat_state_handle
+            .update_sampling_config(alnair_sampling_types::SamplingConfig {
+                base_url: cfg.base_url,
+                model: cfg.model,
+                max_completion_tokens: cfg.max_completion_tokens,
+                temperature: cfg.temperature,
+                top_p: cfg.top_p,
+                api_backend: cfg.api_backend,
+                chat_compat: cfg.chat_compat,
+                extra_headers: cfg.extra_headers,
+                context_window: cfg.context_window,
+                reasoning_effort: cfg.reasoning_effort,
+                stream_tool_calls: cfg.stream_tool_calls,
+            });
+    }
     pub(super) async fn handle_set_session_model(
         &self,
         sampling_config: alnair_sampler::SamplerConfig,

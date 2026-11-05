@@ -300,7 +300,24 @@ impl acp::Agent for MvpAgent {
                                 .cloned(),
                         )
                         .prompt_capabilities(
-                            acp::PromptCapabilities::new().embedded_context(true),
+                            // Images ride the prompt pipeline end to end
+                            // (`prompt_parser.rs` collects `ContentBlock::Image`
+                            // into `ParsedPrompt.images`), so a spec-compliant
+                            // client must be told it may send them. Audio has no
+                            // model path, so it stays unadvertised and is
+                            // rejected up front in `prompt`.
+                            acp::PromptCapabilities::new()
+                                .embedded_context(true)
+                                .image(true),
+                        )
+                        .session_capabilities(
+                            // Only capabilities with a real handler below. A
+                            // capability advertised without one is worse than an
+                            // absent one: the client stops looking for the
+                            // `alnair/*` fallback and just gets method-not-found.
+                            acp::SessionCapabilities::new()
+                                .list(acp::SessionListCapabilities::new())
+                                .close(acp::SessionCloseCapabilities::new()),
                         )
                         .mcp_capabilities(
                             acp::McpCapabilities::new().http(true).sse(true),
@@ -909,6 +926,11 @@ impl acp::Agent for MvpAgent {
             feedback_enabled, }
         );
         if let Some(obj) = meta.as_object_mut() {
+            obj.insert(
+                "alnair/configOptions".to_string(),
+                serde_json::to_value(reasoning_effort_config_options(self, &models))
+                    .unwrap_or(serde_json::Value::Null),
+            );
             obj.insert("alnair/sessionConfig".to_string(), session_config_value);
             obj.insert("alnair/sessionDetail".to_string(), session_detail_value);
         }
@@ -917,6 +939,49 @@ impl acp::Agent for MvpAgent {
                 .models(Some(models))
                 .meta(meta.as_object().cloned()),
         )
+    }
+    /// List sessions for a generic ACP client (`session/list`).
+    ///
+    /// Serves the same roster the pager's dashboard uses — resident actors
+    /// merged with on-disk summaries (`build_roster`) — because the whole point
+    /// of advertising `session/list` is that a client can discover a session it
+    /// was not already attached to and then `session/load` it.
+    ///
+    /// `cwd` filters by canonicalized path equality, matching how
+    /// `session_startup::pick_auto_attach` compares working directories: one
+    /// leader serves every repo, so a textual comparison would be wrong across
+    /// symlinks and case-insensitive filesystems.
+    async fn list_sessions(
+        &self,
+        arguments: acp::ListSessionsRequest,
+    ) -> Result<acp::ListSessionsResponse, acp::Error> {
+        tracing::debug!("Received list sessions request {arguments:?}");
+        let wanted_cwd = arguments
+            .cwd
+            .as_deref()
+            .map(dunce::canonicalize)
+            .transpose()
+            .map_err(|e| {
+                acp::Error::invalid_params().data(format!("cwd must be an existing directory: {e}"))
+            })?;
+        // `build_roster` reads the session index from disk; resolve it to an
+        // owned Vec before building the response so no borrow is held across
+        // the awaits inside it.
+        let roster = self.build_roster().await;
+        let sessions = roster
+            .into_iter()
+            .filter(|entry| match &wanted_cwd {
+                None => true,
+                Some(wanted) => dunce::canonicalize(&entry.cwd)
+                    .map(|actual| &actual == wanted)
+                    .unwrap_or(false),
+            })
+            .map(roster_entry_to_session_info)
+            .collect();
+        // No cursor: the roster is already bounded by `build_roster`, and
+        // paginating a bounded list would hide sessions with no way to ask for
+        // them again.
+        Ok(acp::ListSessionsResponse::new(sessions))
     }
     async fn load_session(
         &self,
@@ -1627,6 +1692,7 @@ impl acp::Agent for MvpAgent {
         mut arguments: acp::PromptRequest,
     ) -> Result<acp::PromptResponse, acp::Error> {
         use crate::session::plan_mode::PromptMode;
+        reject_unsupported_prompt_blocks(&arguments.prompt)?;
         if let Some(meta) = arguments.meta.as_ref() {
             alnair_file_utils::trace_context::link_current_span_to_meta(
                 &serde_json::Value::Object(meta.clone()),
@@ -2046,6 +2112,36 @@ impl acp::Agent for MvpAgent {
         }
         Ok(())
     }
+    /// Close a session on the client's request (`session/close`).
+    ///
+    /// Routes to `close_session_explicit`, not `remove_session`: that distinction
+    /// is documented on both helpers — `remove_session` deliberately skips
+    /// finalizing the cloud replica because it serves reaping and idle-unload,
+    /// where the conversation stays resumable. An explicit close is a genuine
+    /// session end.
+    ///
+    /// Never deletes the transcript. Destroying a session remains the separate,
+    /// confirmed `alnair/session/delete` path.
+    ///
+    /// Idempotent: closing an id this agent does not host (already evicted,
+    /// or never loaded here) succeeds, so a client retrying after a reconnect
+    /// is not punished with an error it cannot act on.
+    async fn close_session(
+        &self,
+        arguments: acp::CloseSessionRequest,
+    ) -> Result<acp::CloseSessionResponse, acp::Error> {
+        tracing::info!("Received close session request {arguments:?}");
+        let known = self.sessions.borrow().contains_key(&arguments.session_id);
+        if known {
+            self.close_session_explicit(&arguments.session_id);
+        } else {
+            tracing::debug!(
+                session_id = % arguments.session_id.0,
+                "session/close for an id this agent does not host; nothing to do"
+            );
+        }
+        Ok(acp::CloseSessionResponse::new())
+    }
     async fn set_session_mode(
         &self,
         args: acp::SetSessionModeRequest,
@@ -2094,6 +2190,69 @@ impl acp::Agent for MvpAgent {
             );
         }
         res
+    }
+    /// Change a session config option (`session/set_config_option`).
+    ///
+    /// Only the reasoning effort is exposed this way. Model selection stays on
+    /// `session/set_model`, which carries the catalog key, harness
+    /// compatibility and the `_meta.reasoningEffort` override that every
+    /// existing client uses; duplicating it here would create a second,
+    /// subtly-different model switch.
+    ///
+    /// Every other option id — including the dashboard's own
+    /// `alnair/sessionConfig` ids — is answered with method-not-found, because
+    /// no such registration exists in `initialize`.
+    async fn set_session_config_option(
+        &self,
+        args: acp::SetSessionConfigOptionRequest,
+    ) -> Result<acp::SetSessionConfigOptionResponse, acp::Error> {
+        if args.config_id.0.as_ref() != REASONING_EFFORT_CONFIG_ID {
+            tracing::debug!(
+                config_id = % args.config_id.0,
+                "set_session_config_option: unregistered option id"
+            );
+            return Err(acp::Error::method_not_found());
+        }
+        let value = match &args.value {
+            acp::SessionConfigOptionValue::ValueId { value } => value.0.to_string(),
+            acp::SessionConfigOptionValue::Boolean { value } => value.to_string(),
+            other => {
+                return Err(acp::Error::invalid_params()
+                    .data(format!("unsupported value for a select option: {other:?}")));
+            }
+        };
+        let effort = parse_effort_config_value(self, &args.session_id, &value).await?;
+        let handle = self
+            .sessions
+            .borrow()
+            .get(&args.session_id)
+            .map(|h| h.cmd_tx.clone());
+        let Some(cmd_tx) = handle else {
+            return Err(acp::Error::invalid_params().data("unknown session id"));
+        };
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        if cmd_tx
+            .send(SessionCommand::SetReasoningEffort {
+                effort: Some(effort),
+                responds_to: tx,
+            })
+            .is_err()
+        {
+            return Err(acp::Error::internal_error().data("session is no longer running"));
+        }
+        let _ = rx
+            .await
+            .map_err(|_| acp::Error::internal_error().data("response to set effort failed"))?;
+        if let Some(handle) = self.sessions.borrow_mut().get_mut(&args.session_id) {
+            handle.reasoning_effort = Some(effort);
+        }
+        if self.cfg.borrow().mode != config::AgentMode::Leader {
+            self.models_manager.set_current_reasoning_effort(Some(effort));
+        }
+        let state = self.model_state(Some(&args.session_id));
+        Ok(acp::SetSessionConfigOptionResponse::new(
+            reasoning_effort_config_options(self, &state),
+        ))
     }
     #[tracing::instrument(
         name = "agent.ext_method",
@@ -2557,6 +2716,146 @@ impl acp::Agent for MvpAgent {
     }
 }
 
+/// Reject prompt content the agent cannot consume, before the turn starts.
+///
+/// `session::prompt_parser` already refuses unknown blocks, but it runs inside
+/// the session actor at turn start: the client saw its `session/prompt`
+/// accepted and then gets a turn that fails. Failing here answers the request
+/// itself. Audio is the one block we neither advertise nor handle; images are
+/// handled and advertised, so they pass through to the parser unchanged.
+fn reject_unsupported_prompt_blocks(prompt: &[acp::ContentBlock]) -> Result<(), acp::Error> {
+    if let Some(block) = prompt
+        .iter()
+        .find(|b| matches!(b, acp::ContentBlock::Audio(_)))
+    {
+        let detail = serde_json::to_string(block).unwrap_or_else(|_| "audio".to_string());
+        return Err(acp::Error::invalid_params()
+            .data(format!("unsupported content block in prompt: {detail}")));
+    }
+    Ok(())
+}
+
+/// Project a roster row onto the ACP `SessionInfo` shape.
+///
+/// Only `sessionId`, `cwd`, `title` and `updatedAt` are protocol fields; the
+/// dashboard-only facts (activity, resident, worktree, yolo, effort) ride
+/// `_meta` so a generic client can show a richer row without learning a single
+/// `alnair/*` method.
+fn roster_entry_to_session_info(entry: crate::agent::roster::RosterEntry) -> acp::SessionInfo {
+    let updated_at = chrono::DateTime::<chrono::Utc>::from_timestamp_millis(entry.last_change_unix_ms)
+        .map(|ts| ts.to_rfc3339());
+    let mut meta = serde_json::Map::new();
+    meta.insert("resident".into(), serde_json::json!(entry.resident));
+    meta.insert("activity".into(), serde_json::json!(entry.activity));
+    meta.insert("isWorktree".into(), serde_json::json!(entry.is_worktree));
+    meta.insert("yolo".into(), serde_json::json!(entry.yolo));
+    if let Some(model_id) = entry.model_id {
+        meta.insert("modelId".into(), serde_json::json!(model_id));
+    }
+    if let Some(effort) = entry.reasoning_effort {
+        meta.insert("reasoningEffort".into(), serde_json::json!(effort));
+    }
+    acp::SessionInfo::new(
+        acp::SessionId::new(entry.session_id),
+        std::path::PathBuf::from(entry.cwd),
+    )
+    .title(entry.title)
+    .updated_at(updated_at)
+    .meta(meta)
+}
+
+/// Config option id under which the reasoning effort is offered.
+const REASONING_EFFORT_CONFIG_ID: &str = "reasoning_effort";
+
+/// Build the ACP config-option list for a session's model.
+///
+/// Returns an empty list when the current model has no selectable efforts, so a
+/// client shows no effort picker rather than an empty one.
+fn reasoning_effort_config_options(
+    agent: &MvpAgent,
+    state: &acp::SessionModelState,
+) -> Vec<acp::SessionConfigOption> {
+    let model_key = crate::agent::models::resolve_catalog_key(
+        &agent.models_manager.models(),
+        &state.current_model_id,
+    )
+    .unwrap_or_else(|| state.current_model_id.clone());
+    if !agent
+        .models_manager
+        .model_supports_reasoning_effort(model_key.0.as_ref())
+    {
+        return Vec::new();
+    }
+    let mut efforts = agent
+        .models_manager
+        .model_reasoning_efforts(model_key.0.as_ref());
+    if efforts.is_empty() {
+        efforts = crate::agent::session_config::legacy_session_effort_options();
+    }
+    let current = agent
+        .models_manager
+        .model_default_reasoning_effort(model_key.0.as_ref());
+    let options: Vec<acp::SessionConfigSelectOption> = efforts
+        .iter()
+        .map(|option| {
+            acp::SessionConfigSelectOption::new(
+                acp::SessionConfigValueId::new(option.value.to_string()),
+                option.label.clone(),
+            )
+        })
+        .collect();
+    let current_value = acp::SessionConfigValueId::new(
+        current
+            .map(|effort| effort.to_string())
+            .or_else(|| efforts.first().map(|option| option.value.to_string()))
+            .unwrap_or_default(),
+    );
+    vec![
+        acp::SessionConfigOption::new(
+            acp::SessionConfigId::new(REASONING_EFFORT_CONFIG_ID),
+            "Reasoning effort".to_string(),
+            acp::SessionConfigKind::Select(
+                acp::SessionConfigSelect::new(
+                    current_value,
+                    acp::SessionConfigSelectOptions::Ungrouped(options),
+                ),
+            ),
+        )
+        .category(acp::SessionConfigOptionCategory::ThoughtLevel),
+    ]
+}
+
+/// Resolve a wire config value to a canonical effort for `session_id`.
+///
+/// Rejects values the model's menu does not offer, with the same migration the
+/// model-switch path applies, so a stale `xhigh` from an older client still
+/// works on a model whose top tier is spelled `max`.
+async fn parse_effort_config_value(
+    agent: &MvpAgent,
+    session_id: &acp::SessionId,
+    value: &str,
+) -> Result<alnair_sampling_types::ReasoningEffort, acp::Error> {
+    let effort: alnair_sampling_types::ReasoningEffort = value.parse().map_err(|_| {
+        acp::Error::invalid_params().data(format!("unknown reasoning effort: {value}"))
+    })?;
+    let model_id = agent
+        .sessions
+        .borrow()
+        .get(session_id)
+        .map(|h| h.model_id.0.to_string())
+        .ok_or_else(|| acp::Error::invalid_params().data("unknown session id"))?;
+    let effort = crate::agent::handlers::model_switch::migrate_legacy_xhigh_effort(
+        agent,
+        model_id.as_str(),
+        effort,
+    );
+    if !agent.models_manager.model_offers_effort(&model_id, effort) {
+        return Err(acp::Error::invalid_params()
+            .data(format!("model {model_id} does not offer reasoning effort {effort}")));
+    }
+    Ok(effort)
+}
+
 impl MvpAgent {
     /// Dispatch an internal extension method **directly**, without routing it
     /// through the ACP inbound stream.
@@ -2580,5 +2879,107 @@ impl MvpAgent {
             .map_err(|e| acp::Error::internal_error().data(e.to_string()))?;
         self.ext_method(acp::ExtRequest::new(method, raw.into()))
             .await
+    }
+}
+
+#[cfg(test)]
+mod prompt_block_tests {
+    use super::*;
+
+    fn text_block() -> acp::ContentBlock {
+        acp::ContentBlock::Text(acp::TextContent::new("hello"))
+    }
+
+    #[test]
+    fn text_and_image_blocks_pass_validation() {
+        let prompt = vec![
+            text_block(),
+            acp::ContentBlock::Image(acp::ImageContent::new("AAAA", "image/png")),
+            acp::ContentBlock::ResourceLink(acp::ResourceLink::new(
+                "a.md",
+                "file:///tmp/a.md",
+            )),
+        ];
+        assert!(reject_unsupported_prompt_blocks(&prompt).is_ok());
+    }
+
+    #[test]
+    fn audio_block_is_rejected_before_the_turn_starts() {
+        let prompt = vec![
+            text_block(),
+            acp::ContentBlock::Audio(acp::AudioContent::new("AAAA", "audio/wav")),
+        ];
+        let err = reject_unsupported_prompt_blocks(&prompt)
+            .expect_err("audio must be refused at request time");
+        assert_eq!(err.code, acp::ErrorCode::InvalidParams);
+        let detail = err
+            .data
+            .as_ref()
+            .and_then(|v| v.as_str())
+            .unwrap_or_default()
+            .to_string();
+        assert!(
+            detail.contains("unsupported content block"),
+            "unexpected detail: {detail}"
+        );
+    }
+
+    #[test]
+    fn empty_prompt_passes_validation() {
+        assert!(reject_unsupported_prompt_blocks(&[]).is_ok());
+    }
+}
+#[cfg(test)]
+mod roster_mapping_tests {
+    use super::*;
+    use crate::agent::roster::{RosterActivity, RosterEntry, RosterOrigin};
+
+    fn entry(session_id: &str, cwd: &str) -> RosterEntry {
+        RosterEntry {
+            session_id: session_id.to_string(),
+            title: Some("Fix the parser".to_string()),
+            cwd: cwd.to_string(),
+            is_worktree: false,
+            model_id: Some("moonshot/kimi-k2".to_string()),
+            reasoning_effort: None,
+            yolo: false,
+            activity: RosterActivity::Idle,
+            resident: true,
+            last_change_unix_ms: 1_760_000_000_000,
+            viewed_at: None,
+            origin: RosterOrigin::Local,
+        }
+    }
+
+    #[test]
+    fn protocol_fields_are_lifted_and_dashboard_facts_ride_meta() {
+        let info = roster_entry_to_session_info(entry("sess-1", "/repo"));
+        assert_eq!(info.session_id.0.as_ref(), "sess-1");
+        assert_eq!(info.cwd, std::path::PathBuf::from("/repo"));
+        assert_eq!(info.title.as_deref(), Some("Fix the parser"));
+        assert!(
+            info.updated_at
+                .as_deref()
+                .is_some_and(|ts| ts.starts_with("2025-10-09")),
+            "updated_at must be RFC 3339: {:?}",
+            info.updated_at
+        );
+        let meta = info.meta.expect("roster facts must ride _meta");
+        assert_eq!(meta.get("resident"), Some(&serde_json::json!(true)));
+        assert_eq!(
+            meta.get("modelId"),
+            Some(&serde_json::json!("moonshot/kimi-k2"))
+        );
+        assert!(
+            meta.get("reasoningEffort").is_none(),
+            "an unset effort must not be serialized"
+        );
+    }
+
+    #[test]
+    fn missing_timestamp_yields_no_updated_at() {
+        let mut e = entry("sess-2", "/repo");
+        e.last_change_unix_ms = i64::MAX;
+        assert!(roster_entry_to_session_info(e).updated_at.is_none());
     }
 }
