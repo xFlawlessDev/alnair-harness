@@ -2,8 +2,8 @@
  * The store the UI talks to.
  *
  * One interface, two implementations: the fixture transport replays the
- * scripted transcripts in `fixtures.ts`, and the socket transport (next
- * milestone) speaks JSON-RPC to `alnair agent serve`. Both feed the same
+ * scripted transcripts in `fixtures.ts`, and the socket transport
+ * speaks JSON-RPC through the shared leader bridge. Both feed the same
  * reducer, so a component cannot tell them apart.
  *
  * Nothing below this line knows what ACP is. Nothing above it knows where the
@@ -11,6 +11,7 @@
  */
 
 import { setMode } from 'mode-watcher';
+import type { GraphInspection, GraphControl, GraphView } from './graph.js';
 import { planQuestionTurn } from './fixtures.js';
 import {
 	initialPlan,
@@ -81,6 +82,8 @@ export interface IncomingFrame {
 }
 
 export interface Transport {
+	inspectGraph?(sessionId: string): Promise<GraphInspection>;
+	controlGraph?(sessionId: string, graphId: string, action: GraphControl): Promise<void>;
 	/**
 	 * Start a turn.
 	 *
@@ -377,6 +380,8 @@ export interface SessionStore {
 	readonly models: ModelOption[];
 	/** Absent when the agent has no graph running. */
 	readonly graph: GraphState | undefined;
+	inspectGraph(): Promise<GraphView>;
+	controlGraph(graphId: string, action: GraphControl): Promise<void>;
 	readonly context: ContextUsage;
 	readonly activeSessionId: string;
 	readonly activeSession: Session;
@@ -926,6 +931,7 @@ export class HarnessStore implements SessionStore {
 			// widen permissions.
 			if (session?.yolo === true) this.access = 'always-approve';
 			else if (result.access) this.access = result.access;
+			this.settings = { ...this.settings, permission_mode: this.access };
 		}
 
 		// The stream carries only `auto_compact_*` deltas; the itemized totals
@@ -1113,23 +1119,46 @@ export class HarnessStore implements SessionStore {
 	}
 
 	setEffort(effort: string) {
+		const model = this.models.find((candidate) => candidate.id === this.model);
+		if (!model?.efforts.includes(effort)) return;
 		this.effort = effort;
+		this.transport.setModel?.(this.model, effort);
+	}
+
+	async inspectGraph(): Promise<GraphView> {
+		if (!this.transport.inspectGraph)
+			throw new Error('Graph inspection requires a connected leader.');
+		const id = this.activeSessionId;
+		const [snapshot, running] = await Promise.all([
+			this.transport.inspectGraph(id),
+			this.transport.listSubagents?.(id) ?? Promise.resolve([])
+		]);
+		if (id !== this.activeSessionId) throw new Error('Session changed.');
+		return { ...snapshot, subagents: mergeSubagents(this.subagents, running) };
+	}
+
+	async controlGraph(graphId: string, action: GraphControl): Promise<void> {
+		if (!this.transport.controlGraph) throw new Error('Graph controls require a connected leader.');
+		await this.transport.controlGraph(this.activeSessionId, graphId, action);
 	}
 
 	setAccess(mode: AccessMode) {
 		this.access = mode;
+		this.settings = { ...this.settings, permission_mode: mode };
+		if (this.live) saveSettings(this.settings);
 		// The runtime mode is a session setting, not a UI preference: the agent
 		// must know, or it keeps asking according to the old mode.
 		this.transport.setAccess?.(mode);
 	}
 
 	setSetting(key: string, value: SettingValue) {
-		this.settings = { ...this.settings, [key]: value };
-		// The composer's access control and the settings dialog edit the same
-		// runtime mode; keep them from disagreeing.
-		if (key === 'permission_mode' && typeof value === 'string') {
-			this.access = value as AccessMode;
+		if (key === 'permission_mode') {
+			if (value === 'ask' || value === 'auto' || value === 'always-approve') {
+				this.setAccess(value);
+			}
+			return;
 		}
+		this.settings = { ...this.settings, [key]: value };
 		if (key === 'theme') applyTheme(String(value));
 		// Persisted on every change: the dialog has no Save button, so the
 		// stored value must follow the control rather than wait for one.
@@ -1948,6 +1977,13 @@ export class HarnessStore implements SessionStore {
 	 */
 	private syncFromUpdate(update: ExtSessionUpdate) {
 		switch (update.sessionUpdate) {
+			case 'interaction_resolved': {
+				if (update.tool_call_id === this.planToolCallId) {
+					this.planArtifact = undefined;
+					this.planToolCallId = undefined;
+				}
+				return;
+			}
 			case 'model_changed': {
 				const event = update as unknown as {
 					model_id?: string;

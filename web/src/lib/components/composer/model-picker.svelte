@@ -24,7 +24,8 @@
 	} = $props();
 
 	const active = $derived(models.find((candidate) => candidate.id === model) ?? models[0]);
-	const hasEfforts = $derived(active.efforts.length > 0);
+	const hasEfforts = $derived((active?.efforts.length ?? 0) > 0);
+	const label = $derived(active?.label ?? (model || 'No models available'));
 </script>
 
 <DropdownMenu.Root>
@@ -34,10 +35,11 @@
 				{...props}
 				type="button"
 				class="flex h-8 items-stretch overflow-hidden rounded-md bg-paper-card text-[11.5px] transition-colors hover:bg-accent"
-				aria-label={`Model: ${active.label}`}
+				aria-label={`Model: ${label}`}
+				disabled={!active}
 			>
 				<span class="flex items-center gap-1 px-2.5">
-					<span class="max-w-44 truncate font-medium text-ink">{active.label}</span>
+					<span class="max-w-44 truncate font-medium text-ink">{label}</span>
 					<ChevronDownIcon class="size-3 text-ink-tertiary" />
 				</span>
 				{#if hasEfforts}
@@ -64,7 +66,7 @@
 		{#if hasEfforts}
 			<DropdownMenu.Separator />
 			<DropdownMenu.Label>Thinking effort</DropdownMenu.Label>
-			{#each active.efforts as level (level)}
+			{#each active?.efforts ?? [] as level (level)}
 				<DropdownMenu.Item class="gap-2" onclick={() => oneffort(level)}>
 					<span class="font-mono text-[12px]">{level}</span>
 					{#if level === effort}

@@ -18,6 +18,141 @@ use tempfile::TempDir;
 
 const ENV_FLAG: &str = "ALNAIR_GOAL_CLASSIFIER";
 
+#[tokio::test(flavor = "current_thread")]
+#[serial]
+async fn graph_client_inspection_and_controls_preserve_identity_and_running_work() {
+    use crate::session::graph_view::GraphControlAction;
+    tokio::task::LocalSet::new()
+        .run_until(async {
+            let (actor, _tmp, _rx) = make_graph_actor_detached().await;
+            let actor = StdArc::new(actor);
+            actor.graph_tracker.lock().create_graph(
+                "graph-1".into(),
+                "Ship feature".into(),
+                Some(10000),
+                chrono::Utc::now().to_rfc3339(),
+            );
+            actor.graph_tracker.lock().install_nodes(vec![
+                crate::session::graph_tracker::GraphNode {
+                    id: "gn-api".into(),
+                    title: "API".into(),
+                    spec: "Implement the API".into(),
+                    deps: vec![],
+                    status: NodeStatus::Ready,
+                    goal_id: None,
+                    rounds: 0,
+                    tokens_used: 0,
+                    failure: None,
+                },
+                crate::session::graph_tracker::GraphNode {
+                    id: "gn-final".into(),
+                    title: "Verify".into(),
+                    spec: "Verify the result".into(),
+                    deps: vec![crate::session::graph_tracker::NodeDep {
+                        on: "gn-api".into(),
+                        kind: Default::default(),
+                    }],
+                    status: NodeStatus::Waiting,
+                    goal_id: None,
+                    rounds: 0,
+                    tokens_used: 0,
+                    failure: None,
+                },
+            ]);
+            actor.goal_tracker.lock().create_goal(
+                "node-goal".into(),
+                "API".into(),
+                None,
+                0,
+                chrono::Utc::now().to_rfc3339(),
+                None,
+            );
+            {
+                let mut tracker = actor.goal_tracker.lock();
+                let goal = tracker.snapshot_mut().unwrap();
+                goal.total_worker_rounds = 3;
+                goal.tokens_used_high_water = 4000;
+            }
+            actor
+                .graph_tracker
+                .lock()
+                .mark_node_running("gn-api", "node-goal".into());
+            let view = actor.inspect_graph().await.unwrap();
+            assert!(view.enabled);
+            assert_eq!(view.source, "session");
+            assert_eq!(view.node_goal.as_ref().unwrap().node_id, "gn-api");
+            assert_eq!(view.node_goal.as_ref().unwrap().worker_rounds, 3);
+            let wire = serde_json::to_value(&view).unwrap();
+            assert_eq!(wire["graph"]["nodes"][0]["status"], "running");
+            assert_eq!(wire["graph"]["nodes"][1]["deps"][0]["on"], "gn-api");
+            assert_eq!(view.graph.unwrap().objective, "Ship feature");
+            actor.goal_tracker.lock().snapshot_mut().unwrap().goal_id = "unrelated-goal".into();
+            assert!(actor.inspect_graph().await.unwrap().node_goal.is_none());
+            actor.goal_tracker.lock().snapshot_mut().unwrap().goal_id = "node-goal".into();
+            assert!(
+                actor
+                    .control_graph("stale-id", GraphControlAction::Clear)
+                    .await
+                    .is_err()
+            );
+            *actor.current_prompt_id.lock().unwrap() = Some("running-turn".into());
+            assert!(
+                actor
+                    .control_graph("graph-1", GraphControlAction::Clear)
+                    .await
+                    .is_err()
+            );
+            actor
+                .control_graph("graph-1", GraphControlAction::Pause)
+                .await
+                .unwrap();
+            assert_eq!(
+                actor.graph_tracker.lock().status(),
+                Some(GoalStatus::UserPaused)
+            );
+            *actor.current_prompt_id.lock().unwrap() = None;
+            actor
+                .control_graph("graph-1", GraphControlAction::Clear)
+                .await
+                .unwrap();
+            assert!(actor.inspect_graph().await.unwrap().graph.is_none());
+        })
+        .await;
+}
+
+#[tokio::test(flavor = "current_thread")]
+#[serial]
+async fn graph_client_project_snapshot_is_read_only_without_session_ownership() {
+    use crate::session::graph_view::GraphControlAction;
+    tokio::task::LocalSet::new()
+        .run_until(async {
+            let (mut actor, tmp, _rx) = make_graph_actor_detached().await;
+            let dir = tmp.path().join(".alnair");
+            actor.graph_tracker.lock().create_graph(
+                "project-graph".into(),
+                "Shared objective".into(),
+                None,
+                chrono::Utc::now().to_rfc3339(),
+            );
+            let state = actor.graph_tracker.lock().snapshot().cloned().unwrap();
+            crate::session::graph_project::project(&dir, &state).unwrap();
+            actor.graph_tracker.lock().clear();
+            actor.graph_project_dir = Some(dir);
+            let actor = StdArc::new(actor);
+            let view = actor.inspect_graph().await.unwrap();
+            assert_eq!(view.source, "project");
+            assert_eq!(view.graph.unwrap().graph_id, "project-graph");
+            assert!(view.node_goal.is_none());
+            assert!(
+                actor
+                    .control_graph("project-graph", GraphControlAction::Pause)
+                    .await
+                    .is_err()
+            );
+        })
+        .await;
+}
+
 /// Extract an absolute path the prompt embeds, starting at the first occurrence
 /// of `anchor` (e.g. `graph.json`) and extending to the end of that token.
 ///

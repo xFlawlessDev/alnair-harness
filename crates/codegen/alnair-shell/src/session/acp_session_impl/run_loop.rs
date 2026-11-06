@@ -265,6 +265,14 @@ pub(super) async fn run_session(
                    .feedback_manager.shutdown(). await; if ! session
                    .startup_hints.is_subagent { session.persist_background_task_manifest().
                    await; } cleanup_session_scratch(& session); return; }; match cmd {
+                   SessionCommand::InspectGraph { respond_to } => {
+                       let result = session.inspect_graph().await;
+                       let _ = respond_to.send(result);
+                   }
+                   SessionCommand::ControlGraph { graph_id, action, respond_to } => {
+                       let result = session.control_graph(&graph_id, action).await;
+                       let _ = respond_to.send(result);
+                   }
                    SessionCommand::Initialize { system_prompt } => { session
                    .initialize(system_prompt). await; let s = session.clone(); let handle =
                    tokio::task::spawn_local(async move { s.build_prefix_background(). await });

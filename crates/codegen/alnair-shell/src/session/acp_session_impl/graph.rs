@@ -151,6 +151,88 @@ pub(crate) fn build_graph_cleared() -> crate::extensions::notification::SessionU
 }
 
 impl SessionActor {
+    pub(super) async fn inspect_graph(
+        &self,
+    ) -> Result<crate::session::graph_view::GraphInspection, String> {
+        use crate::session::graph_view::{GraphInspection, GraphNodeGoalProgress};
+        let mut graph = self.graph_tracker.lock().snapshot().cloned();
+        let mut source = if graph.is_some() { "session" } else { "none" };
+        if graph.is_none()
+            && let Some(dir) = self.graph_project_dir.clone()
+        {
+            graph = tokio::task::spawn_blocking(move || crate::session::graph_project::load(&dir))
+                .await
+                .map_err(|err| err.to_string())?
+                .map_err(|err| err.to_string())?;
+            if graph.is_some() {
+                source = "project";
+            }
+        }
+        let goal_tracker = self.goal_tracker.lock();
+        let node_goal = graph
+            .as_ref()
+            .filter(|_| source == "session")
+            .and_then(|g| {
+                g.current_node
+                    .as_ref()
+                    .and_then(|id| g.nodes.iter().find(|n| &n.id == id))
+            })
+            .zip(goal_tracker.snapshot())
+            .filter(|(node, goal)| node.goal_id.as_deref() == Some(goal.goal_id.as_str()))
+            .map(|(node, goal)| GraphNodeGoalProgress {
+                node_id: node.id.clone(),
+                worker_rounds: goal.total_worker_rounds,
+                verify_rounds: goal.total_verify_rounds,
+                tokens_used: goal.tokens_used_high_water,
+                elapsed_ms: goal.elapsed_ms,
+                subagent_id: goal.current_subagent_id.clone(),
+                subagent_role: goal.current_subagent_role.clone(),
+                pause_message: goal.pause_message.clone(),
+            });
+        Ok(GraphInspection {
+            graph,
+            enabled: self.graph_harness_enabled(),
+            source,
+            node_goal,
+        })
+    }
+
+    pub(super) async fn control_graph(
+        self: &Arc<Self>,
+        graph_id: &str,
+        action: crate::session::graph_view::GraphControlAction,
+    ) -> Result<(), String> {
+        use crate::session::graph_view::GraphControlAction;
+        let matches = self
+            .graph_tracker
+            .lock()
+            .snapshot()
+            .is_some_and(|g| g.graph_id == graph_id);
+        if !matches {
+            return Err(
+                "Graph changed or belongs to another session. Refresh before continuing."
+                    .to_owned(),
+            );
+        }
+        if matches!(action, GraphControlAction::Clear)
+            && self
+                .current_prompt_id
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .is_some()
+        {
+            return Err("Stop the running turn before clearing its graph.".to_owned());
+        }
+        let builtin = match action {
+            GraphControlAction::Pause => crate::session::slash_commands::BuiltinAction::GraphPause,
+            GraphControlAction::Clear => crate::session::slash_commands::BuiltinAction::GraphClear,
+        };
+        self.execute_builtin_slash_command(builtin)
+            .await
+            .map_err(|err| format!("{err:?}"))?;
+        Ok(())
+    }
+
     /// Graph feature flag AND the goal harness (nodes execute as goals).
     pub(super) fn graph_harness_enabled(&self) -> bool {
         self.graph_enabled && self.goal_harness_enabled()

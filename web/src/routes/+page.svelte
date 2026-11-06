@@ -3,12 +3,14 @@
 	import ShieldQuestionIcon from '@lucide/svelte/icons/shield-question';
 	import Composer from '#lib/components/composer/composer.svelte';
 	import QuestionPanel from '#lib/components/composer/question-panel.svelte';
+	import PlanApprovalPanel from '#lib/components/composer/plan-approval-panel.svelte';
 	import BottomDrawer from '#lib/components/inspector/bottom-drawer.svelte';
 	import EditorPane from '#lib/components/inspector/editor-pane.svelte';
 	import Inspector from '#lib/components/inspector/inspector.svelte';
 	import TerminalPane from '#lib/components/inspector/terminal-pane.svelte';
 	import SessionSidebar from '#lib/components/chrome/session-sidebar.svelte';
 	import SubagentDialog from '#lib/components/chrome/subagent-dialog.svelte';
+	import GraphDialog from '#lib/components/graph/graph-dialog.svelte';
 	import ThreadHeader from '#lib/components/chrome/thread-header.svelte';
 	import ConnectionBanner from '#lib/components/chrome/connection-banner.svelte';
 	import Thread from '#lib/components/thread/thread.svelte';
@@ -37,6 +39,7 @@
 	const rememberedRail = saved?.rail;
 	let inspectorOpen = $state(saved?.rail ?? false);
 	let settingsOpen = $state(false);
+	let graphOpen = $state(false);
 	/** The subagent whose detail dialog is open, if any. */
 	let picked = $state<SubagentSummary | undefined>(undefined);
 	let pickedSessionId = $state('');
@@ -263,6 +266,7 @@
 					<ThreadHeader
 						session={store.activeSession}
 						graph={store.graph}
+						ongraph={() => (graphOpen = true)}
 						todos={store.todos}
 						plan={store.plan ?? null}
 						subagents={store.subagents}
@@ -304,6 +308,13 @@
 									onskip={() => store.skipQuestions()}
 								/>
 							{/key}
+						</div>
+					{:else if store.plan}
+						<div class="mx-auto w-full max-w-3xl px-6 pb-2">
+							<PlanApprovalPanel
+								plan={store.plan}
+								onanswer={(outcome) => store.answerPlan(outcome)}
+							/>
 						</div>
 					{:else if store.permission}
 						{@const request = store.permission}
@@ -428,6 +439,17 @@
 				settings={store.settings}
 				onchange={(key, value) => store.setSetting(key, value)}
 			/>
+
+			{#key store.activeSessionId}
+				<GraphDialog
+					bind:open={graphOpen}
+					{store}
+					onsubagent={(agent) => {
+						graphOpen = false;
+						openSubagent(agent);
+					}}
+				/>
+			{/key}
 
 			<SubagentDialog
 				bind:open={subagentOpen}

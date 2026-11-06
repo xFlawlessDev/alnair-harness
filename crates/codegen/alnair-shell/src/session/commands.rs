@@ -97,6 +97,14 @@ impl NotificationSource {
     }
 }
 pub enum SessionCommand {
+    InspectGraph {
+        respond_to: oneshot::Sender<Result<super::graph_view::GraphInspection, String>>,
+    },
+    ControlGraph {
+        graph_id: String,
+        action: super::graph_view::GraphControlAction,
+        respond_to: oneshot::Sender<Result<(), String>>,
+    },
     Initialize {
         system_prompt: String,
     },

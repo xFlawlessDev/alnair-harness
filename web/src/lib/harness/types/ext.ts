@@ -314,6 +314,14 @@ export type ExtSessionUpdate =
 	| AutoCompactCompleted
 	| { sessionUpdate: 'auto_compact_failed'; error: string }
 	| { sessionUpdate: 'auto_compact_cancelled'; reason: string }
+	| {
+			sessionUpdate: 'auto_recovery_started';
+			attempt: number;
+			max_retries: number;
+			error: string;
+			delay_ms: number;
+	  }
+	| { sessionUpdate: 'auto_recovery_exhausted'; attempts: number; error: string }
 	| { sessionUpdate: 'auto_continue_completed'; total_tokens: number }
 	| TaskBackgrounded
 	| TaskCompleted

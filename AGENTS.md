@@ -583,6 +583,26 @@ connection overwrites, so only the newest client sees live deltas.
   `ExtMethodResult { result, error }`; `to_raw_response` (`session/updates`,
   `commands/list`) writes the payload directly. `unwrapExt` discriminates on the
   presence of `result`. Reading only the envelope silently drops transcripts.
+  The transport rejects `{ result: null, error }` failures before reporting a
+  successful mutation; a non-null partial result with a warning remains usable.
+- **Runtime controls must reach the leader.** Effort changes send
+  `session/set_model` with the active model and effort even without a model
+  change. Settings and composer permission controls share `setAccess`; updating
+  localStorage alone does not change the actor's permission mode.
+- **Plan approval needs an answer surface.** The header popover previews the
+  artifact; the panel above the composer answers the parked reverse request.
+  A matching `interaction_resolved` closes it when another client answered.
+- **Graph details come from the actor, not the badge.** `alnair/graph/get`
+  inspects the session's complete snapshot and serial node-goal counters through
+  `SessionCommand::InspectGraph`; a project projection is explicitly read-only.
+  The web graph dialog polls only while open and joins worker/verifier snapshots
+  using the exact harness-authored node description and UUIDv7 spawn id within
+  the graph's lifetime (or the serial goal's child id). Replay receive times must
+  not attach old graph workers to a new graph reusing node ids. Never infer
+  dependencies from counts. `alnair/graph/control` carries the
+  expected graph id for pause/clear; clear refuses a running turn. Start/resume
+  still use the normal `/graph` prompt path, preserving scheduler/lock/budget
+  semantics.
 - **The extension rail is flat too.** `_alnair/session/update` carries
   `{ sessionId, update, _meta }` at the top of `params`, exactly like
   `session/update`; the `_` is only the gateway's marker. The store chooses its

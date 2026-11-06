@@ -85,6 +85,50 @@ covers the cookie half of the same attack.
 Restarting `alnair web` rotates the token, so a stale tab gets 403 until it is
 reloaded. That fails closed on purpose.
 
+## Graph workspace
+
+The **Graph** button in the session header opens the graph workspace, including
+when no graph exists yet. It supports starting an objective with an optional
+token budget, a selectable dependency diagram with zoom, a searchable node list,
+and graph/node history with pending discoveries and plan revisions. Selecting a
+node shows its objective, dependency links, status, recorded rounds/tokens,
+failure details, and associated worker/verifier activity. Child transcripts open
+in the ordinary subagent viewer.
+
+Parallel worker association checks the harness-authored description and UUIDv7
+spawn identity against the graph's creation time. Replaying old subagent events
+must not attach their activity to a new graph that reuses the same node ids.
+
+`_alnair/graph/get` takes a flat `{ sessionId }` and returns an extension envelope
+containing `{ graph, enabled, source, node_goal }`. Graph fields match the Rust
+snapshot's snake_case names. The actor copies its in-memory trackers; if no
+session graph exists it can inspect the project's projection with
+`source: "project"`. That projection is read-only until the ordinary resume
+flow successfully acquires ownership. The dialog refreshes every two seconds
+while open and discards responses for sessions that are no longer selected.
+
+Pause and clear use `_alnair/graph/control` with
+`{ sessionId, graphId, action: "pause" | "clear" }`. The actor checks graph
+identity before using the existing slash-command implementation. Pause takes
+effect at execution boundaries; **Stop running turn** uses session cancellation.
+Clear requires confirmation and refuses while the actor still has a running
+prompt. It clears orchestration state and preserves working files and the
+transcript. Start and resume (including additional budget) use the ordinary
+`/graph` prompt path.
+
+Progress uses runtime counters and statuses. Node completion is verifier-gated;
+there is no invented percentage for unfinished work. Graph/node token totals are
+recorded spend, while a running child's context tokens are labeled separately.
+Automatic replans and optimization passes appear through the current topology,
+plan version, discoveries and history; they do not require separate UI controls.
+
+`npm --prefix web run test:graph-ui` runs a headless Chromium smoke test using a
+mocked leader wire, without a provider call or extra npm dependency. It finds a
+local Edge/Chrome/Chromium installation, or accepts `ALNAIR_TEST_BROWSER`. Browser
+profiles are temporary and cleaned up. Screenshots go to
+`web/.svelte-kit/graph-smoke/`. This complements the Rust graph-client tests and
+the transport/layout unit tests; it is not an inference run against a real model.
+
 ## Development
 
 **Embedded** (no Vite): `npm --prefix web run build`, then `cargo run -- web`.

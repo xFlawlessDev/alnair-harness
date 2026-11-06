@@ -5,7 +5,7 @@
 	import type { GraphState } from '#lib/harness/types.js';
 	import StatusDot from './status-dot.svelte';
 
-	let { graph }: { graph: GraphState } = $props();
+	let { graph, onopen }: { graph: GraphState; onopen?: () => void } = $props();
 
 	// The wire sends counts, so the chip counts. It never reconstructs a DAG.
 	const done = $derived(graph.total === 0 ? 0 : graph.achieved / graph.total);
@@ -28,7 +28,8 @@
 				{...props}
 				type="button"
 				class="flex h-7 items-center gap-1.5 rounded-full border border-line bg-paper px-2.5 text-[11px] transition-colors hover:border-line-strong"
-				aria-label="Graph status"
+				aria-label="Open graph progress"
+				onclick={onopen}
 			>
 				<NetworkIcon class="size-3 text-olive" />
 				<StatusDot status={dotStatus} pulse={graph.running > 0} />

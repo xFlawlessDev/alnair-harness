@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { WebSocketTransport } from './ws-transport.js';
 import type { IncomingFrame } from './session-store.svelte.js';
+import { HarnessStore } from './session-store.svelte.js';
 
 /**
  * A stand-in for the browser `WebSocket`.
@@ -160,6 +161,200 @@ describe('ws-transport: subagent snapshots', () => {
 		await settle();
 		answer(socket, '_alnair/subagent/get', { result: { snapshot: null } });
 		await expect(detail).resolves.toBeUndefined();
+	});
+});
+
+describe('graph inspection and controls over JSON-RPC', () => {
+	beforeEach(() => {
+		FakeSocket.instances = [];
+		vi.stubGlobal('WebSocket', FakeSocket);
+	});
+	async function connected() {
+		const { transport } = makeTransport();
+		const ready = transport.connect();
+		await settle();
+		const socket = FakeSocket.instances[0];
+		answer(socket, 'initialize', {});
+		await ready;
+		return { transport, socket };
+	}
+	it('requests the selected session snapshot, including its node payload', async () => {
+		const { transport, socket } = await connected();
+		const result = transport.inspectGraph('second-session');
+		expect(sentOf(socket, '_alnair/graph/get')?.params).toEqual({ sessionId: 'second-session' });
+		answer(socket, '_alnair/graph/get', {
+			result: {
+				enabled: true,
+				source: 'session',
+				node_goal: null,
+				graph: {
+					graph_id: 'g-2',
+					nodes: [{ id: 'node-1', spec: 'Do the work', deps: [], status: 'running' }]
+				}
+			}
+		});
+		await expect(result).resolves.toMatchObject({
+			graph: { graph_id: 'g-2', nodes: [{ id: 'node-1', status: 'running' }] }
+		});
+	});
+	it('carries graph identity on a control and surfaces stale-graph errors', async () => {
+		const { transport, socket } = await connected();
+		const result = transport.controlGraph('second-session', 'old-graph', 'clear');
+		const rejected = expect(result).rejects.toThrow('Graph changed');
+		expect(sentOf(socket, '_alnair/graph/control')?.params).toEqual({
+			sessionId: 'second-session',
+			graphId: 'old-graph',
+			action: 'clear'
+		});
+		answer(socket, '_alnair/graph/control', { result: null, error: 'Graph changed' });
+		await rejected;
+	});
+});
+
+describe('web controls through the leader transport', () => {
+	beforeEach(() => {
+		FakeSocket.instances = [];
+		vi.stubGlobal('WebSocket', FakeSocket);
+	});
+
+	async function connectedStore() {
+		const { transport } = makeTransport();
+		const store = new HarnessStore(transport);
+		const connected = transport.connect();
+		await settle();
+		const socket = FakeSocket.instances[0];
+		answer(socket, 'initialize', {});
+		await connected;
+		const loaded = transport.openSession('s1', '/repo');
+		answer(socket, 'session/load', { models: { availableModels: [] } });
+		await loaded;
+		store.activeSessionId = 's1';
+		store.sessions = [
+			{
+				id: 's1',
+				title: 'Session',
+				cwd: '/repo',
+				workspace: 'repo',
+				source: 'local',
+				numMessages: 0,
+				status: 'idle',
+				createdAt: '',
+				updatedAt: ''
+			}
+		];
+		return { store, socket };
+	}
+
+	function requestPlan(socket: FakeSocket) {
+		socket.deliver({
+			jsonrpc: '2.0',
+			id: 900,
+			method: '_alnair/exit_plan_mode',
+			params: {
+				method: 'alnair/exit_plan_mode',
+				params: {
+					sessionId: 's1',
+					toolCallId: 'plan-1',
+					planContent: '# Fix the bug'
+				}
+			}
+		});
+	}
+
+	it.each(['approved', 'cancelled', 'abandoned'] as const)(
+		'answers a parked plan with %s',
+		async (outcome) => {
+			const { store, socket } = await connectedStore();
+			requestPlan(socket);
+			expect(store.plan?.markdown).toBe('# Fix the bug');
+			store.answerPlan(outcome);
+			expect(socket.sent.at(-1)).toEqual({ jsonrpc: '2.0', id: 900, result: { outcome } });
+			expect(store.plan).toBeUndefined();
+			const count = socket.sent.length;
+			store.answerPlan(outcome);
+			expect(socket.sent).toHaveLength(count);
+		}
+	);
+
+	it('closes only the plan another client resolved', async () => {
+		const { store, socket } = await connectedStore();
+		requestPlan(socket);
+		const resolve = (id: string) =>
+			socket.deliver({
+				jsonrpc: '2.0',
+				method: '_alnair/session/update',
+				params: {
+					sessionId: 's1',
+					update: { sessionUpdate: 'interaction_resolved', tool_call_id: id }
+				}
+			});
+		resolve('unrelated');
+		expect(store.plan).toBeDefined();
+		resolve('plan-1');
+		expect(store.plan).toBeUndefined();
+	});
+
+	it('sends an effort change without requiring another model selection', async () => {
+		const { store, socket } = await connectedStore();
+		store.models = [
+			{
+				id: 'kimi-code/kimi-k2',
+				label: 'Kimi',
+				provider: 'Kimi Code',
+				contextWindow: 128000,
+				efforts: ['low', 'high']
+			}
+		];
+		store.model = 'kimi-code/kimi-k2';
+		store.setEffort('high');
+		expect(sentOf(socket, 'session/set_model')?.params).toEqual({
+			sessionId: 's1',
+			modelId: 'kimi-code/kimi-k2',
+			_meta: { reasoningEffort: 'high' }
+		});
+		answer(socket, 'session/set_model', {});
+		const count = socket.sent.length;
+		store.setEffort('unsupported');
+		expect(store.effort).toBe('high');
+		expect(socket.sent).toHaveLength(count);
+	});
+
+	it('keeps both permission controls in step with the runtime', async () => {
+		const { store, socket } = await connectedStore();
+		store.setSetting('permission_mode', 'always-approve');
+		expect(store.access).toBe('always-approve');
+		expect(socket.sent.at(-1)?.params).toMatchObject({
+			sessionId: 's1',
+			permission_mode: 'always-approve',
+			yolo_mode: true,
+			auto_mode: false
+		});
+		store.setAccess('ask');
+		expect(store.settings.permission_mode).toBe('ask');
+		expect(socket.sent.at(-1)?.params).toMatchObject({ permission_mode: 'ask', yolo_mode: false });
+	});
+
+	it.each(['disk full', { code: 'write_failed', message: 'permission denied' }])(
+		'rejects a file save when the extension reports %j',
+		async (error) => {
+			const { store, socket } = await connectedStore();
+			const saving = store.writeFile('src/main.rs', 'changed');
+			const rejected = expect(saving).rejects.toThrow(
+				typeof error === 'string' ? error : error.message
+			);
+			answer(socket, '_alnair/fs/write_file', { result: null, error });
+			await rejected;
+		}
+	);
+
+	it('keeps partial-success payloads usable', async () => {
+		const { store, socket } = await connectedStore();
+		const reading = store.readFile('src/main.rs');
+		answer(socket, '_alnair/fs/read_file', {
+			result: { content: 'partial content', size: 15 },
+			error: 'truncated'
+		});
+		expect((await reading)?.text).toBe('partial content');
 	});
 });
 

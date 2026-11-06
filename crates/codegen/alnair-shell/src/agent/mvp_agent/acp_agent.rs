@@ -2306,6 +2306,9 @@ impl acp::Agent for MvpAgent {
                 crate::extensions::session_admin::handle(self, &args).await
             }
             "alnair/session/repair" => crate::extensions::repair::handle(self, &args).await,
+            "alnair/graph/get" | "alnair/graph/control" => {
+                crate::extensions::graph::handle(self, &args).await
+            }
             "alnair/billing" => crate::extensions::billing::handle(self, &args).await,
             "alnair/memory/flush" | "alnair/memory/rewrite" => {
                 crate::extensions::memory::handle(self, &args).await

@@ -5,24 +5,29 @@ shadcn-svelte components composed into the [AI Elements](https://www.shadcn-svel
 patterns. It is meant as an alternative to the TUI for people who prefer a
 browser, not as a second window beside it.
 
-**There is no socket yet.** The UI renders scripted transcripts that are real
-wire frames, replayed through the same reducer the socket will feed, so the
-shapes below are the contract rather than a sketch of one.
+The default transport connects to the shared agent leader through `alnair web`.
+Use `?fixtures=1` for scripted transcripts that exercise the same reducer.
+See [the web server guide](../docs/WEB.md) for serving, authentication and the
+leader bridge, and [the feature audit](../docs/WEB-COVERAGE-AUDIT.md) for remaining
+feature gaps.
 
 ```sh
 npm install
+npm run build
+# Start `alnair web` in another terminal, then run the HMR client:
 npm run dev
 ```
 
-| Script            | What it does                                               |
-| ----------------- | ---------------------------------------------------------- |
-| `npm run dev`     | Vite dev server with HMR                                   |
-| `npm run build`   | Production build                                           |
-| `npm run preview` | Serve the production build                                 |
-| `npm run check`   | `svelte-check` — types and Svelte diagnostics, zero errors |
-| `npm run lint`    | Prettier check plus ESLint                                 |
-| `npm run format`  | Prettier write                                             |
-| `npm test`        | Vitest — the reducer, segmenting, and formatting           |
+| Script                  | What it does                                                      |
+| ----------------------- | ----------------------------------------------------------------- |
+| `npm run dev`           | Vite dev server with HMR                                          |
+| `npm run build`         | Production build                                                  |
+| `npm run preview`       | Serve the production build                                        |
+| `npm run check`         | `svelte-check` — types and Svelte diagnostics, zero errors        |
+| `npm run lint`          | Prettier check plus ESLint                                        |
+| `npm run format`        | Prettier write                                                    |
+| `npm test`              | Vitest — the reducer, segmenting, and formatting                  |
+| `npm run test:graph-ui` | Headless Chromium smoke test for graph controls and node progress |
 
 ## The wire
 
@@ -50,8 +55,7 @@ carries `total_nodes` and `tokens_spent` while `tool_call` carries `toolCallId`.
 
 Components never touch the wire. They read one interface, `SessionStore` in
 `src/lib/harness/session-store.svelte.ts`. Behind it sit two implementations:
-`FixtureTransport` (today) and the socket transport (next), both feeding the
-same reducer.
+`FixtureTransport` and `WebSocketTransport`, both feeding the same reducer.
 
 ```
 wire frame ──▶ reducer.ts ──▶ Acc ──▶ SessionStore ──▶ components
@@ -93,28 +97,29 @@ interface SessionStore {
 Every field below is produced by something the agent actually sends. Nothing is
 invented; where the wire carries less, the UI shows less.
 
-| View model        | Wire source                                                           |
-| ----------------- | --------------------------------------------------------------------- |
-| `Turn`            | one `session/prompt` exchange, closed by its response                 |
-| `TurnStatus`      | `StopReason` (`cancelled`, `refusal`, …)                              |
-| `TextPart`        | `agent_message_chunk`                                                 |
-| `ReasoningPart`   | `agent_thought_chunk`                                                 |
-| `FileReadPart`    | `tool_call` kind `read` + a text block                                |
-| `ImageReadPart`   | `tool_call` kind `read` + an image block                              |
-| `FileEditPart`    | `tool_call` + a `diff` with `oldText`                                 |
-| `FileWritePart`   | `tool_call` + a `diff` without `oldText` (a new file)                 |
-| `TerminalPart`    | `tool_call` kind `execute`, or `task_backgrounded` / `task_completed` |
-| `SubagentPart`    | `subagent_spawned` → `subagent_progress` → `subagent_finished`        |
-| `PermissionPart`  | `pending_interaction` with `kind: permission`                         |
-| `SystemPart`      | a `user_message_chunk` that is wholly a `<tag>…</tag>` envelope       |
-| `QuestionPart`    | the `alnair/ask_user_question` reverse request                        |
-| `NoticePart`      | `retry_state`, `auto_compact_*`, `model_*`, `session_recap`           |     | `TodoItem` | the ACP `plan` update (which `todo_write` produces) |
-| `PlanArtifact`    | the `alnair/exit_plan_mode` reverse request                           |
-| `GraphState`      | `graph_updated` — counts, not a DAG                                   |
-| `ContextUsage`    | `auto_compact_*` and `model_changed`                                  |
-| `Session`         | an `alnair/session/list` row                                          |
-| `WorkspaceGroup`  | those rows regrouped by `repoName`                                    |
-| `ComposerContext` | the active session's checkout and the agent's access mode             |
+| View model        | Wire source                                                                    |
+| ----------------- | ------------------------------------------------------------------------------ |
+| `Turn`            | one `session/prompt` exchange, closed by its response                          |
+| `TurnStatus`      | `StopReason` (`cancelled`, `refusal`, …)                                       |
+| `TextPart`        | `agent_message_chunk`                                                          |
+| `ReasoningPart`   | `agent_thought_chunk`                                                          |
+| `FileReadPart`    | `tool_call` kind `read` + a text block                                         |
+| `ImageReadPart`   | `tool_call` kind `read` + an image block                                       |
+| `FileEditPart`    | `tool_call` + a `diff` with `oldText`                                          |
+| `FileWritePart`   | `tool_call` + a `diff` without `oldText` (a new file)                          |
+| `TerminalPart`    | `tool_call` kind `execute`, or `task_backgrounded` / `task_completed`          |
+| `SubagentPart`    | `subagent_spawned` → `subagent_progress` → `subagent_finished`                 |
+| `PermissionPart`  | `pending_interaction` with `kind: permission`                                  |
+| `SystemPart`      | a `user_message_chunk` that is wholly a `<tag>…</tag>` envelope                |
+| `QuestionPart`    | the `alnair/ask_user_question` reverse request                                 |
+| `NoticePart`      | `retry_state`, `auto_compact_*`, `auto_recovery_*`, `model_*`, `session_recap` |
+| `TodoItem`        | the ACP `plan` update (which `todo_write` produces)                            |
+| `PlanArtifact`    | the `alnair/exit_plan_mode` reverse request                                    |
+| `GraphState`      | `graph_updated` — counts, not a DAG                                            |
+| `ContextUsage`    | `auto_compact_*` and `model_changed`                                           |
+| `Session`         | an `alnair/session/list` row                                                   |
+| `WorkspaceGroup`  | those rows regrouped by `repoName`                                             |
+| `ComposerContext` | the active session's checkout and the agent's access mode                      |
 
 ### What the UI deliberately does not show
 
@@ -170,6 +175,7 @@ src/
       workspaces.ts       flat session rows → workspace groups
       fixtures.ts         scripted transcripts
       session-store.svelte.ts  the store and the fixture transport
+      ws-transport.ts     JSON-RPC over the leader's WebSocket bridge
       mock.ts             session rows, catalog, initial transcript
     components/
       chrome/             sidebar, thread header, plan + todo popovers
@@ -247,14 +253,11 @@ self-hosted in `static/fonts/`; nothing loads from a CDN.
   the list — and the current workspace is marked rather than moved. Neither the
   sidebar nor the header repeats the branch; that belongs to the composer's
   checkout row. The sidebar's footer holds the settings button.
-- **Settings** live in a dialog behind that button. The registry is large, so
-  the sections sit in a rail on the left, in the registry's own order, with a
-  search box that flattens the whole list. Every row is a `SettingMeta` from
-  `alnair-tui/src/settings/`: same key, same label, same wording, so the dialog
-  and the TUI explain a setting identically. Terminal-only entries (mouse
-  scroll speed, vim mode, screen mode) are deliberately absent — they change a
-  TUI the browser does not render. The theme control lives here, not in the
-  chat header.
+- **Settings** live in a dialog behind that button, with categories and search.
+  The browser owns its registry in `harness/settings.ts`; appearance and input
+  preferences persist in localStorage. Permission mode is a runtime control:
+  both the dialog and the composer send the same mode change to the agent.
+  Terminal-only settings are absent. The theme control lives here.
 - **The composer is one card.** The field sits on top, a control row under it
   (`+`, access, then model · effort · context · send), and a checkout row
   attached below. The access menu offers the runtime's three
@@ -300,6 +303,19 @@ edited` — and expanding it restores the original trace. A turn with no text
   Closing the dialog, choosing another child, or switching parent sessions stops
   the refresh and ignores late responses. Failed reads keep the last transcript
   visible and retry; unchanged transcripts keep their existing rendered state.
+- **Plan approval** also opens a panel above the composer, where the reader can
+  review the Markdown and approve, reject, or leave plan mode. The answer goes
+  to the parked reverse request. An `interaction_resolved` for that call closes
+  the panel when another client answered first.
+- **Extension failures** can arrive inside a successful JSON-RPC response as
+  `{ result: null, error }`. The transport rejects those before a mutation can
+  report success. A non-null partial result with a warning remains usable.
+- **Graph** opens a workspace from the header, even before a graph exists.
+  It shows a dependency diagram, filterable nodes, node objectives/status and
+  counters, worker/verifier activity and transcripts, discoveries and history.
+  Start, pause, resume with extra budget, stop-turn and confirmed clear use the
+  runtime's existing semantics. Full snapshots are read from `alnair/graph/get`
+  every two seconds while open; badge counts never stand in for topology.
 - **Permission** has exactly one set of buttons, in the banner above the
   composer. The in-thread card is a marker, not a control: two sets for one
   request invites answering it twice. An ANSWERED request collapses to one
@@ -331,16 +347,11 @@ edited` — and expanding it restores the original trace. A turn with no text
 
 ## What is not here yet
 
-- **The socket.** `FixtureTransport` is the only transport. The next step is a
-  `WebSocketTransport` against `alnair agent serve` (`ws://127.0.0.1:2419/ws`),
-  implementing the same interface.
-- **A `plan_approval` card.** `pending_interaction` can carry that kind; today
-  the header shows "needs input" and the plan popover shows the artifact, but
-  there is no in-thread card for it.
-- **The prompt queue** (`alnair/queue/*`) and **slash commands** beyond the
-  advertised list.
-- **Session replay.** `alnair/session/updates` returns a stored transcript, and
-  `replay()` already folds one; the store does not call it yet.
-- No persistence, no auth, no responsive drawer below `md`.
-- Terminal output is plain text; ANSI colouring exists in `highlighter.ts` but
-  no fixture exercises it.
+- Prompt queue/interjection controls (`alnair/queue/*`).
+- Session fork, rewind, repair and transcript full-text search controls.
+- MCP, provider login, skills, plugins, hooks and background-task management
+  panels. Their tool output can still appear in the transcript.
+- Standalone goal, scheduler and memory event views.
+- A browser E2E suite against a live leader. `test:graph-ui` exercises the graph
+  controls in an installed Chromium browser with mocked leader responses;
+  unit tests cover the store, reducer and transport.

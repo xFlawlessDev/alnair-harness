@@ -1175,6 +1175,42 @@ export function reduceExtUpdate(input: Acc, update: ExtSessionUpdate, ctx: Reduc
 			};
 		}
 
+		case 'auto_compact_failed':
+		case 'auto_compact_cancelled': {
+			const failed = update.sessionUpdate === 'auto_compact_failed';
+			const event = update as { error?: string; reason?: string };
+			return pushPart(
+				acc,
+				{
+					kind: 'notice',
+					id: newId(),
+					tone: failed ? 'warning' : 'info',
+					title: failed ? 'Context compaction failed' : 'Context compaction cancelled',
+					detail: (failed ? event.error : event.reason) ?? ''
+				},
+				now
+			);
+		}
+
+		case 'auto_recovery_started':
+		case 'auto_recovery_exhausted': {
+			const exhausted = update.sessionUpdate === 'auto_recovery_exhausted';
+			const event = update as { attempt?: number; max_retries?: number; error: string };
+			return pushPart(
+				acc,
+				{
+					kind: 'notice',
+					id: newId(),
+					tone: exhausted ? 'warning' : 'info',
+					title: exhausted
+						? 'Session recovery failed'
+						: `Recovering session (attempt ${event.attempt}/${event.max_retries})`,
+					detail: event.error
+				},
+				now
+			);
+		}
+
 		case 'task_backgrounded': {
 			const event = update as unknown as {
 				tool_call_id: string;

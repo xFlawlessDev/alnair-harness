@@ -18,6 +18,49 @@ import type { TurnPart } from './types.js';
 const SESSION = 's-graph';
 const NOW = Date.parse('2026-10-20T09:41:12Z');
 
+describe('runtime failure notices', () => {
+	it.each([
+		{
+			update: { sessionUpdate: 'auto_compact_failed', error: 'out of memory' },
+			title: 'Context compaction failed',
+			tone: 'warning',
+			detail: 'out of memory'
+		},
+		{
+			update: { sessionUpdate: 'auto_compact_cancelled', reason: 'user cancelled' },
+			title: 'Context compaction cancelled',
+			tone: 'info',
+			detail: 'user cancelled'
+		},
+		{
+			update: {
+				sessionUpdate: 'auto_recovery_started',
+				attempt: 2,
+				max_retries: 3,
+				error: 'connection lost',
+				delay_ms: 500
+			},
+			title: 'Recovering session (attempt 2/3)',
+			tone: 'info',
+			detail: 'connection lost'
+		},
+		{
+			update: { sessionUpdate: 'auto_recovery_exhausted', attempts: 3, error: 'still offline' },
+			title: 'Session recovery failed',
+			tone: 'warning',
+			detail: 'still offline'
+		}
+	])('renders $title without changing the context total', ({ update, title, tone, detail }) => {
+		const before = { ...emptyAcc(), contextUsed: 500 };
+		const after = reduceExtUpdate(before, update as ExtSessionUpdate, {
+			now: NOW,
+			sessionId: SESSION
+		});
+		expect(after.turns.at(-1)?.parts.at(-1)).toMatchObject({ kind: 'notice', title, tone, detail });
+		expect(after.contextUsed).toBe(500);
+	});
+});
+
 /** Fold a scripted turn the way the transport does. */
 function runTurn(
 	prompt: string,

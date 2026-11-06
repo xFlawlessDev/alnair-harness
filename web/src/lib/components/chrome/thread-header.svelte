@@ -2,6 +2,7 @@
 	import PanelBottomIcon from '@lucide/svelte/icons/panel-bottom';
 	import PanelLeftIcon from '@lucide/svelte/icons/panel-left';
 	import PanelRightIcon from '@lucide/svelte/icons/panel-right';
+	import NetworkIcon from '@lucide/svelte/icons/network';
 	import { Button } from '#lib/components/ui/button/index.js';
 	import * as Tooltip from '#lib/components/ui/tooltip/index.js';
 	import type {
@@ -29,6 +30,7 @@
 		plan,
 		subagents,
 		onsubagent,
+		ongraph,
 		inspectorOpen,
 		oninspector,
 		drawerOpen = false,
@@ -44,6 +46,7 @@
 		/** Subagents this session spawned; the list opens beside the title. */
 		subagents: SubagentSummary[];
 		onsubagent: (subagent: SubagentSummary) => void;
+		ongraph: () => void;
 		inspectorOpen: boolean;
 		oninspector: () => void;
 		/** Whether the bottom editor/terminal panel is showing. */
@@ -100,7 +103,11 @@
 		{/if}
 
 		{#if graph}
-			<GraphChip {graph} />
+			<GraphChip {graph} onopen={ongraph} />
+		{:else}
+			<Button variant="ghost" size="sm" onclick={ongraph} aria-label="Open graph progress">
+				<NetworkIcon data-icon="inline-start" />Graph
+			</Button>
 		{/if}
 
 		{#if ondrawer}

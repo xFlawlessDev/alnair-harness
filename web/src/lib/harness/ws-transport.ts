@@ -22,6 +22,7 @@ import type {
 	GetSubagentResponse
 } from './types/ext.js';
 import type { FilePreview, IncomingFrame, PlanOutcome, Transport } from './session-store.svelte.js';
+import type { GraphInspection, GraphControl } from './graph.js';
 import type {
 	BranchEntry,
 	ContextUsage,
@@ -438,6 +439,18 @@ export class WebSocketTransport implements Transport {
 		const raw = await this.ext('alnair/subagent/list_running', { sessionId });
 		const payload = unwrapExt<{ subagents?: SubagentLiveSnapshot[] }>(raw);
 		return (payload?.subagents ?? []).map(fromLive);
+	}
+
+	async inspectGraph(sessionId: string): Promise<GraphInspection> {
+		const raw = await this.ext('alnair/graph/get', { sessionId });
+		const payload = unwrapExt<GraphInspection>(raw);
+		if (!payload || !('graph' in payload))
+			throw new Error('The leader returned no graph snapshot.');
+		return payload;
+	}
+
+	async controlGraph(sessionId: string, graphId: string, action: GraphControl): Promise<void> {
+		await this.ext('alnair/graph/control', { sessionId, graphId, action });
 	}
 
 	async getSubagent(
@@ -1059,8 +1072,22 @@ export class WebSocketTransport implements Transport {
 	 * (A method that ignores unknown fields, like `sessions/list`, answers
 	 * either way — which is exactly how this bug hid.)
 	 */
-	private ext(method: string, params: Record<string, unknown>): Promise<unknown> {
-		return this.request(`_${method}`, params);
+	private async ext(method: string, params: Record<string, unknown>): Promise<unknown> {
+		const raw = await this.request(`_${method}`, params);
+		if (raw && typeof raw === 'object' && 'result' in raw && raw.result === null) {
+			const error = (raw as { error?: unknown }).error;
+			if (error !== undefined && error !== null) {
+				const message =
+					typeof error === 'string'
+						? error
+						: typeof error === 'object' && 'message' in error
+							? String(error.message)
+							: JSON.stringify(error);
+				throw new Error(message || `${method} failed`);
+			}
+		}
+		// A non-null result with an error is a partial success; keep its warning.
+		return raw;
 	}
 
 	private sendRaw(message: Rpc) {

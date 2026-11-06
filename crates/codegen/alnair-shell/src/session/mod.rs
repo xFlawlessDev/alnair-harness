@@ -2,6 +2,7 @@ pub mod acp_types;
 pub mod announcement_state;
 pub mod commands;
 pub mod compaction_config;
+pub mod graph_view;
 pub mod handle;
 pub mod memory_state;
 pub mod merge;

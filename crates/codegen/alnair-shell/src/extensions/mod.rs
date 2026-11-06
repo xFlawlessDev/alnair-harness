@@ -8,6 +8,7 @@ pub mod feedback;
 pub mod fs;
 pub mod fs_search;
 pub mod git;
+pub mod graph;
 pub mod hooks;
 pub mod hunk_tracker;
 pub mod interject;
