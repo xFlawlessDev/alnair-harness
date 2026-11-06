@@ -13,6 +13,53 @@ what the Alnair fork adds, changes, or removes.
 
 Nothing yet.
 
+## [0.1.7] - 2026-11-07
+
+### Added
+
+- Custom providers can use the OpenAI Responses API. Choose Responses in
+  `/connect` or set `api = "responses"` under `[platforms.<name>]`; model
+  discovery, API-key authentication and reasoning effort follow that provider.
+- ACP clients can list sessions with an optional cwd filter, close a session
+  without deleting its transcript, and change `reasoning_effort` through
+  `session/set_config_option`. Initialization now advertises image support;
+  unsupported audio is rejected before a turn starts.
+- Settings → Models offers separate selections for session titles, image
+  descriptions, prompt suggestions, shell suggestions and memory note
+  formatting. **Follow chat model** uses the active model and its credentials;
+  explicit empty config values clear remote overrides.
+- The browser's graph workspace shows dependencies, node details, worker and
+  verifier activity, child transcripts, and graph history. It can start a graph,
+  pause or clear it, and resume after a budget limit with a new budget.
+- Browser access uses single-use pairing links from `alnair web pair`, signed
+  session cookies that survive server restarts, and `alnair web revoke` to
+  disconnect paired browsers and invalidate their credentials.
+- `alnair web start`, `status`, `stop` and `restart` manage a detached,
+  user-scoped server. Launch settings and logs stay under `~/.alnair/web`;
+  closing the terminal leaves the service running.
+
+### Changed
+
+- Switching between Chat Completions, Messages, Responses and Codex preserves
+  compatible text, tool calls, results and images. Reasoning signatures and
+  encrypted content are replayed only in a compatible protocol and model context.
+- The browser's plan approval, reasoning effort and permission controls now
+  reach the agent runtime. Failed extension requests, compaction and recovery
+  report their errors in the browser.
+
+### Fixed
+
+- Background model tasks inherit the active chat model when no override is set,
+  instead of falling back to the bundled Kimi default. Clearing an image-model
+  override takes effect without restarting the session, and title generation
+  uses the model active when the first user message arrives.
+- Open subagent dialogs refresh their status, counters and transcripts while
+  work continues, without requiring a session switch.
+- The browser terminal no longer starts duplicate PTYs during initialization
+  or leaves a pending PTY running when its pane closes before startup completes.
+- ACP stdio tests resolve the shipping `alnair` binary and use the mock server
+  for model discovery as well as inference.
+
 ## [0.1.6] — 2026-11-04
 
 ### Added
