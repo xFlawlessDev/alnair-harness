@@ -160,6 +160,11 @@ export interface Transport {
 	}): Promise<FileEntry[]>;
 	/** Subagents running under a session right now. */
 	listSubagents?(sessionId: string): Promise<SubagentSummary[]>;
+	/** One subagent's current counters and terminal status. */
+	getSubagent?(
+		subagentId: string,
+		previous?: SubagentSummary
+	): Promise<SubagentSummary | undefined>;
 
 	// --- workspace administration -------------------------------------------
 	//
@@ -385,8 +390,11 @@ export interface SessionStore {
 	readonly subagents: SubagentSummary[];
 	/** The transcript of one subagent, or empty when none is open. */
 	readonly subagentTurns: Turn[];
-	/** Open a subagent's child session and load its transcript. */
-	openSubagent(subagent: SubagentSummary): void;
+	readonly subagentDetail: SubagentSummary | undefined;
+	readonly subagentLoading: boolean;
+	readonly subagentError: string | undefined;
+	/** Refresh a child's transcript until the returned cleanup is called. */
+	openSubagent(subagent: SubagentSummary): () => void;
 	readonly busy: boolean;
 	/** A parked permission request, if the agent is waiting on the user. */
 	readonly permission: PermissionRequest | undefined;
@@ -712,6 +720,15 @@ export class HarnessStore implements SessionStore {
 	 * read through `alnair/session/updates`, not a separate agent view.
 	 */
 	subagentTurns = $state<Turn[]>([]);
+	subagentLoading = $state(false);
+	subagentError = $state<string | undefined>(undefined);
+	private pickedSubagent = $state<SubagentSummary | undefined>(undefined);
+	private stopSubagentWatch: (() => void) | undefined;
+
+	get subagentDetail(): SubagentSummary | undefined {
+		const picked = this.pickedSubagent;
+		return picked ? (this.subagents.find((entry) => entry.id === picked.id) ?? picked) : undefined;
+	}
 
 	/**
 	 * Whether a turn is in flight.
@@ -738,7 +755,7 @@ export class HarnessStore implements SessionStore {
 	private readonly live: boolean;
 
 	/**
-	 * Live subagent snapshots per session, from `alnair/subagent/list_running`.
+	 * Subagent snapshots per session, from `list_running` and the open dialog's `get`.
 	 *
 	 * Kept per session rather than for the active one alone: the header's list
 	 * is the transcript plus these, and switching away and back must not make a
@@ -1051,6 +1068,7 @@ export class HarnessStore implements SessionStore {
 	selectSession(id: string) {
 		if (!this.sessions.some((session) => session.id === id)) return;
 		if (id === this.activeSessionId) return;
+		this.stopSubagentWatch?.();
 		this.transport.stop();
 		this.localBusy = false;
 		this.activeSessionId = id;
@@ -1162,38 +1180,79 @@ export class HarnessStore implements SessionStore {
 	}
 
 	/**
-	 * Load a subagent's conversation.
+	 * Refresh a subagent's conversation while its dialog is open.
 	 *
 	 * The child session stores its own `updates.jsonl`, and
 	 * `alnair/session/updates` reads any session by id — including one whose
 	 * cwd differs from the parent's, which is exactly the subagent case. The
 	 * replay is folded by the same reducer the main thread uses, so the agent
 	 * view here is a normal conversation, not a summary.
+	 * The caller owns cleanup on close, selection change, and unmount.
 	 */
-	openSubagent(subagent: SubagentSummary) {
+	openSubagent(subagent: SubagentSummary): () => void {
+		this.stopSubagentWatch?.();
+		this.pickedSubagent = subagent;
+		this.subagentTurns = [];
+		this.subagentError = undefined;
+		this.subagentLoading = false;
+
+		const parent = this.activeSession;
 		const childSessionId = subagent.childSessionId;
+		let stopped = false;
+		let timer: ReturnType<typeof setTimeout> | undefined;
+		const stop = () => {
+			stopped = true;
+			clearTimeout(timer);
+			if (this.stopSubagentWatch !== stop) return;
+			this.stopSubagentWatch = undefined;
+			this.pickedSubagent = undefined;
+			this.subagentLoading = false;
+		};
+		this.stopSubagentWatch = stop;
+
 		// Only the fixture transport has no child transcript to read. A live
 		// store must never fall back to the scripted one: it would show a
 		// conversation the child never had.
 		if (!this.transport.sessionUpdates) {
-			this.subagentTurns = replay(initialSubagentTranscript(subagent), childSessionId).turns;
-			return;
+			if (!this.live) {
+				this.subagentTurns = replay(initialSubagentTranscript(subagent), childSessionId).turns;
+			}
+			return stop;
 		}
 
-		// A child session stores its own `updates.jsonl`; `alnair/session/updates`
-		// reads any session by id, including one whose cwd differs from the
-		// parent's. The replay is folded by the same reducer the main thread uses,
-		// so this is a normal conversation, not a summary.
-		const parent = this.activeSession;
-		this.subagentTurns = [];
-		void this.transport
-			.sessionUpdates({ sessionId: childSessionId, cwd: parent.cwd })
-			.then((envelopes) => {
-				this.subagentTurns = envelopes ? replay(envelopes, childSessionId).turns : [];
-			})
-			.catch(() => {
-				this.subagentTurns = [];
-			});
+		this.subagentLoading = true;
+		let transcript = '';
+		const refresh = async () => {
+			const [updates, detail] = await Promise.allSettled([
+				this.transport.sessionUpdates!({ sessionId: childSessionId, cwd: parent.cwd }),
+				this.transport.getSubagent?.(subagent.id, this.subagentDetail)
+			]);
+			// A late response must not replace a different dialog or session.
+			if (stopped || this.activeSessionId !== parent.id) return;
+
+			if (updates.status === 'fulfilled' && updates.value) {
+				const next = JSON.stringify(updates.value);
+				if (next !== transcript) {
+					this.subagentTurns = replay(updates.value, childSessionId).turns;
+					transcript = next;
+				}
+				this.subagentError = undefined;
+			} else {
+				this.subagentError = 'Could not refresh this subagent. Retrying…';
+			}
+			if (detail.status === 'fulfilled' && detail.value) {
+				this.liveSubagents = {
+					...this.liveSubagents,
+					[parent.id]: mergeSubagents(this.liveSubagents[parent.id] ?? [], [detail.value])
+				};
+			}
+			this.subagentLoading = false;
+			// Schedule after completion so slow reads never overlap. Keep reading
+			// after finish too, so a final transcript append is not missed.
+			timer = setTimeout(() => void refresh(), 1_000);
+		};
+		void refresh();
+		return stop;
 	}
 
 	send(text: string, blocks?: unknown[]) {

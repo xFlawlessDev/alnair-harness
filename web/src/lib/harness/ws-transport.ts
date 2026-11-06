@@ -16,7 +16,11 @@
  *   bridge does not replay server-side, unlike the stdio bridge for IDE clients.
  */
 
-import type { AskUserQuestionResponse, SubagentLiveSnapshot } from './types/ext.js';
+import type {
+	AskUserQuestionResponse,
+	SubagentLiveSnapshot,
+	GetSubagentResponse
+} from './types/ext.js';
 import type { FilePreview, IncomingFrame, PlanOutcome, Transport } from './session-store.svelte.js';
 import type {
 	BranchEntry,
@@ -42,7 +46,7 @@ import {
 	type FsNode,
 	type RosterRow
 } from './wire.js';
-import { fromLive } from './subagents.js';
+import { fromLive, fromSnapshot } from './subagents.js';
 
 /** What `session/load` (or `session/new`) told us about the session. */
 export interface SessionOpenResult {
@@ -434,6 +438,15 @@ export class WebSocketTransport implements Transport {
 		const raw = await this.ext('alnair/subagent/list_running', { sessionId });
 		const payload = unwrapExt<{ subagents?: SubagentLiveSnapshot[] }>(raw);
 		return (payload?.subagents ?? []).map(fromLive);
+	}
+
+	async getSubagent(
+		subagentId: string,
+		previous?: SubagentSummary
+	): Promise<SubagentSummary | undefined> {
+		const raw = await this.ext('alnair/subagent/get', { subagentId, block: false });
+		const payload = unwrapExt<GetSubagentResponse>(raw);
+		return payload?.snapshot ? fromSnapshot(payload.snapshot, previous) : undefined;
 	}
 
 	// --- Transport: workspace administration --------------------------------

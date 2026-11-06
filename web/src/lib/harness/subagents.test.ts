@@ -79,6 +79,37 @@ describe('subagent projection', () => {
 		const snapshot: SubagentSnapshot = { ...live, status: 'failed', failureError: 'exit 101' };
 		expect(fromSnapshot(snapshot).failureError).toBe('exit 101');
 	});
+
+	it('accepts terminal snapshots without running counters', () => {
+		const snapshot: SubagentSnapshot = {
+			subagentId: live.subagentId,
+			parentSessionId: live.parentSessionId,
+			childSessionId: live.childSessionId,
+			subagentType: live.subagentType,
+			description: live.description,
+			startedAtEpochMs: live.startedAtEpochMs,
+			durationMs: 8_000,
+			status: 'completed',
+			turns: 5,
+			toolCalls: 9
+		};
+		expect(fromSnapshot(snapshot)).toMatchObject({
+			status: 'completed',
+			turnCount: 5,
+			toolCallCount: 9,
+			tokensUsed: 0,
+			contextUsagePct: 0,
+			errorCount: 0
+		});
+		expect(fromSnapshot(snapshot, summary())).toMatchObject({
+			status: 'completed',
+			turnCount: 5,
+			toolCallCount: 9,
+			tokensUsed: live.tokensUsed,
+			contextUsagePct: live.contextUsagePct,
+			toolsUsed: live.toolsUsed
+		});
+	});
 });
 
 describe('ordering and label', () => {
@@ -165,6 +196,19 @@ describe('merging the transcript with the live snapshot', () => {
 			[summary({ id: 'sub-1', status: 'running' })]
 		);
 		expect(merged[0].status).toBe('completed');
+	});
+
+	it('keeps final stream totals when a terminal snapshot falls back to older counters', () => {
+		const merged = mergeSubagents(
+			[summary({ status: 'failed', tokensUsed: 30_000, turnCount: 5, errorCount: 1 })],
+			[summary({ status: 'failed', tokensUsed: 18_000, turnCount: 2, errorCount: 0 })]
+		);
+		expect(merged[0]).toMatchObject({
+			status: 'failed',
+			tokensUsed: 30_000,
+			turnCount: 5,
+			errorCount: 1
+		});
 	});
 
 	it('orders running first, as the header renders it', () => {

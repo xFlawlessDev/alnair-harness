@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { onMount } from 'svelte';
+	import { onMount, untrack } from 'svelte';
 	import ShieldQuestionIcon from '@lucide/svelte/icons/shield-question';
 	import Composer from '#lib/components/composer/composer.svelte';
 	import QuestionPanel from '#lib/components/composer/question-panel.svelte';
@@ -39,6 +39,7 @@
 	let settingsOpen = $state(false);
 	/** The subagent whose detail dialog is open, if any. */
 	let picked = $state<SubagentSummary | undefined>(undefined);
+	let pickedSessionId = $state('');
 	let subagentOpen = $state(false);
 
 	/**
@@ -97,10 +98,20 @@
 	}
 
 	function openSubagent(subagent: SubagentSummary) {
-		store.openSubagent(subagent);
 		picked = subagent;
+		pickedSessionId = store.activeSessionId;
 		subagentOpen = true;
 	}
+
+	$effect(() => {
+		if (!subagentOpen || !picked) return;
+		if (pickedSessionId !== store.activeSessionId) {
+			subagentOpen = false;
+			return;
+		}
+		const subagent = picked;
+		return untrack(() => store.openSubagent(subagent));
+	});
 
 	/** A refusal from a session action, shown where the action was taken. */
 	let actionError = $state<string | undefined>(undefined);
@@ -420,8 +431,10 @@
 
 			<SubagentDialog
 				bind:open={subagentOpen}
-				subagent={picked}
+				subagent={store.subagentDetail ?? picked}
 				turns={store.subagentTurns}
+				loading={store.subagentLoading}
+				error={store.subagentError}
 				session={{
 					...store.activeSession,
 					id: picked?.childSessionId ?? '',

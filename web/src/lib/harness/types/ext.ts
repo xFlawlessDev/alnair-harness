@@ -146,7 +146,23 @@ export interface SubagentLiveSnapshot {
  * Source: `SubagentSnapshotDto`; the status-dependent fields are optional
  * because the agent only sends the ones that apply.
  */
-export interface SubagentSnapshot extends SubagentLiveSnapshot {
+export interface SubagentSnapshot extends Pick<
+	SubagentLiveSnapshot,
+	| 'subagentId'
+	| 'parentSessionId'
+	| 'childSessionId'
+	| 'subagentType'
+	| 'description'
+	| 'startedAtEpochMs'
+	| 'durationMs'
+> {
+	turnCount?: number;
+	toolCallCount?: number;
+	tokensUsed?: number;
+	contextWindowTokens?: number;
+	contextUsagePct?: number;
+	toolsUsed?: string[];
+	errorCount?: number;
 	/** `running`, `completed`, `failed`, or `cancelled`. */
 	status: string;
 	output?: string;

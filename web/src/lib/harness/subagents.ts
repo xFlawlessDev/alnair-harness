@@ -45,14 +45,27 @@ export function fromLive(snapshot: SubagentLiveSnapshot): SubagentSummary {
 	};
 }
 
-export function fromSnapshot(snapshot: SubagentSnapshot): SubagentSummary {
+export function fromSnapshot(
+	snapshot: SubagentSnapshot,
+	previous?: SubagentSummary
+): SubagentSummary {
 	return {
-		...fromLive(snapshot),
+		...previous,
+		...fromLive({
+			...snapshot,
+			turnCount: snapshot.turnCount ?? previous?.turnCount ?? 0,
+			toolCallCount: snapshot.toolCallCount ?? previous?.toolCallCount ?? 0,
+			tokensUsed: snapshot.tokensUsed ?? previous?.tokensUsed ?? 0,
+			contextWindowTokens: snapshot.contextWindowTokens ?? previous?.contextWindowTokens ?? 0,
+			contextUsagePct: snapshot.contextUsagePct ?? previous?.contextUsagePct ?? 0,
+			toolsUsed: snapshot.toolsUsed ?? previous?.toolsUsed ?? [],
+			errorCount: snapshot.errorCount ?? previous?.errorCount ?? 0
+		}),
 		status: asStatus(snapshot.status),
 		// A finished subagent reports its final counts under the completed
 		// field names; the live ones stop being sent.
-		turnCount: snapshot.turns ?? snapshot.turnCount,
-		toolCallCount: snapshot.toolCalls ?? snapshot.toolCallCount,
+		turnCount: snapshot.turns ?? snapshot.turnCount ?? previous?.turnCount ?? 0,
+		toolCallCount: snapshot.toolCalls ?? snapshot.toolCallCount ?? previous?.toolCallCount ?? 0,
 		output: snapshot.output,
 		failureError: snapshot.failureError,
 		cancelReason: snapshot.cancelReason,
@@ -111,7 +124,16 @@ export function mergeSubagents(
 		// A finished transcript row outranks a stale live one: `list_running`
 		// can answer a snapshot taken before the finish landed.
 		if (known && known.status !== 'running' && subagent.status === 'running') continue;
-		byId.set(subagent.id, known ? { ...known, ...subagent } : subagent);
+		const merged = known ? { ...known, ...subagent } : subagent;
+		if (known && known.status !== 'running') {
+			// Terminal `get` snapshots omit running counters. Their fallbacks
+			// must not erase the final totals received on the parent's stream.
+			merged.turnCount = Math.max(known.turnCount, merged.turnCount);
+			merged.toolCallCount = Math.max(known.toolCallCount, merged.toolCallCount);
+			merged.tokensUsed = Math.max(known.tokensUsed, merged.tokensUsed);
+			merged.errorCount = Math.max(known.errorCount, merged.errorCount);
+		}
+		byId.set(subagent.id, merged);
 	}
 	return sortSubagents([...byId.values()]);
 }

@@ -18,6 +18,8 @@
 		open = $bindable(false),
 		subagent,
 		turns,
+		loading = false,
+		error,
 		session
 	}: {
 		open: boolean;
@@ -25,6 +27,8 @@
 		subagent: SubagentSummary | undefined;
 		/** The child session's folded transcript. */
 		turns: Turn[];
+		loading?: boolean;
+		error?: string;
 		/** Identity for the thread's empty state. */
 		session: Session;
 	} = $props();
@@ -92,11 +96,18 @@
 			<!-- The child's own conversation, rendered by the thread the main
 			     view uses, so a subagent reads exactly like any other session. -->
 			<div class="flex h-[min(34rem,74dvh)] min-h-0 flex-col">
-				{#if turns.length === 0}
+				{#if error}
+					<p role="status" class="px-4 py-2 text-[11.5px] text-error">{error}</p>
+				{/if}
+				{#if loading && turns.length === 0}
+					<p role="status" class="px-4 py-8 text-center text-[12px] text-ink-tertiary">
+						Loading conversation…
+					</p>
+				{:else if turns.length === 0 && !error}
 					<p class="px-4 py-8 text-center text-[12px] text-ink-tertiary">
 						This subagent has not written anything yet.
 					</p>
-				{:else}
+				{:else if turns.length > 0}
 					<Thread
 						{session}
 						{turns}

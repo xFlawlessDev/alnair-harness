@@ -101,6 +101,68 @@ function makeTransport() {
 	return { transport, frames, reconnects: () => reconnects };
 }
 
+describe('ws-transport: subagent snapshots', () => {
+	beforeEach(() => {
+		FakeSocket.instances = [];
+		vi.stubGlobal('WebSocket', FakeSocket);
+	});
+
+	it('requests current child details without attaching or replacing the parent session', async () => {
+		const { transport } = makeTransport();
+		const connected = transport.connect();
+		await settle();
+		const socket = FakeSocket.instances[0];
+		answer(socket, 'initialize', {});
+		await connected;
+
+		const detail = transport.getSubagent('sub-2');
+		await settle();
+		expect(sentOf(socket, '_alnair/subagent/get')?.params).toEqual({
+			subagentId: 'sub-2',
+			block: false
+		});
+		answer(socket, '_alnair/subagent/get', {
+			result: {
+				snapshot: {
+					subagentId: 'sub-2',
+					parentSessionId: 'parent-2',
+					childSessionId: 'child-2',
+					subagentType: 'explore',
+					description: 'Inspect',
+					startedAtEpochMs: 1_000,
+					durationMs: 5_000,
+					status: 'completed',
+					turns: 2,
+					toolCalls: 7
+				}
+			}
+		});
+		await expect(detail).resolves.toMatchObject({
+			id: 'sub-2',
+			childSessionId: 'child-2',
+			status: 'completed',
+			turnCount: 2,
+			toolCallCount: 7,
+			tokensUsed: 0,
+			contextUsagePct: 0
+		});
+		expect(sentOf(socket, 'session/load')).toBeUndefined();
+	});
+
+	it('allows a missing snapshot for an archived child', async () => {
+		const { transport } = makeTransport();
+		const connected = transport.connect();
+		await settle();
+		const socket = FakeSocket.instances[0];
+		answer(socket, 'initialize', {});
+		await connected;
+		const detail = transport.getSubagent('archived');
+		await settle();
+		answer(socket, '_alnair/subagent/get', { result: { snapshot: null } });
+		await expect(detail).resolves.toBeUndefined();
+	});
+});
+
 describe('ws-transport: handshake', () => {
 	beforeEach(() => {
 		FakeSocket.instances = [];

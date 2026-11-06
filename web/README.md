@@ -295,6 +295,11 @@ edited` — and expanding it restores the original trace. A turn with no text
   parked, and renders the artifact's markdown; focus moves to the scroll
   container so it opens at the top instead of jumping to a code block's copy
   button.
+- **Subagent dialogs refresh while open.** The store reads the child's transcript
+  and `alnair/subagent/get` snapshot again one second after each read completes.
+  Closing the dialog, choosing another child, or switching parent sessions stops
+  the refresh and ignores late responses. Failed reads keep the last transcript
+  visible and retry; unchanged transcripts keep their existing rendered state.
 - **Permission** has exactly one set of buttons, in the banner above the
   composer. The in-thread card is a marker, not a control: two sets for one
   request invites answering it twice. An ANSWERED request collapses to one
