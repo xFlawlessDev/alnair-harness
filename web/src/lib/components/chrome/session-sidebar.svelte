@@ -17,6 +17,13 @@
 	import * as DropdownMenu from '#lib/components/ui/dropdown-menu/index.js';
 	import * as Tooltip from '#lib/components/ui/tooltip/index.js';
 	import { formatRelative } from '#lib/harness/format.js';
+	import {
+		flatSessions,
+		SIDEBAR_LAYOUTS,
+		statusGroups,
+		workspaceLabelOf,
+		type SidebarLayout
+	} from '#lib/harness/sidebar-layout.js';
 	import type { Session, WorkspaceGroup } from '#lib/harness/types.js';
 	import Logo from './logo.svelte';
 	import StatusDot from './status-dot.svelte';
@@ -42,6 +49,9 @@
 		groups,
 		activeId,
 		hidden,
+		layout = 'workspace',
+		allSessions = [],
+		onlayout,
 		onselect,
 		onrename,
 		ondelete,
@@ -56,6 +66,18 @@
 		activeId: string;
 		/** Workspaces the reader put away; offered back in the footer. */
 		hidden: string[];
+		/** How to arrange the list; the reader picks it from the header. */
+		layout?: SidebarLayout;
+		/**
+		 * Every session, for the status and flat layouts.
+		 *
+		 * `groups` is already the workspace shape, but the status layout needs
+		 * the rows flat — a session's bucket has nothing to do with which repo
+		 * it lives in, and re-flattening the groups here would be a second
+		 * definition of "all sessions" that could disagree with the store's.
+		 */
+		allSessions?: Session[];
+		onlayout?: (layout: SidebarLayout) => void;
 		onselect: (id: string) => void;
 		onrename: (id: string, title: string) => void | Promise<void>;
 		ondelete: (id: string) => void | Promise<void>;
@@ -90,6 +112,26 @@
 		session.source === 'both' ? 'synced' : session.source === 'remote' ? 'remote' : undefined;
 
 	const total = $derived(groups.reduce((count, group) => count + group.sessions.length, 0));
+
+	/** The status layout's buckets, newest first inside each. */
+	const byStatus = $derived(statusGroups(allSessions));
+
+	/** The flat layout's one list, newest first. */
+	const flat = $derived(flatSessions(allSessions));
+
+	/**
+	 * The workspaces a new session can be started in, for the `+` menu.
+	 *
+	 * Derived from the same list the sidebar paints, so a directory the reader
+	 * just added is offered immediately rather than only after a session
+	 * exists in it. A group with no path cannot host a session and is left out.
+	 */
+	const startable = $derived(groups.filter((group) => Boolean(group.path)));
+
+	/** The layout's own name, for the header control's label. */
+	const layoutLabel = $derived(
+		SIDEBAR_LAYOUTS.find((entry) => entry.value === layout)?.label ?? 'By workspace'
+	);
 
 	/** The id being renamed, and the draft. One at a time — two would race. */
 	let renaming = $state<string | undefined>(undefined);
@@ -185,8 +227,8 @@
 	/**
 	 * Ask for a directory, and never fail silently.
 	 *
-	 * Left click opens the native dialog — the ordinary gesture, and the one a
-	 * reader expects from a `+`. The dialog is not always available: a headless
+	 * The `+` menu's "Choose another folder…" opens the native dialog — the
+	 * ordinary gesture. The dialog is not always available: a headless
 	 * `alnair web` has no desktop to draw on, a second concurrent request is
 	 * refused (`picker::OPEN` allows one dialog at a time), and a release build
 	 * rejects a dev-server Origin outright. Those used to surface as nothing at
@@ -194,7 +236,7 @@
 	 * refusal opens the typed-path dialog instead, and only an explicit Cancel
 	 * ends the action.
 	 */
-	async function addWorkspace() {
+	async function browseForWorkspace() {
 		if (adding) return;
 		adding = true;
 		pathError = undefined;
@@ -248,6 +290,153 @@
 	}
 </script>
 
+<!--
+	One session row, shared by all three layouts.
+
+	A snippet rather than three copies: the row carries rename, the actions
+	menu and the status dot, and three diverging copies is how one layout ends
+	up without a control the others have.
+
+	`showWorkspace` adds the repo name under the title. The workspace layout
+	does not need it — the group header above already says which repo this is —
+	but the status and flat layouts do, or the reader loses the one piece of
+	context the grouping used to provide.
+-->
+{#snippet sessionRow(session: Session, showWorkspace = false)}
+	{@const active = session.id === activeId}
+	{@const source = sourceLabel(session)}
+	{@const isRenaming = renaming === session.id}
+	<li>
+		{#if isRenaming}
+			<div class="flex items-center gap-1 rounded-md bg-paper-card px-2 py-1">
+				<input
+					bind:this={renameInput}
+					bind:value={draft}
+					class="min-w-0 flex-1 bg-transparent text-[12px] text-ink outline-none"
+					aria-label="Session title"
+					onkeydown={(event) => {
+						if (event.key === 'Enter') {
+							event.preventDefault();
+							commitRename();
+						} else if (event.key === 'Escape') {
+							event.preventDefault();
+							cancelRename();
+						}
+					}}
+					onblur={() => commitRename()}
+				/>
+				<button
+					type="button"
+					class="flex size-4 shrink-0 items-center justify-center rounded text-olive hover:bg-paper"
+					aria-label="Save title"
+					onmousedown={(event) => event.preventDefault()}
+					onclick={commitRename}
+				>
+					<CheckIcon class="size-3" />
+				</button>
+				<button
+					type="button"
+					class="flex size-4 shrink-0 items-center justify-center rounded text-ink-tertiary hover:bg-paper hover:text-ink"
+					aria-label="Cancel rename"
+					onmousedown={(event) => event.preventDefault()}
+					onclick={cancelRename}
+				>
+					<XIcon class="size-3" />
+				</button>
+			</div>
+		{:else}
+			<div
+				class={[
+					'group/row relative flex w-full items-center gap-1 rounded-md transition-colors',
+					active ? 'bg-paper-card' : 'hover:bg-paper-card/60'
+				]}
+			>
+				<button
+					type="button"
+					class="flex min-w-0 flex-1 flex-col gap-0.5 px-2 py-1.5 text-left"
+					onclick={() => onselect(session.id)}
+					aria-current={active ? 'true' : undefined}
+					data-session-id={session.id}
+				>
+					<span class="flex items-center gap-1.5">
+						<MessageSquareIcon
+							class={['size-3 shrink-0', active ? 'text-olive' : 'text-ink-tertiary/60']}
+						/>
+						<span
+							class="min-w-0 flex-1 truncate text-[12px] leading-snug"
+							class:font-medium={active}
+							class:text-ink={active}
+							class:text-ink-secondary={!active}
+						>
+							{session.title}
+						</span>
+						{#if session.status === 'running'}
+							<StatusDot status="running" pulse class="shrink-0" />
+						{:else if session.status === 'attention'}
+							<span class="size-1.5 shrink-0 rounded-full bg-terra" title="Needs input"></span>
+						{/if}
+					</span>
+					<span class="flex items-center gap-1.5 pl-4.5 text-[10px] text-ink-tertiary">
+						{#if showWorkspace}
+							<span class="min-w-0 truncate font-mono">{workspaceLabelOf(session)}</span>
+							<span class="shrink-0 opacity-40">·</span>
+						{/if}
+						<span class="tabular shrink-0">
+							{formatRelative(session.updatedAt)}
+						</span>
+						{#if session.worktree}
+							<span class="shrink-0 rounded-sm bg-paper px-1 font-mono text-[9px]"> worktree </span>
+						{/if}
+						{#if source}
+							<span class="shrink-0 rounded-sm bg-paper px-1 font-mono text-[9px]">
+								{source}
+							</span>
+						{/if}
+					</span>
+				</button>
+
+				<DropdownMenu.Root>
+					<DropdownMenu.Trigger>
+						{#snippet child({ props })}
+							<button
+								{...props}
+								type="button"
+								class="mr-1 flex size-5 shrink-0 items-center justify-center rounded text-ink-tertiary/0 transition-colors group-hover/row:text-ink-tertiary hover:bg-paper hover:text-ink"
+								aria-label={`Session actions: ${session.title}`}
+							>
+								<MoreHorizontalIcon class="size-3.5" />
+							</button>
+						{/snippet}
+					</DropdownMenu.Trigger>
+					<DropdownMenu.Content align="start" class="w-52">
+						<DropdownMenu.Label class="truncate font-mono text-[10.5px]">
+							{session.id.slice(0, 8)} · {session.modelId ?? 'model unknown'}
+						</DropdownMenu.Label>
+						<DropdownMenu.Separator />
+						<DropdownMenu.Item onclick={() => startRename(session)}>
+							<PencilIcon class="size-3.5" />
+							Rename
+						</DropdownMenu.Item>
+						<DropdownMenu.Item variant="destructive" onclick={() => requestDelete(session)}>
+							<TrashIcon class="size-3.5" />
+							Delete session…
+						</DropdownMenu.Item>
+						<DropdownMenu.Separator />
+						<DropdownMenu.Item
+							onclick={() => {
+								if (session.cwd) void oncreate(session.cwd);
+							}}
+						>
+							<PlusIcon class="size-3.5" />
+							New session in this directory
+						</DropdownMenu.Item>
+					</DropdownMenu.Content>
+				</DropdownMenu.Root>
+			</div>
+		{/if}
+	</li>
+{/snippet}
+
 <aside class="rule-r flex h-full w-64 shrink-0 flex-col bg-paper-raised">
 	<div class="flex items-center gap-2 px-4 pt-4 pb-3">
 		<Logo size={26} class="text-ink" />
@@ -259,21 +448,59 @@
 
 	<nav class="mt-1 flex min-h-0 flex-1 flex-col">
 		<div class="flex items-center justify-between px-4 pt-1 pb-2">
-			<p class="text-[10px] font-medium tracking-[0.08em] text-ink-tertiary uppercase">
-				Workspaces
-			</p>
+			<!--
+				The layout picker doubles as the section label. A reader who
+				never opens it still learns what the list is grouped by, and
+				switching is one click from where they are looking rather than
+				three through Settings.
+			-->
+			<DropdownMenu.Root>
+				<DropdownMenu.Trigger>
+					{#snippet child({ props })}
+						<button
+							{...props}
+							type="button"
+							class="flex min-w-0 items-center gap-1 rounded text-[10px] font-medium tracking-[0.08em] text-ink-tertiary uppercase transition-colors hover:text-ink"
+							aria-label={`Sidebar layout: ${layoutLabel}`}
+						>
+							<span class="truncate">{layoutLabel}</span>
+							<ChevronRightIcon class="size-2.5 shrink-0 rotate-90 opacity-60" />
+						</button>
+					{/snippet}
+				</DropdownMenu.Trigger>
+				<DropdownMenu.Content align="start" class="w-56">
+					<DropdownMenu.Label>Arrange sessions</DropdownMenu.Label>
+					<DropdownMenu.Separator />
+					{#each SIDEBAR_LAYOUTS as option (option.value)}
+						<DropdownMenu.Item onclick={() => onlayout?.(option.value)}>
+							<span class="flex min-w-0 flex-1 flex-col">
+								<span>{option.label}</span>
+								<span class="text-[10.5px] text-ink-tertiary">{option.hint}</span>
+							</span>
+							{#if option.value === layout}
+								<CheckIcon class="size-3.5 shrink-0 text-olive" />
+							{/if}
+						</DropdownMenu.Item>
+					{/each}
+				</DropdownMenu.Content>
+			</DropdownMenu.Root>
 			<div class="flex items-center gap-1">
 				<span class="tabular font-mono text-[10px] text-ink-tertiary/70">{total}</span>
-				<Tooltip.Root>
-					<Tooltip.Trigger>
+				<!--
+					`+` is a MENU, not a bare picker: a new session needs a
+					directory, and the reader usually wants one they already have
+					open rather than a fresh browse. "Choose another folder…"
+					keeps the old behaviour one item down.
+				-->
+				<DropdownMenu.Root>
+					<DropdownMenu.Trigger>
 						{#snippet child({ props })}
 							<button
 								{...props}
 								type="button"
 								class="flex size-5 items-center justify-center rounded text-ink-tertiary transition-colors hover:bg-paper-card hover:text-ink disabled:opacity-50"
-								aria-label="Add workspace directory"
+								aria-label="New session"
 								disabled={adding}
-								onclick={() => void addWorkspace()}
 							>
 								{#if adding}
 									<span
@@ -284,11 +511,39 @@
 								{/if}
 							</button>
 						{/snippet}
-					</Tooltip.Trigger>
-					<Tooltip.Content>
-						<p>Add workspace directory…</p>
-					</Tooltip.Content>
-				</Tooltip.Root>
+					</DropdownMenu.Trigger>
+					<DropdownMenu.Content align="end" class="w-64">
+						<DropdownMenu.Label>New session in…</DropdownMenu.Label>
+						<DropdownMenu.Separator />
+						{#if startable.length === 0}
+							<DropdownMenu.Item disabled>
+								<span class="text-[11px] text-ink-tertiary">No workspace yet</span>
+							</DropdownMenu.Item>
+						{:else}
+							{#each startable as group (group.name)}
+								<DropdownMenu.Item onclick={() => createIn(group)}>
+									<FolderTreeIcon class="size-3.5 shrink-0" />
+									<span class="flex min-w-0 flex-1 flex-col">
+										<span class="truncate">{group.name}</span>
+										<span class="truncate font-mono text-[10px] text-ink-tertiary">
+											{group.path}
+										</span>
+									</span>
+								</DropdownMenu.Item>
+							{/each}
+						{/if}
+						<DropdownMenu.Separator />
+						<DropdownMenu.Item onclick={() => void browseForWorkspace()}>
+							<PlusIcon class="size-3.5" />
+							<span class="flex min-w-0 flex-col">
+								<span>Choose another folder…</span>
+								<span class="text-[10.5px] text-ink-tertiary">
+									browse, or type an absolute path
+								</span>
+							</span>
+						</DropdownMenu.Item>
+					</DropdownMenu.Content>
+				</DropdownMenu.Root>
 			</div>
 		</div>
 
@@ -298,253 +553,153 @@
 			as the list overflows. A plain scroller with padding reads cleanly.
 		-->
 		<div class="min-h-0 flex-1 scrollbar-thin overflow-y-auto px-2 pt-0.5 pb-2">
-			{#each groups as group (group.name)}
-				{@const open = isOpen(group)}
-				{@const holdsActive = group.sessions.some((session) => session.id === activeId)}
-				{@const empty = group.sessions.length === 0}
-				<section class="mb-1.5 first:mt-1">
-					<div
-						class={[
-							'group flex w-full items-center gap-1.5 rounded-md px-1.5 py-1.5 transition-colors',
-							holdsActive ? 'bg-paper-card/50' : 'hover:bg-paper-card/60'
-						]}
-					>
-						<button
-							type="button"
-							class="flex min-w-0 flex-1 items-center gap-1.5 text-left"
-							aria-expanded={open}
-							onclick={() => toggle(group.name, open)}
-						>
-							<ChevronRightIcon
-								class="size-3 shrink-0 text-ink-tertiary/70 transition-transform {open
-									? 'rotate-90'
-									: ''}"
-							/>
-							<FolderTreeIcon class="size-3.5 shrink-0 text-ink-tertiary" />
-							<span
-								class="min-w-0 flex-1 truncate text-[12px] font-medium"
-								class:text-ink={holdsActive}
-								class:text-ink-secondary={!holdsActive}
-							>
-								{group.name}
+			{#if layout === 'status'}
+				<!--
+					Status first, repo on the row. Empty buckets are dropped by
+					`statusGroups` rather than painted as headers with nothing
+					under them.
+				-->
+				{#each byStatus as bucket (bucket.bucket)}
+					<section class="mb-1.5 first:mt-1">
+						<div class="flex w-full items-center gap-1.5 px-1.5 py-1.5">
+							{#if bucket.bucket === 'active'}
+								<StatusDot status="running" pulse class="shrink-0" />
+							{:else}
+								<span
+									class="size-1.5 shrink-0 rounded-full {bucket.bucket === 'inactive'
+										? 'bg-ink-tertiary/30'
+										: 'bg-ink-tertiary/60'}"
+								></span>
+							{/if}
+							<span class="min-w-0 flex-1 truncate text-[12px] font-medium text-ink-secondary">
+								{bucket.label}
 							</span>
-						</button>
-						{#if group.active}
-							<StatusDot status="running" pulse class="shrink-0" />
-						{/if}
-						{#if empty}
-							<!--
+							<span class="tabular shrink-0 font-mono text-[10px] text-ink-tertiary/70">
+								{bucket.sessions.length}
+							</span>
+						</div>
+						<ul class="ml-4 flex flex-col gap-0.5 border-l border-line pl-1.5">
+							{#each bucket.sessions as session (session.id)}
+								{@render sessionRow(session, true)}
+							{/each}
+						</ul>
+					</section>
+				{/each}
+			{:else if layout === 'flat'}
+				<ul class="mt-1 flex flex-col gap-0.5">
+					{#each flat as session (session.id)}
+						{@render sessionRow(session, true)}
+					{/each}
+				</ul>
+			{:else}
+				{#each groups as group (group.name)}
+					{@const open = isOpen(group)}
+					{@const holdsActive = group.sessions.some((session) => session.id === activeId)}
+					{@const empty = group.sessions.length === 0}
+					<section class="mb-1.5 first:mt-1">
+						<div
+							class={[
+								'group flex w-full items-center gap-1.5 rounded-md px-1.5 py-1.5 transition-colors',
+								holdsActive ? 'bg-paper-card/50' : 'hover:bg-paper-card/60'
+							]}
+						>
+							<button
+								type="button"
+								class="flex min-w-0 flex-1 items-center gap-1.5 text-left"
+								aria-expanded={open}
+								onclick={() => toggle(group.name, open)}
+							>
+								<ChevronRightIcon
+									class="size-3 shrink-0 text-ink-tertiary/70 transition-transform {open
+										? 'rotate-90'
+										: ''}"
+								/>
+								<FolderTreeIcon class="size-3.5 shrink-0 text-ink-tertiary" />
+								<span
+									class="min-w-0 flex-1 truncate text-[12px] font-medium"
+									class:text-ink={holdsActive}
+									class:text-ink-secondary={!holdsActive}
+								>
+									{group.name}
+								</span>
+							</button>
+							{#if group.active}
+								<StatusDot status="running" pulse class="shrink-0" />
+							{/if}
+							{#if empty}
+								<!--
 								A directory the reader just added has no session yet. Saying
 								so is honest; a bare `0` would read as a broken workspace.
 							-->
-							<span class="shrink-0 font-mono text-[9px] text-ink-tertiary/60">empty</span>
-						{:else}
-							<span class="tabular shrink-0 font-mono text-[10px] text-ink-tertiary/70">
-								{group.sessions.length}
-							</span>
-						{/if}
-						<DropdownMenu.Root>
-							<DropdownMenu.Trigger>
-								{#snippet child({ props })}
-									<button
-										{...props}
-										type="button"
-										class="flex size-4 shrink-0 items-center justify-center rounded text-ink-tertiary/0 transition-colors group-hover:text-ink-tertiary hover:bg-paper hover:text-ink"
-										aria-label={`Workspace actions: ${group.name}`}
-									>
-										<MoreHorizontalIcon class="size-3.5" />
-									</button>
-								{/snippet}
-							</DropdownMenu.Trigger>
-							<DropdownMenu.Content align="start" class="w-60">
-								<DropdownMenu.Label class="truncate font-mono text-[10.5px]">
-									{group.path ?? group.name}
-								</DropdownMenu.Label>
-								<DropdownMenu.Separator />
-								<DropdownMenu.Item
-									disabled={!group.path}
-									onclick={() => {
-										if (!group.path) return;
-										createIn(group);
-									}}
-								>
-									<PlusIcon class="size-3.5" />
-									New session here
-								</DropdownMenu.Item>
-								<DropdownMenu.Item onclick={openPathDialog}>
-									<FolderTreeIcon class="size-3.5" />
-									<span class="flex min-w-0 flex-col">
-										<span>Add workspace by path…</span>
-										<span class="text-[10.5px] text-ink-tertiary">
-											type an absolute directory instead of browsing
-										</span>
-									</span>
-								</DropdownMenu.Item>
-								<DropdownMenu.Separator />
-								<DropdownMenu.Item onclick={() => onremoveworkspace(group.name)}>
-									<EyeOffIcon class="size-3.5" />
-									<span class="flex min-w-0 flex-col">
-										<span>Remove workspace</span>
-										<span class="text-[10.5px] text-ink-tertiary">
-											hides the group; sessions stay on disk
-										</span>
-									</span>
-								</DropdownMenu.Item>
-							</DropdownMenu.Content>
-						</DropdownMenu.Root>
-					</div>
-
-					{#if open}
-						<ul class="mt-0.5 ml-4 flex flex-col gap-0.5 border-l border-line pl-1.5">
-							{#each group.sessions as session (session.id)}
-								{@const active = session.id === activeId}
-								{@const source = sourceLabel(session)}
-								{@const isRenaming = renaming === session.id}
-								<li>
-									{#if isRenaming}
-										<div class="flex items-center gap-1 rounded-md bg-paper-card px-2 py-1">
-											<input
-												bind:this={renameInput}
-												bind:value={draft}
-												class="min-w-0 flex-1 bg-transparent text-[12px] text-ink outline-none"
-												aria-label="Session title"
-												onkeydown={(event) => {
-													if (event.key === 'Enter') {
-														event.preventDefault();
-														commitRename();
-													} else if (event.key === 'Escape') {
-														event.preventDefault();
-														cancelRename();
-													}
-												}}
-												onblur={() => commitRename()}
-											/>
-											<button
-												type="button"
-												class="flex size-4 shrink-0 items-center justify-center rounded text-olive hover:bg-paper"
-												aria-label="Save title"
-												onmousedown={(event) => event.preventDefault()}
-												onclick={commitRename}
-											>
-												<CheckIcon class="size-3" />
-											</button>
-											<button
-												type="button"
-												class="flex size-4 shrink-0 items-center justify-center rounded text-ink-tertiary hover:bg-paper hover:text-ink"
-												aria-label="Cancel rename"
-												onmousedown={(event) => event.preventDefault()}
-												onclick={cancelRename}
-											>
-												<XIcon class="size-3" />
-											</button>
-										</div>
-									{:else}
-										<div
-											class={[
-												'group/row relative flex w-full items-center gap-1 rounded-md transition-colors',
-												active ? 'bg-paper-card' : 'hover:bg-paper-card/60'
-											]}
+								<span class="shrink-0 font-mono text-[9px] text-ink-tertiary/60">empty</span>
+							{:else}
+								<span class="tabular shrink-0 font-mono text-[10px] text-ink-tertiary/70">
+									{group.sessions.length}
+								</span>
+							{/if}
+							<DropdownMenu.Root>
+								<DropdownMenu.Trigger>
+									{#snippet child({ props })}
+										<button
+											{...props}
+											type="button"
+											class="flex size-4 shrink-0 items-center justify-center rounded text-ink-tertiary/0 transition-colors group-hover:text-ink-tertiary hover:bg-paper hover:text-ink"
+											aria-label={`Workspace actions: ${group.name}`}
 										>
-											<button
-												type="button"
-												class="flex min-w-0 flex-1 flex-col gap-0.5 px-2 py-1.5 text-left"
-												onclick={() => onselect(session.id)}
-												aria-current={active ? 'true' : undefined}
-												data-session-id={session.id}
-											>
-												<span class="flex items-center gap-1.5">
-													<MessageSquareIcon
-														class={[
-															'size-3 shrink-0',
-															active ? 'text-olive' : 'text-ink-tertiary/60'
-														]}
-													/>
-													<span
-														class="min-w-0 flex-1 truncate text-[12px] leading-snug"
-														class:font-medium={active}
-														class:text-ink={active}
-														class:text-ink-secondary={!active}
-													>
-														{session.title}
-													</span>
-													{#if session.status === 'running'}
-														<StatusDot status="running" pulse class="shrink-0" />
-													{:else if session.status === 'attention'}
-														<span
-															class="size-1.5 shrink-0 rounded-full bg-terra"
-															title="Needs input"
-														></span>
-													{/if}
-												</span>
-												<span
-													class="flex items-center gap-1.5 pl-4.5 text-[10px] text-ink-tertiary"
-												>
-													<span class="tabular shrink-0">
-														{formatRelative(session.updatedAt)}
-													</span>
-													{#if session.worktree}
-														<span class="shrink-0 rounded-sm bg-paper px-1 font-mono text-[9px]">
-															worktree
-														</span>
-													{/if}
-													{#if source}
-														<span class="shrink-0 rounded-sm bg-paper px-1 font-mono text-[9px]">
-															{source}
-														</span>
-													{/if}
-												</span>
-											</button>
+											<MoreHorizontalIcon class="size-3.5" />
+										</button>
+									{/snippet}
+								</DropdownMenu.Trigger>
+								<DropdownMenu.Content align="start" class="w-60">
+									<DropdownMenu.Label class="truncate font-mono text-[10.5px]">
+										{group.path ?? group.name}
+									</DropdownMenu.Label>
+									<DropdownMenu.Separator />
+									<DropdownMenu.Item
+										disabled={!group.path}
+										onclick={() => {
+											if (!group.path) return;
+											createIn(group);
+										}}
+									>
+										<PlusIcon class="size-3.5" />
+										New session here
+									</DropdownMenu.Item>
+									<DropdownMenu.Item onclick={openPathDialog}>
+										<FolderTreeIcon class="size-3.5" />
+										<span class="flex min-w-0 flex-col">
+											<span>Add workspace by path…</span>
+											<span class="text-[10.5px] text-ink-tertiary">
+												type an absolute directory instead of browsing
+											</span>
+										</span>
+									</DropdownMenu.Item>
+									<DropdownMenu.Separator />
+									<DropdownMenu.Item onclick={() => onremoveworkspace(group.name)}>
+										<EyeOffIcon class="size-3.5" />
+										<span class="flex min-w-0 flex-col">
+											<span>Remove workspace</span>
+											<span class="text-[10.5px] text-ink-tertiary">
+												hides the group; sessions stay on disk
+											</span>
+										</span>
+									</DropdownMenu.Item>
+								</DropdownMenu.Content>
+							</DropdownMenu.Root>
+						</div>
 
-											<DropdownMenu.Root>
-												<DropdownMenu.Trigger>
-													{#snippet child({ props })}
-														<button
-															{...props}
-															type="button"
-															class="mr-1 flex size-5 shrink-0 items-center justify-center rounded text-ink-tertiary/0 transition-colors group-hover/row:text-ink-tertiary hover:bg-paper hover:text-ink"
-															aria-label={`Session actions: ${session.title}`}
-														>
-															<MoreHorizontalIcon class="size-3.5" />
-														</button>
-													{/snippet}
-												</DropdownMenu.Trigger>
-												<DropdownMenu.Content align="start" class="w-52">
-													<DropdownMenu.Label class="truncate font-mono text-[10.5px]">
-														{session.id.slice(0, 8)} · {session.modelId ?? 'model unknown'}
-													</DropdownMenu.Label>
-													<DropdownMenu.Separator />
-													<DropdownMenu.Item onclick={() => startRename(session)}>
-														<PencilIcon class="size-3.5" />
-														Rename
-													</DropdownMenu.Item>
-													<DropdownMenu.Item
-														variant="destructive"
-														onclick={() => requestDelete(session)}
-													>
-														<TrashIcon class="size-3.5" />
-														Delete session…
-													</DropdownMenu.Item>
-													<DropdownMenu.Separator />
-													<DropdownMenu.Item
-														onclick={() => {
-															if (session.cwd) void oncreate(session.cwd);
-														}}
-													>
-														<PlusIcon class="size-3.5" />
-														New session in this directory
-													</DropdownMenu.Item>
-												</DropdownMenu.Content>
-											</DropdownMenu.Root>
-										</div>
-									{/if}
-								</li>
-							{/each}
-						</ul>
-					{/if}
-				</section>
-			{/each}
+						{#if open}
+							<ul class="mt-0.5 ml-4 flex flex-col gap-0.5 border-l border-line pl-1.5">
+								{#each group.sessions as session (session.id)}
+									{@render sessionRow(session)}
+								{/each}
+							</ul>
+						{/if}
+					</section>
+				{/each}
+			{/if}
 
-			{#if groups.length === 0}
+			{#if groups.length === 0 && allSessions.length === 0}
 				<div class="px-3 py-6 text-center">
 					<p class="text-[11.5px] leading-relaxed text-ink-tertiary">
 						No workspaces yet. Use <span class="font-mono">+</span> above to pick a directory, or start
@@ -566,8 +721,17 @@
 
 	<div class="flex items-center justify-between gap-2 border-t border-line px-2 py-2">
 		<p class="min-w-0 truncate pl-2 text-[10.5px] text-ink-tertiary">
-			<span class="tabular font-mono">{groups.length}</span>
-			workspaces · <span class="tabular font-mono">{total}</span> sessions
+			{#if layout === 'workspace'}
+				<span class="tabular font-mono">{groups.length}</span>
+				workspaces · <span class="tabular font-mono">{total}</span> sessions
+			{:else}
+				<!--
+					The other layouts do not group by repo, so a workspace count
+					would describe something the list above is not showing.
+				-->
+				<span class="tabular font-mono">{total}</span>
+				sessions · <span class="tabular font-mono">{groups.length}</span> workspaces
+			{/if}
 		</p>
 		<div class="flex shrink-0 items-center">
 			{#if hidden.length > 0}

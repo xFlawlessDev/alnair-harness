@@ -20,7 +20,18 @@ export type PartStatus = 'pending' | 'running' | 'complete' | 'error';
 /** `StopReason` plus the pre-response states. */
 export type TurnStatus = 'streaming' | 'complete' | 'cancelled' | 'refused' | 'error';
 
-export type SessionStatus = 'running' | 'idle' | 'attention';
+/**
+ * A session's liveness, as the sidebar groups it.
+ *
+ * `running` and `attention` are live facts about a loaded session; `dormant`
+ * is the roster's own word for a row read from disk that no process holds
+ * resident, and `idle` covers everything else. Keeping `dormant` distinct is
+ * what lets the sidebar separate "open but quiet" from "on disk, not loaded" —
+ * the TUI's dashboard makes the same split, and collapsing the two here made
+ * every unloaded session look like one the reader had merely stepped away
+ * from.
+ */
+export type SessionStatus = 'running' | 'idle' | 'attention' | 'dormant';
 
 /* ------------------------------------------------------------------- files */
 

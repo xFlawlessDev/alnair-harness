@@ -120,6 +120,29 @@ export const SETTINGS: SettingMeta[] = [
 			]
 		}
 	},
+	{
+		key: 'sidebar_layout',
+		category: 'appearance',
+		label: 'Sidebar layout',
+		description: 'How the session list is arranged: by repo, by status, or as one flat list.',
+		keywords: ['sidebar', 'sessions', 'group', 'status', 'active', 'idle', 'layout'],
+		kind: {
+			kind: 'enum',
+			choices: [
+				{
+					value: 'workspace',
+					label: 'By workspace',
+					description: 'One group per repo, its sessions underneath.'
+				},
+				{
+					value: 'status',
+					label: 'By status',
+					description: 'Active, idle and inactive first, the repo named on each row.'
+				},
+				{ value: 'flat', label: 'Flat list', description: 'Newest first, with no groups at all.' }
+			]
+		}
+	},
 
 	/* -------------------------------------------------------- conversation */
 	{
@@ -239,6 +262,7 @@ export const DEFAULT_SETTINGS: SettingsState = {
 	theme: 'system',
 	show_timestamps: true,
 	density: 'comfortable',
+	sidebar_layout: 'workspace',
 	show_thinking: true,
 	collapse_edits: true,
 	group_tool_verbs: true,

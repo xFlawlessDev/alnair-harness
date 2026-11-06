@@ -25,6 +25,7 @@
 	import { suggestions as starterPrompts } from '#lib/harness/mock.js';
 	import { loadLayout, saveLayout } from '#lib/harness/preferences.js';
 	import { viewPrefs } from '#lib/harness/view-prefs.js';
+	import type { SidebarLayout } from '#lib/harness/sidebar-layout.js';
 	import type { SubagentSummary } from '#lib/harness/types.js';
 	import { touchedFiles } from '#lib/components/inspector/panel-data.js';
 
@@ -70,6 +71,18 @@
 
 	/** What each transcript row renders with, from the settings dialog. */
 	const prefs = $derived(viewPrefs(store.settings));
+
+	/**
+	 * How the sidebar arranges sessions.
+	 *
+	 * Validated rather than cast: the value comes from storage, so a build that
+	 * renamed a mode would otherwise hand the sidebar an unknown string and
+	 * paint the fallback silently. An unrecognized value reads as the default.
+	 */
+	const sidebarLayout = $derived.by((): SidebarLayout => {
+		const value = String(store.settings.sidebar_layout ?? 'workspace');
+		return value === 'status' || value === 'flat' ? value : 'workspace';
+	});
 
 	/**
 	 * Starter prompts for an empty thread.
@@ -180,6 +193,9 @@
 					groups={store.groups}
 					activeId={store.activeSessionId}
 					hidden={store.hiddenWorkspaces}
+					layout={sidebarLayout}
+					allSessions={store.sessions}
+					onlayout={(next) => store.setSetting('sidebar_layout', next)}
 					onselect={(id) => store.selectSession(id)}
 					onrename={(id, title) => attempt('Rename failed', () => store.renameSession(id, title))}
 					ondelete={(id) => attempt('Delete failed', () => store.deleteSession(id))}
@@ -209,6 +225,9 @@
 					groups={store.groups}
 					activeId={store.activeSessionId}
 					hidden={store.hiddenWorkspaces}
+					layout={sidebarLayout}
+					allSessions={store.sessions}
+					onlayout={(next) => store.setSetting('sidebar_layout', next)}
 					onselect={(id) => {
 						store.selectSession(id);
 						navOpen = false;

@@ -75,15 +75,19 @@ describe('wire: roster rows', () => {
 		expect(session!.modelId).toBe('kimi-code/kimi-k2');
 	});
 
-	it('treats a dormant row as idle', () => {
-		// `dormant` is a resident-less session read from disk: it is not running.
+	it('keeps a dormant row distinct from an idle one', () => {
+		// `dormant` is a resident-less session read from disk. It is not
+		// RUNNING, but it is not idle either: "idle" means this process holds
+		// the session and nothing is running, which is a different fact. The
+		// sidebar's Inactive bucket is exactly this distinction, so collapsing
+		// the two here would erase the only signal it has.
 		const session = sessionFromRoster({
 			sessionId: 's',
 			cwd: '/repo',
 			activity: 'dormant',
 			resident: false
 		});
-		expect(session!.status).toBe('idle');
+		expect(session!.status).toBe('dormant');
 	});
 
 	it('falls back to the cwd segment when the row has no title', () => {

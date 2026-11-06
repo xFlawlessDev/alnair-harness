@@ -144,11 +144,18 @@ function field<T>(row: Record<string, unknown>, camel: string, snake: string): T
 	return (row[camel] ?? row[snake]) as T | undefined;
 }
 
-/** `activity` on the roster: `working`, `dormant`, or neither. */
+/**
+ * `activity` on the roster: `working`, `dormant`, or neither.
+ *
+ * `dormant` is a resident-less row read from disk. It is NOT idle: "idle" means
+ * a session this process is holding that has no turn running, while "dormant"
+ * means nothing has it loaded at all. The sidebar draws that distinction, so
+ * collapsing the two here would erase the only signal it has.
+ */
 function statusFromActivity(activity: unknown): SessionStatus {
-	// `dormant` is a resident-less row read from disk; it is idle for our
-	// purposes. `working` is the only state that means a turn is running.
-	return activity === 'working' ? 'running' : 'idle';
+	if (activity === 'working') return 'running';
+	if (activity === 'dormant') return 'dormant';
+	return 'idle';
 }
 
 /** The last path segment, used when the agent sends no repo name. */
