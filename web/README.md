@@ -354,6 +354,7 @@ edited` — and expanding it restores the original trace. A turn with no text
 - MCP, provider login, skills, plugins, hooks and background-task management
   panels. Their tool output can still appear in the transcript.
 - Standalone goal, scheduler and memory event views.
-- A browser E2E suite against a live leader. `test:graph-ui` exercises the graph
-  controls in an installed Chromium browser with mocked leader responses;
-  unit tests cover the store, reducer and transport.
+- A browser E2E suite against a live leader. `test:graph-ui` and
+  `test:terminal-ui` exercise graph controls and terminal startup/input/cleanup
+  in an installed Chromium browser with mocked leader responses; unit tests
+  cover the store, reducer and transport.

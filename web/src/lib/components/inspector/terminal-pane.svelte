@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { onDestroy, onMount } from 'svelte';
+	import { onDestroy, onMount, untrack } from 'svelte';
 	import type { TerminalBridge } from '#lib/harness/session-store.svelte.js';
 
 	/**
@@ -72,13 +72,13 @@
 	let unsubscribe: (() => void) | undefined;
 	let observer: ResizeObserver | undefined;
 	let resizeTimer: ReturnType<typeof setTimeout> | undefined;
+	let starting = false;
+	let disposed = false;
 
 	/** The size the server last acknowledged, so an unchanged fit is a no-op. */
 	let sentSize = { rows: 0, cols: 0 };
 
 	onMount(() => {
-		let cancelled = false;
-
 		void (async () => {
 			if (!host) return;
 			try {
@@ -89,7 +89,7 @@
 					// it out of the first paint like the rest of xterm.
 					import('@xterm/xterm/css/xterm.css')
 				]);
-				if (cancelled || !host) return;
+				if (disposed || !host) return;
 
 				const instance = new Terminal({
 					cursorBlink: true,
@@ -144,14 +144,14 @@
 				// the drawer keeps both tabs mounted, so spawning here would
 				// open a shell the reader never asked for whenever they open the
 				// panel on the editor tab.
-				if (open) await spawn();
 			} catch (cause) {
+				if (disposed) return;
 				failed = cause instanceof Error ? cause.message : 'the terminal failed to load';
 				onstatus?.('error');
 			}
 		})();
 		return () => {
-			cancelled = true;
+			disposed = true;
 			clearTimeout(resizeTimer);
 			observer?.disconnect();
 			unsubscribe?.();
@@ -166,15 +166,22 @@
 
 	/** Spawn a shell, then size it to the pane. */
 	async function spawn() {
-		if (!emulator) return;
+		if (!emulator || terminalId || starting || disposed) return;
+		starting = true;
+		const bridge = terminal;
 		onstatus?.('connecting');
 		failed = undefined;
 		try {
 			fit?.fit();
-			const id = await terminal.spawn({
+			const id = await bridge.spawn({
 				rows: emulator.rows || 24,
 				cols: emulator.cols || 80
 			});
+			// Closing the drawer can unmount us while create is still in flight.
+			if (disposed) {
+				bridge.close(id);
+				return;
+			}
 			terminalId = id;
 			// The shell started printing before this id existed; replay what it
 			// said rather than starting the pane on an empty screen.
@@ -185,9 +192,12 @@
 			onstatus?.('running');
 			emulator.focus();
 		} catch (cause) {
+			if (disposed) return;
 			early = [];
 			failed = cause instanceof Error ? cause.message : 'the shell could not be started';
 			onstatus?.('error');
+		} finally {
+			starting = false;
 		}
 	}
 
@@ -256,8 +266,8 @@
 	 * the pane again only re-fits it.
 	 */
 	$effect(() => {
-		if (!open || terminalId || !ready || !emulator) return;
-		void spawn();
+		if (!open || terminalId || !ready || failed) return;
+		untrack(() => void spawn());
 	});
 
 	/** Re-run the fit when the pane is shown again. */

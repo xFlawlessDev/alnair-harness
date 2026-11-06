@@ -72,6 +72,7 @@ function mockLeader() {
 		errorCount: 0
 	};
 	globalThis.__graphMock = { graph: structuredClone(initial), commands: [] };
+	globalThis.__terminalMock = { created: [], closed: [], input: [] };
 	const RealWebSocket = globalThis.WebSocket;
 	globalThis.WebSocket = class extends EventTarget {
 		static OPEN = 1;
@@ -90,7 +91,43 @@ function mockLeader() {
 		}
 		send(raw) {
 			const { id, method, params } = JSON.parse(raw);
+			const terminal = globalThis.__terminalMock;
+			const output = (terminalId, text) =>
+				this.dispatchEvent(
+					new MessageEvent('message', {
+						data: JSON.stringify({
+							jsonrpc: '2.0',
+							method: '_alnair/terminal/pty/notification',
+							params: { terminalId, type: 'output', data: btoa(text) }
+						})
+					})
+				);
+			if (method === 'alnair/terminal/pty/input') {
+				const text = atob(params.data);
+				terminal.input.push({ terminalId: params.terminalId, text });
+				// ConPTY waits for a cursor report before printing the shell prompt.
+				if (text.startsWith('\x1b[') && /^\d+;\d+R$/.test(text.slice(2)))
+					output(params.terminalId, 'PS D:\\repo> ');
+				else output(params.terminalId, text);
+			}
 			if (id === undefined) return;
+			if (method === '_alnair/terminal/pty/create') {
+				const terminalId = `pty-${terminal.created.length + 1}`;
+				terminal.created.push(terminalId);
+				// Output can precede the create response, including ConPTY's startup query.
+				setTimeout(() => output(terminalId, '\x1b[6n'), 0);
+				setTimeout(
+					() =>
+						this.dispatchEvent(
+							new MessageEvent('message', {
+								data: JSON.stringify({ jsonrpc: '2.0', id, result: { result: { terminalId } } })
+							})
+						),
+					100
+				);
+				return;
+			}
+			if (method === '_alnair/terminal/kill') terminal.closed.push(params.terminalId);
 			let result = {};
 			if (method === '_alnair/sessions/list')
 				result = {
@@ -293,6 +330,60 @@ async function main() {
 			evaluate(
 				`(() => { const button = [...document.querySelectorAll('button')].find(b => b.textContent.trim() === ${JSON.stringify(label)} && b.getClientRects().length); if (!button) throw new Error('Missing button: ' + ${JSON.stringify(label)}); button.click(); })()`
 			);
+		if (process.argv.includes('--terminal')) {
+			await wait(
+				`document.querySelector('[aria-label="Toggle the editor and terminal panel"]')`,
+				'terminal toggle'
+			);
+			const toggle = () =>
+				evaluate(
+					`document.querySelector('[aria-label="Toggle the editor and terminal panel"]').click()`
+				);
+			await toggle();
+			await wait(`globalThis.__terminalMock.created.length > 0`, 'PTY create');
+			await delay(250);
+			assert.equal(
+				await evaluate('globalThis.__terminalMock.created.length'),
+				1,
+				'Opening the terminal must spawn exactly one PTY.'
+			);
+			await wait(
+				`document.querySelector('.xterm-rows')?.textContent.includes('PS D:\\\\repo>')`,
+				'shell prompt after cursor report'
+			);
+			assert.equal(
+				await evaluate('globalThis.__terminalMock.input.length'),
+				1,
+				'The startup cursor query must receive a reply.'
+			);
+			await send('Input.insertText', { text: 'echo hello' });
+			await wait(
+				`document.querySelector('.xterm-rows')?.textContent.includes('echo hello')`,
+				'shell input and output'
+			);
+			await click('Editor');
+			await click('Terminal');
+			assert.equal(
+				await evaluate('globalThis.__terminalMock.created.length'),
+				1,
+				'Switching tabs must keep the same shell.'
+			);
+			await toggle();
+			await wait(`globalThis.__terminalMock.closed.length === 1`, 'close owned PTY');
+			await toggle();
+			await wait(`globalThis.__terminalMock.created.length === 2`, 'second PTY create');
+			await toggle();
+			await wait(
+				`globalThis.__terminalMock.closed.length === 2`,
+				'close PTY created after unmount'
+			);
+			assert.deepEqual(await evaluate('globalThis.__terminalMock.closed'), ['pty-1', 'pty-2']);
+			assert.deepEqual(cdp.exceptions, [], 'No uncaught browser exceptions.');
+			console.log(
+				'Terminal browser smoke passed: single spawn, early cursor query, prompt, input/output, tab switch, pending-create cleanup.'
+			);
+			return;
+		}
 		await wait(`document.querySelector('[aria-label="Open graph progress"]')`, 'graph entry point');
 		assert.equal(
 			await evaluate(

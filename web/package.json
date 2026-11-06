@@ -13,6 +13,7 @@
 		"test": "vitest run",
 		"test:watch": "vitest",
 		"test:graph-ui": "node scripts/graph-ui-smoke.mjs",
+		"test:terminal-ui": "node scripts/graph-ui-smoke.mjs --terminal",
 		"lint": "prettier --check . && eslint .",
 		"format": "prettier --write ."
 	},
