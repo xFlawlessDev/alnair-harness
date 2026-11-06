@@ -1,278 +1,466 @@
-//! The `/ws` gate: a same-origin cookie plus an `Origin` check.
-//!
-//! Two independent checks, both required:
-//!
-//! - **Cookie.** `GET /` and `GET /api/session` set an `HttpOnly`,
-//!   `SameSite=Strict` cookie holding a random per-process token. A WebSocket
-//!   upgrade from another site does not carry it, because `SameSite=Strict`
-//!   refuses to send it cross-site.
-//! - **`Origin`.** A WS upgrade is *not* subject to CORS preflight, so a page
-//!   on another origin could otherwise open a socket to `127.0.0.1` and drive
-//!   the agent. Comparing `Origin` against the bound address closes that,
-//!   including DNS-rebinding attempts (which present an attacker-controlled
-//!   host name, not the loopback address).
-//!
-//! The token is never logged and never placed in a URL: query strings end up in
-//! shell history, logs and `Referer` headers.
+//! One-use pairing links, signed browser sessions, and explicit origin checks.
+
+use std::collections::VecDeque;
+use std::net::SocketAddr;
+use std::sync::{Mutex, RwLock};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use axum::http::{HeaderMap, header};
-use std::net::SocketAddr;
+use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
+use rand::{TryRngCore as _, rngs::OsRng};
+use ring::hmac;
+use subtle::ConstantTimeEq as _;
+use tokio_util::sync::CancellationToken;
+use url::Url;
 
-/// Name of the auth cookie.
-pub const COOKIE_NAME: &str = "alnair_web";
+/// Pairing links expire after five minutes.
+pub const PAIR_TTL: Duration = Duration::from_secs(300);
+/// Signed sessions survive service restarts for thirty days.
+pub const SESSION_TTL: Duration = Duration::from_secs(30 * 24 * 60 * 60);
+const MAX_PAIRS: usize = 1000;
 
-/// Port the Vite dev server listens on; only accepted in debug builds.
-const DEV_ORIGIN_PORT: u16 = 5173;
+struct SessionKey {
+    key: hmac::Key,
+    revoked: CancellationToken,
+}
 
-/// Why a request was refused. Rendered as a one-line body and logged (without
-/// the cookie value).
+/// Authentication state for one listener. Secrets are never Debug-formatted.
+pub struct Gate {
+    sessions: RwLock<SessionKey>,
+    pairs: Mutex<VecDeque<(String, Instant)>>,
+    control: String,
+    bound: SocketAddr,
+    public_url: Option<Url>,
+}
+
+/// A validated session, including cancellation when all devices are revoked.
+pub struct Session {
+    /// Cancelled when the signing key rotates.
+    pub revoked: CancellationToken,
+    /// Remaining validity, used to close an upgraded socket on expiry.
+    pub remaining: Duration,
+}
+
+/// A refusal safe to include in an HTTP response.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RejectReason {
-    /// No `Cookie` header carrying [`COOKIE_NAME`].
+    /// The browser has not paired.
     MissingCookie,
-    /// Cookie present but not the current process token.
+    /// The session is expired, revoked, or invalid.
     BadCookie,
-    /// No `Origin` header at all.
+    /// The action needs a browser Origin header.
     MissingOrigin,
-    /// `Origin` present but not one we serve.
+    /// The request does not belong to a configured origin.
     ForeignOrigin,
 }
 
 impl RejectReason {
-    /// The wire string, also used as the 403 body.
+    /// Human-readable reason without credential data.
     pub fn as_str(self) -> &'static str {
         match self {
-            Self::MissingCookie => "missing auth cookie; reload the page",
-            Self::BadCookie => "stale auth cookie; reload the page",
+            Self::MissingCookie => "missing auth cookie; run `alnair web pair` on the server",
+            Self::BadCookie => {
+                "expired or revoked auth cookie; run `alnair web pair` on the server"
+            }
             Self::MissingOrigin => "missing Origin header",
             Self::ForeignOrigin => "origin not allowed",
         }
     }
 }
 
-/// Everything the gate needs about the running server.
-#[derive(Debug, Clone)]
-pub struct Gate {
-    token: String,
-    /// Address actually bound (so `--bind 127.0.0.1:0` compares the real port).
-    pub bound: SocketAddr,
-}
-
 impl Gate {
-    /// Build a gate with a fresh random token.
-    pub fn new(bound: SocketAddr) -> Self {
+    /// Use a persisted signing secret and a separate, per-process control secret.
+    pub fn new(bound: SocketAddr, public_url: Option<Url>, secret: &str, control: String) -> Self {
         Self {
-            token: random_token(),
+            sessions: RwLock::new(SessionKey {
+                key: hmac::Key::new(hmac::HMAC_SHA256, secret.as_bytes()),
+                revoked: CancellationToken::new(),
+            }),
+            pairs: Mutex::new(VecDeque::new()),
+            control,
             bound,
+            public_url,
         }
     }
 
-    /// The `Set-Cookie` value. `HttpOnly` keeps it away from page scripts;
-    /// `SameSite=Strict` is what makes a cross-site upgrade cookie-less.
-    pub fn set_cookie(&self) -> String {
+    /// Allocate a bounded, in-memory code with 128 bits of OS entropy.
+    pub fn issue_pair(&self) -> anyhow::Result<String> {
+        let code = random_token(16)?;
+        let now = Instant::now();
+        let mut pairs = self
+            .pairs
+            .lock()
+            .map_err(|_| anyhow::anyhow!("pairing lock poisoned"))?;
+        pairs.retain(|(_, expires)| *expires > now);
+        if pairs.len() >= MAX_PAIRS {
+            pairs.pop_front();
+        }
+        pairs.push_back((code.clone(), now + PAIR_TTL));
+        Ok(code)
+    }
+
+    /// Atomically remove a code before issuing its session token.
+    pub fn consume_pair(&self, code: &str) -> Option<String> {
+        let mut pairs = self.pairs.lock().ok()?;
+        let index = pairs.iter().position(|(candidate, _)| candidate == code)?;
+        let (_, expires) = pairs.remove(index)?;
+        if expires <= Instant::now() {
+            return None;
+        }
+        let sessions = self.sessions.read().ok()?;
+        let payload = format!(
+            "{}.{}",
+            unix_seconds() + SESSION_TTL.as_secs(),
+            random_token(16).ok()?
+        );
+        let signature = hmac::sign(&sessions.key, self.session_message(&payload).as_bytes());
+        Some(format!(
+            "{payload}.{}",
+            URL_SAFE_NO_PAD.encode(signature.as_ref())
+        ))
+    }
+
+    fn session_message(&self, payload: &str) -> String {
+        format!("alnair-web-session-v1:{}:{payload}", self.bound.port())
+    }
+
+    /// Cookie names distinguish listeners because cookies ignore ports.
+    pub fn cookie_name(&self) -> String {
+        format!("alnair_session_{}", self.bound.port())
+    }
+
+    /// HTTPS proxy origins get a Secure cookie; forwarded headers are ignored.
+    pub fn set_cookie(&self, token: &str) -> String {
+        let secure = if self
+            .public_url
+            .as_ref()
+            .is_some_and(|url| url.scheme() == "https")
+        {
+            "; Secure"
+        } else {
+            ""
+        };
         format!(
-            "{COOKIE_NAME}={}; Path=/; HttpOnly; SameSite=Strict",
-            self.token
+            "{}={token}; Path=/; HttpOnly; SameSite=Lax; Max-Age={}{secure}",
+            self.cookie_name(),
+            SESSION_TTL.as_secs()
         )
     }
 
-    /// Whether `origin` is one this server serves.
-    ///
-    /// Accepts the bound address verbatim, `localhost` on the bound port (the
-    /// browser may normalise `127.0.0.1` to `localhost` or vice versa), and in
-    /// debug builds the Vite dev origin so HMR works through the proxy.
+    /// Accept configured names or literal addresses on this listener.
     pub fn origin_allowed(&self, origin: &str) -> bool {
-        let port = self.bound.port();
-        let allowed = [
-            format!("http://{}", self.bound),
-            format!("http://localhost:{port}"),
-            format!("http://127.0.0.1:{port}"),
-            format!("http://[::1]:{port}"),
-        ];
-        if allowed.iter().any(|candidate| candidate == origin) {
+        if self
+            .public_url
+            .as_ref()
+            .is_some_and(|url| url.origin().ascii_serialization() == origin)
+        {
             return true;
         }
-        // The dev server proxies `/ws`, so the page's origin is the Vite one.
-        // Gated on debug: a release binary must never accept it.
-        cfg!(debug_assertions)
-            && (origin == format!("http://localhost:{DEV_ORIGIN_PORT}")
-                || origin == format!("http://127.0.0.1:{DEV_ORIGIN_PORT}"))
-    }
-
-    /// Run both checks. `Err` carries the reason for the 403 and the log line.
-    pub fn check(&self, headers: &HeaderMap) -> Result<(), RejectReason> {
-        self.check_cookie(headers)?;
-        self.check_origin(headers)
-    }
-
-    fn check_cookie(&self, headers: &HeaderMap) -> Result<(), RejectReason> {
-        let Some(raw) = headers.get(header::COOKIE).and_then(|v| v.to_str().ok()) else {
-            return Err(RejectReason::MissingCookie);
+        let Ok(url) = Url::parse(origin) else {
+            return false;
         };
-        let found = raw
-            .split(';')
-            .filter_map(|part| part.trim().split_once('='))
-            .find(|(name, _)| *name == COOKIE_NAME)
-            .map(|(_, value)| value);
-        match found {
-            None => Err(RejectReason::MissingCookie),
-            Some(value) if constant_time_eq(value.as_bytes(), self.token.as_bytes()) => Ok(()),
-            Some(_) => Err(RejectReason::BadCookie),
+        if url.scheme() != "http" || url.origin().ascii_serialization() != origin {
+            return false;
+        }
+        if cfg!(debug_assertions)
+            && url.port_or_known_default() == Some(5173)
+            && matches!(url.host_str(), Some("localhost" | "127.0.0.1"))
+        {
+            return true;
+        }
+        if url.port_or_known_default() != Some(self.bound.port()) {
+            return false;
+        }
+        match url.host() {
+            Some(url::Host::Domain("localhost")) => true,
+            Some(url::Host::Ipv4(ip)) => {
+                ip.is_loopback()
+                    || self.bound.ip() == ip
+                    || (self.bound.is_ipv4() && self.bound.ip().is_unspecified())
+            }
+            Some(url::Host::Ipv6(ip)) => {
+                ip.is_loopback()
+                    || self.bound.ip() == ip
+                    || (self.bound.is_ipv6() && self.bound.ip().is_unspecified())
+            }
+            _ => false,
         }
     }
 
-    fn check_origin(&self, headers: &HeaderMap) -> Result<(), RejectReason> {
-        let Some(origin) = headers.get(header::ORIGIN).and_then(|v| v.to_str().ok()) else {
-            return Err(RejectReason::MissingOrigin);
-        };
-        if self.origin_allowed(origin) {
+    /// Check Host even on navigations, which have no Origin header.
+    pub fn check_host(&self, headers: &HeaderMap) -> Result<(), RejectReason> {
+        let host = headers
+            .get(header::HOST)
+            .and_then(|value| value.to_str().ok())
+            .ok_or(RejectReason::ForeignOrigin)?;
+        if self.origin_allowed(&format!("http://{host}"))
+            || self.origin_allowed(&format!("https://{host}"))
+        {
             Ok(())
         } else {
             Err(RejectReason::ForeignOrigin)
         }
     }
+
+    /// Require a signed cookie and, for mutations and sockets, a same-origin header.
+    pub fn check(
+        &self,
+        headers: &HeaderMap,
+        require_origin: bool,
+    ) -> Result<Session, RejectReason> {
+        self.check_host(headers)?;
+        match headers
+            .get(header::ORIGIN)
+            .and_then(|value| value.to_str().ok())
+        {
+            Some(origin) => {
+                let host = headers
+                    .get(header::HOST)
+                    .and_then(|value| value.to_str().ok());
+                let authority = origin
+                    .strip_prefix("http://")
+                    .or_else(|| origin.strip_prefix("https://"));
+                if !self.origin_allowed(origin) || authority != host {
+                    return Err(RejectReason::ForeignOrigin);
+                }
+            }
+            None if require_origin => return Err(RejectReason::MissingOrigin),
+            None => {}
+        }
+        let name = self.cookie_name();
+        let token = headers
+            .get_all(header::COOKIE)
+            .iter()
+            .filter_map(|value| value.to_str().ok())
+            .flat_map(|raw| raw.split(';'))
+            .filter_map(|part| part.trim().split_once('='))
+            .find(|(key, _)| *key == name)
+            .map(|(_, value)| value)
+            .ok_or(RejectReason::MissingCookie)?;
+        let (payload, signature) = token.rsplit_once('.').ok_or(RejectReason::BadCookie)?;
+        let expires = payload
+            .split_once('.')
+            .and_then(|(expires, _)| expires.parse::<u64>().ok())
+            .ok_or(RejectReason::BadCookie)?;
+        let remaining = expires
+            .checked_sub(unix_seconds())
+            .filter(|value| *value > 0)
+            .ok_or(RejectReason::BadCookie)?;
+        let signature = URL_SAFE_NO_PAD
+            .decode(signature)
+            .map_err(|_| RejectReason::BadCookie)?;
+        let sessions = self.sessions.read().map_err(|_| RejectReason::BadCookie)?;
+        hmac::verify(
+            &sessions.key,
+            self.session_message(payload).as_bytes(),
+            &signature,
+        )
+        .map_err(|_| RejectReason::BadCookie)?;
+        Ok(Session {
+            revoked: sessions.revoked.clone(),
+            remaining: Duration::from_secs(remaining),
+        })
+    }
+
+    /// Service administration never accepts a paired browser cookie.
+    pub fn check_control(&self, headers: &HeaderMap) -> bool {
+        if headers.contains_key(header::ORIGIN) || headers.contains_key("sec-fetch-mode") {
+            return false;
+        }
+        headers
+            .get(header::AUTHORIZATION)
+            .and_then(|value| value.to_str().ok())
+            .and_then(|value| value.strip_prefix("Bearer "))
+            .is_some_and(|value| bool::from(value.as_bytes().ct_eq(self.control.as_bytes())))
+    }
+
+    /// Replace the live signing key after its replacement has been persisted.
+    pub fn revoke(&self, secret: &str) -> anyhow::Result<()> {
+        // Same lock order as consume_pair prevents revoke/consume deadlocks.
+        let mut pairs = self
+            .pairs
+            .lock()
+            .map_err(|_| anyhow::anyhow!("pairing lock poisoned"))?;
+        let mut sessions = self
+            .sessions
+            .write()
+            .map_err(|_| anyhow::anyhow!("session lock poisoned"))?;
+        sessions.revoked.cancel();
+        *sessions = SessionKey {
+            key: hmac::Key::new(hmac::HMAC_SHA256, secret.as_bytes()),
+            revoked: CancellationToken::new(),
+        };
+        pairs.clear();
+        Ok(())
+    }
 }
 
-/// 32 random bytes, hex encoded.
-fn random_token() -> String {
-    use rand::{TryRngCore as _, rngs::OsRng};
-    let mut bytes = [0u8; 32];
-    // `OsRng` is the OS entropy source, not a seeded PRNG: the token gates a
-    // process that can run shell commands.
+/// OS entropy failures propagate instead of issuing predictable credentials.
+pub fn random_token(bytes: usize) -> anyhow::Result<String> {
+    let mut buffer = vec![0; bytes];
     OsRng
-        .try_fill_bytes(&mut bytes)
-        .expect("OS RNG must be available for the web token");
-    bytes.iter().map(|byte| format!("{byte:02x}")).collect()
+        .try_fill_bytes(&mut buffer)
+        .map_err(|error| anyhow::anyhow!("OS entropy unavailable: {error}"))?;
+    Ok(URL_SAFE_NO_PAD.encode(buffer))
 }
 
-/// Compare without an early exit, so a wrong cookie cannot be discovered one
-/// byte at a time by timing the response.
-fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
-    if a.len() != b.len() {
-        return false;
-    }
-    let mut diff = 0u8;
-    for (x, y) in a.iter().zip(b.iter()) {
-        diff |= x ^ y;
-    }
-    diff == 0
+fn unix_seconds() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs()
+}
+
+/// Parse an origin without credentials, paths, query strings, or fragments.
+pub fn public_url(value: &str) -> anyhow::Result<Url> {
+    let url = Url::parse(value)?;
+    anyhow::ensure!(
+        matches!(url.scheme(), "http" | "https")
+            && url.host().is_some()
+            && url.username().is_empty()
+            && url.password().is_none()
+            && url.path() == "/"
+            && url.query().is_none()
+            && url.fragment().is_none(),
+        "public URL must be an http(s) origin, e.g. https://alnair.example.com"
+    );
+    Ok(url)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use axum::http::HeaderValue;
 
     fn gate() -> Gate {
-        Gate::new("127.0.0.1:2420".parse().unwrap())
+        Gate::new(
+            "0.0.0.0:2420".parse().unwrap(),
+            None,
+            "signing secret",
+            "control secret".into(),
+        )
     }
 
-    fn headers(cookie: Option<&str>, origin: Option<&str>) -> HeaderMap {
-        let mut map = HeaderMap::new();
-        if let Some(value) = cookie {
-            map.insert(header::COOKIE, HeaderValue::from_str(value).unwrap());
+    fn headers(gate: &Gate, token: &str, origin: &str) -> HeaderMap {
+        let mut headers = HeaderMap::new();
+        headers.insert(header::HOST, "192.168.1.20:2420".parse().unwrap());
+        headers.insert(header::ORIGIN, origin.parse().unwrap());
+        headers.insert(
+            header::COOKIE,
+            format!("{}={token}", gate.cookie_name()).parse().unwrap(),
+        );
+        headers
+    }
+
+    #[test]
+    fn pairing_is_single_use_and_sessions_survive_restart() {
+        let gate = gate();
+        let code = gate.issue_pair().unwrap();
+        let token = gate.consume_pair(&code).unwrap();
+        assert!(gate.consume_pair(&code).is_none());
+        assert!(
+            self::gate()
+                .check(&headers(&gate, &token, "http://192.168.1.20:2420"), true)
+                .is_ok()
+        );
+    }
+
+    #[test]
+    fn rejects_expired_codes() {
+        let gate = gate();
+        gate.pairs
+            .lock()
+            .unwrap()
+            .push_back(("old".into(), Instant::now() - Duration::from_secs(1)));
+        assert!(gate.consume_pair("old").is_none());
+    }
+
+    #[test]
+    fn rejects_expired_and_forged_sessions() {
+        let gate = gate();
+        let payload = "1.nonce";
+        let signature = hmac::sign(
+            &gate.sessions.read().unwrap().key,
+            gate.session_message(payload).as_bytes(),
+        );
+        let expired = format!("{payload}.{}", URL_SAFE_NO_PAD.encode(signature.as_ref()));
+        assert!(
+            gate.check(&headers(&gate, &expired, "http://192.168.1.20:2420"), true)
+                .is_err()
+        );
+        let token = gate.consume_pair(&gate.issue_pair().unwrap()).unwrap();
+        let (_, signature) = token.rsplit_once('.').unwrap();
+        let forged = format!("9999999999.nonce.{signature}");
+        assert!(
+            gate.check(&headers(&gate, &forged, "http://192.168.1.20:2420"), true)
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn cache_evicts_oldest_code_at_capacity() {
+        let gate = gate();
+        let oldest = gate.issue_pair().unwrap();
+        for _ in 0..MAX_PAIRS {
+            gate.issue_pair().unwrap();
         }
-        if let Some(value) = origin {
-            map.insert(header::ORIGIN, HeaderValue::from_str(value).unwrap());
-        }
-        map
-    }
-
-    fn cookie_for(gate: &Gate) -> String {
-        format!("{COOKIE_NAME}={}", gate.token)
+        assert_eq!(gate.pairs.lock().unwrap().len(), MAX_PAIRS);
+        assert!(gate.consume_pair(&oldest).is_none());
     }
 
     #[test]
-    fn accepts_its_own_cookie_and_origin() {
+    fn rejects_revoked_sessions_and_cancels_live_connections() {
         let gate = gate();
-        let cookie = cookie_for(&gate);
-        assert_eq!(
-            gate.check(&headers(Some(&cookie), Some("http://127.0.0.1:2420"))),
-            Ok(())
+        let token = gate.consume_pair(&gate.issue_pair().unwrap()).unwrap();
+        let headers = headers(&gate, &token, "http://192.168.1.20:2420");
+        let session = gate.check(&headers, true).unwrap();
+        gate.revoke("replacement").unwrap();
+        assert!(session.revoked.is_cancelled());
+        assert!(gate.check(&headers, true).is_err());
+    }
+
+    #[test]
+    fn rejects_rebinding_and_cross_origin_requests() {
+        let gate = gate();
+        assert!(!gate.origin_allowed("http://attacker.example:2420"));
+        assert!(!gate.origin_allowed("http://192.168.1.20:2421"));
+        let token = gate.consume_pair(&gate.issue_pair().unwrap()).unwrap();
+        assert!(
+            gate.check(&headers(&gate, &token, "http://192.168.1.21:2420"), true)
+                .is_err()
         );
     }
 
     #[test]
-    fn accepts_localhost_on_the_bound_port() {
+    fn control_requires_its_own_credential_and_rejects_browser_origins() {
         let gate = gate();
-        let cookie = cookie_for(&gate);
-        assert_eq!(
-            gate.check(&headers(Some(&cookie), Some("http://localhost:2420"))),
-            Ok(())
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            header::AUTHORIZATION,
+            "Bearer control secret".parse().unwrap(),
         );
-    }
-
-    #[test]
-    fn rejects_a_missing_cookie() {
-        let gate = gate();
-        assert_eq!(
-            gate.check(&headers(None, Some("http://127.0.0.1:2420"))),
-            Err(RejectReason::MissingCookie)
+        assert!(gate.check_control(&headers));
+        headers.insert(header::ORIGIN, "http://localhost:2420".parse().unwrap());
+        assert!(!gate.check_control(&headers));
+        headers.remove(header::ORIGIN);
+        headers.insert(
+            header::AUTHORIZATION,
+            "Bearer wrong secret".parse().unwrap(),
         );
+        assert!(!gate.check_control(&headers));
     }
 
     #[test]
-    fn rejects_a_stale_cookie() {
-        let gate = gate();
-        assert_eq!(
-            gate.check(&headers(
-                Some("alnair_web=deadbeef"),
-                Some("http://127.0.0.1:2420")
-            )),
-            Err(RejectReason::BadCookie)
+    fn https_proxy_origin_is_exact_and_sets_secure_cookie() {
+        let gate = Gate::new(
+            "127.0.0.1:2420".parse().unwrap(),
+            Some(public_url("https://alnair.example.com").unwrap()),
+            "secret",
+            "control".into(),
         );
-    }
-
-    #[test]
-    fn rejects_a_foreign_origin_even_with_a_valid_cookie() {
-        // The whole point of the second check: the cookie alone is not enough,
-        // because a same-site attacker page could in principle carry it.
-        let gate = gate();
-        let cookie = cookie_for(&gate);
-        assert_eq!(
-            gate.check(&headers(Some(&cookie), Some("http://evil.example"))),
-            Err(RejectReason::ForeignOrigin)
-        );
-    }
-
-    #[test]
-    fn rejects_a_missing_origin() {
-        let gate = gate();
-        let cookie = cookie_for(&gate);
-        assert_eq!(
-            gate.check(&headers(Some(&cookie), None)),
-            Err(RejectReason::MissingOrigin)
-        );
-    }
-
-    #[test]
-    fn rejects_dns_rebinding_hosts() {
-        let gate = gate();
-        let cookie = cookie_for(&gate);
-        // A rebinding attack presents the attacker's hostname, not loopback.
-        assert_eq!(
-            gate.check(&headers(Some(&cookie), Some("http://rebind.evil:2420"))),
-            Err(RejectReason::ForeignOrigin)
-        );
-    }
-
-    #[test]
-    fn tokens_differ_between_gates() {
-        assert_ne!(gate().token, gate().token);
-    }
-
-    #[test]
-    fn cookie_is_httponly_and_strict() {
-        let cookie = gate().set_cookie();
-        assert!(cookie.contains("HttpOnly"));
-        assert!(cookie.contains("SameSite=Strict"));
-        assert!(cookie.starts_with("alnair_web="));
-    }
-
-    #[test]
-    fn constant_time_eq_matches_semantics() {
-        assert!(constant_time_eq(b"abc", b"abc"));
-        assert!(!constant_time_eq(b"abc", b"abd"));
-        assert!(!constant_time_eq(b"abc", b"ab"));
+        assert!(gate.origin_allowed("https://alnair.example.com"));
+        assert!(!gate.origin_allowed("https://alnair.example.com.evil.test"));
+        assert!(gate.set_cookie("token").ends_with("; Secure"));
+        assert!(public_url("https://user:password@example.com/").is_err());
+        assert!(public_url("https://example.com/prefix").is_err());
     }
 }

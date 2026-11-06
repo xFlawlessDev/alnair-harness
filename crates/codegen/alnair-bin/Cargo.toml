@@ -52,6 +52,9 @@ anyhow = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 serde_json = { workspace = true }
+qrcode = { workspace = true }
+webbrowser = { workspace = true }
+url = { workspace = true }
 dunce = { workspace = true }
 semver = { workspace = true }
 alnair-tty-utils = { workspace = true }
@@ -84,6 +87,8 @@ tikv-jemalloc-sys = { workspace = true, optional = true }
 tikv-jemalloc-ctl = { workspace = true, optional = true, features = ["stats", "use_std"] }
 
 [dev-dependencies]
+reqwest = { workspace = true }
+tempfile = { workspace = true }
 serial_test = { workspace = true }
 # `PagerArgs::try_parse_from` in the CLI-parsing unit tests (needs the
 # `clap::Parser` trait in scope).

@@ -14,6 +14,7 @@
  */
 
 import { spawn } from "node:child_process";
+import { pairingLink } from "./web-auth.mjs";
 import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -142,7 +143,7 @@ await send(
   cdp,
 );
 
-await send("Page.navigate", { url: `${base}/` }, cdp);
+await send("Page.navigate", { url: await pairingLink(base) }, cdp);
 
 const evaluate = async (expression) => {
   const result = await send(

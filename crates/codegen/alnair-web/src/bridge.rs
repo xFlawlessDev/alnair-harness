@@ -51,10 +51,19 @@ pub fn capabilities() -> ClientCapabilities {
 /// Returns when the socket closes or the leader connection cannot be
 /// re-established. The leader client is created here, so the connection count
 /// and the socket count are one and the same.
-pub async fn serve_socket(socket: WebSocket) {
+pub async fn serve_socket(
+    socket: WebSocket,
+    shutdown: CancellationToken,
+    session: crate::auth::Session,
+) {
     let cancel = CancellationToken::new();
 
-    let conn = match connect_or_spawn(CLIENT_TYPE, ClientMode::Stdio, capabilities()).await {
+    let connection = tokio::select! {
+        result = connect_or_spawn(CLIENT_TYPE, ClientMode::Stdio, capabilities()) => result,
+        _ = shutdown.cancelled() => return,
+        _ = session.revoked.cancelled() => return,
+    };
+    let conn = match connection {
         Ok(conn) => conn,
         Err(e) => {
             warn!(error = %e, "web: failed to attach to the leader");
@@ -85,7 +94,7 @@ pub async fn serve_socket(socket: WebSocket) {
     let to_leader = std::sync::Arc::new(tokio::sync::Mutex::new(to_leader));
     let to_leader_for_ws = to_leader.clone();
     let cancel_for_ws = cancel.clone();
-    let reader = tokio::spawn(async move {
+    let mut reader = tokio::spawn(async move {
         while let Some(frame) = ws_read.next().await {
             match frame {
                 Ok(Message::Text(text)) => {
@@ -120,7 +129,7 @@ pub async fn serve_socket(socket: WebSocket) {
 
     // Leader → browser, including the reconnect notification.
     let cancel_for_leader = cancel.clone();
-    let leader = tokio::spawn(async move {
+    let mut leader = tokio::spawn(async move {
         let mut from_leader = from_leader;
         loop {
             tokio::select! {
@@ -160,7 +169,7 @@ pub async fn serve_socket(socket: WebSocket) {
         }
     });
 
-    let writer = tokio::spawn(async move {
+    let mut writer = tokio::spawn(async move {
         while let Some(payload) = from_ws.recv().await {
             if ws_write.send(Message::Text(payload.into())).await.is_err() {
                 break;
@@ -169,12 +178,18 @@ pub async fn serve_socket(socket: WebSocket) {
     });
 
     tokio::select! {
-        _ = reader => {}
-        _ = leader => {}
-        _ = writer => {}
+        _ = &mut reader => {}
+        _ = &mut leader => {}
+        _ = &mut writer => {}
+        _ = shutdown.cancelled() => {}
+        _ = session.revoked.cancelled() => {}
+        _ = tokio::time::sleep(session.remaining) => {}
     }
 
     cancel.cancel();
+    reader.abort();
+    leader.abort();
+    writer.abort();
     debug!("web: socket closed");
 }
 

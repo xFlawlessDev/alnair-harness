@@ -16,6 +16,8 @@ npm install
 npm run build
 # Start `alnair web` in another terminal, then run the HMR client:
 npm run dev
+# Obtain a fresh link for the HMR origin (debug binaries only):
+alnair web pair --url http://localhost:5173
 ```
 
 | Script                  | What it does                                                      |

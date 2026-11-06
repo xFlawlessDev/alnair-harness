@@ -42,6 +42,7 @@ use anyhow::Result;
 use std::env;
 use std::net::SocketAddr;
 use tokio_util::sync::CancellationToken;
+mod web_command;
 /// Apply global endpoint CLI args to an existing config.
 fn apply_agent_endpoint_args(agent_args: &alnair_tui::app::AgentArgs, config: &mut AgentConfig) {
     if let Some(v) = &agent_args.coding_api_base_url {
@@ -184,21 +185,7 @@ async fn run_setup_command(json: bool) {
 /// startup. That keeps `alnair web` cheap to leave running and matches how the
 /// TUI behaves.
 async fn run_web_command(args: alnair_tui::app::WebArgs) -> Result<()> {
-    use alnair_web::{WebServerConfig, run_web_server};
-
-    let leader = alnair_web::server::LeaderTarget {
-        pid: args.pid,
-        socket: args.socket.clone(),
-    };
-    let config = WebServerConfig {
-        bind: args.bind,
-        leader,
-        open: args.open,
-    };
-
-    let cancel = CancellationToken::new();
-    run_web_server(config, cancel).await?;
-    Ok(())
+    web_command::run(args).await
 }
 
 async fn run_leader_mgmt(args: LeaderMgmtArgs) -> Result<()> {

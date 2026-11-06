@@ -7,8 +7,14 @@ answered from the other.
 
 ```sh
 npm --prefix web run build     # once, or after changing web/
-alnair web                     # http://127.0.0.1:2420/
+alnair web                     # foreground; prints a one-time pairing link
 alnair web --bind 127.0.0.1:0 --open
+
+# Keep serving after the launching terminal closes:
+alnair web start
+alnair web pair --open
+alnair web status
+alnair web stop
 ```
 
 | Flag | Default | Meaning |
@@ -17,6 +23,64 @@ alnair web --bind 127.0.0.1:0 --open
 | `--pid` | none | Target a specific leader (same idea as `alnair leader info --pid`). |
 | `--socket` | none | Target an explicit leader socket path. |
 | `--open` | off | Open the default browser once listening. |
+| `--public-url` | none | Exact external origin behind a reverse proxy; saved across service starts. |
+
+`start` is idempotent. `restart` stops the authenticated instance before starting
+with saved settings plus any supplied overrides. `pair` starts the service if it
+is stopped, then prints a link valid for five minutes and one browser. Run it
+again for each device. `--open` opens that link locally. `revoke` signs out all
+devices, clears outstanding links, and disconnects live browser sockets.
+
+### LAN
+
+```sh
+alnair web start --bind 0.0.0.0:2420
+alnair web pair --url http://192.168.1.20:2420
+```
+
+Replace the address with the server's reachable LAN IP. If the service is
+already running on loopback, use `restart --bind 0.0.0.0:2420`. A non-loopback
+pairing link also prints a QR code containing the browser URL. No mDNS,
+automatic port forwarding, or tunnel is involved. Plain HTTP provides no
+transport encryption; use a trusted LAN or terminate HTTPS at a reverse proxy.
+
+### Reverse proxy
+
+```sh
+alnair web start --bind 127.0.0.1:2420 --public-url https://alnair.example.com
+alnair web pair
+```
+
+Serve the app at the origin root, forward to `127.0.0.1:2420`, preserve the
+external `Host`, and support WebSocket upgrades on `/ws`. The public origin is
+an allowlist entry, not a URL the server fetches. Forwarded host/protocol
+headers are ignored. HTTPS public origins issue `Secure` cookies; open pairing
+links through that HTTPS origin. Cross-origin UI hosting and subpath mounting
+are not supported. For SSH, forward the same port and open the printed
+loopback link on your own machine.
+
+### Background lifecycle and files
+
+The service is a detached user process, with no elevated permissions and no
+auto-start on login/boot. It does not install a Windows Service, launchd job,
+or systemd unit. Stopping the web process leaves leader sessions running.
+
+Files live in `~/.alnair/web/` (`ALNAIR_SHARE_DIR` overrides the home):
+
+| File | Purpose |
+|---|---|
+| `config.json` | Saved bind and public origin |
+| `auth.json` | Persistent random signing key |
+| `service.json` | PID, actual bound address, settings, and private control token |
+| `service.lock` | Lifetime OS lock; kept on disk after shutdown |
+| `service.log` | Background process stderr; no pairing links are printed here |
+
+Files have owner-only permissions (Windows user ACL / Unix `0600`); the
+directory is private. Managed paths refuse symlinks, and JSON replacement uses
+the shared atomic replace helper. A stale registration is authenticated before
+use; stop never signals an unverified PID. Startup and readiness waits are
+bounded. Use a fixed port if sessions need to survive restarts: `:0` chooses a
+new port and therefore a new cookie scope.
 
 ## Architecture
 
@@ -63,27 +127,37 @@ stays a single file. Debug builds read `web/build/` from disk, which means
 | Path | Behaviour |
 |---|---|
 | `GET /ws` | WebSocket upgrade (cookie + `Origin` required) |
-| `GET /api/session` | Sets the auth cookie; returns version, leader target, `webBuilt` |
+| `GET /auth/connect/{code}` | Consume a pairing code, set a signed cookie, redirect to `/` |
+| `GET /api/session` | Cookie required; returns version, leader target, `webBuilt` |
 | `POST /api/pick-directory` | Native folder dialog (cookie + `Origin` required) |
 | `GET /healthz` | `ok`, no auth — for scripts |
-| `GET /*` | Embedded asset; miss **with** an extension → 404; miss **without** → `index.html` |
+| `GET /*` | Embedded asset; HTML shell requires a cookie; unknown API/auth routes are 404 |
 
-`index.html` is `no-cache`; everything under `_app/immutable/` is
+`index.html` and authentication responses are `no-store`; hashed assets are
 `max-age=31536000, immutable`.
 
 ### Auth
 
-`GET /` and `/api/session` set `alnair_web=<random>` with
-`HttpOnly; SameSite=Strict`. `/ws` requires **both** that cookie and an `Origin`
-matching the bound address.
+`GET /` and `/api/session` never grant credentials. An unpaired visitor sees
+HTTP 401 with instructions to run `alnair web pair` on the server. The pairing
+route consumes its code atomically and sets `alnair_session_<port>` with
+`HttpOnly; SameSite=Lax; Max-Age=2592000`. Signing uses HMAC-SHA256, a random
+256-bit key, a versioned domain label, listener-port scope, an expiry, and a
+random nonce. Signature verification uses the crypto library's constant-time
+verification. Expired tokens fail even if the browser retains the cookie.
 
 The `Origin` check is not redundant: a WebSocket upgrade is not subject to CORS
 preflight, so without it any page open in the same browser could connect to
-`127.0.0.1` and drive the agent (DNS rebinding included). `SameSite=Strict`
-covers the cookie half of the same attack.
+`127.0.0.1` and drive the agent. Exact Host/Origin checks also refuse DNS
+rebinding and other ports on the same site. A paired browser cannot use
+`/api/service/*`: those routes require the separate local control bearer
+credential and refuse browser Origin/fetch headers. Long-lived credentials
+are never accepted in query strings.
 
-Restarting `alnair web` rotates the token, so a stale tab gets 403 until it is
-reloaded. That fails closed on purpose.
+Signing keys persist across restarts on a fixed port. Unused pairing links do
+not: they are in memory, expire after five minutes, and are capped at 1000.
+`revoke` rotates the key and invalidates all devices together. There is no
+device inventory or individual-device revocation.
 
 ## Graph workspace
 
@@ -452,7 +526,15 @@ produces on demand (a parked questionnaire, an exhausted retry).
 
 ## Verifying it against a live leader
 
-Nine scripts, each answering a different question:
+The probe scripts obtain a fresh pairing link through `scripts/web-auth.mjs`
+before connecting. They use `ALNAIR_WEB_BINARY`, then the local debug binary,
+then `alnair` on PATH. The service must use the same `ALNAIR_SHARE_DIR` as the
+probe. For a remote server, supply a fresh `ALNAIR_WEB_PAIR_URL` from that
+server instead; each link works for one probe run. Probes may create sessions
+or submit prompts as described below, so run them against an isolated test
+home when preserving real sessions matters.
+
+Each script answers a different question:
 
 | Script | Question |
 |---|---|

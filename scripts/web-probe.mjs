@@ -19,36 +19,13 @@
  */
 
 import { createHash, randomBytes } from "node:crypto";
-import http from "node:http";
+import { pairedCookie } from "./web-auth.mjs";
 import net from "node:net";
 
 const base = new URL(process.argv[2] ?? "http://127.0.0.1:2441");
 const timeoutMs = 20_000;
 
-/** Fetch the auth cookie the WS gate wants. */
-const page = await new Promise((resolve, reject) => {
-  http
-    .get(
-      {
-        host: base.hostname,
-        port: base.port,
-        path: "/",
-        headers: { accept: "text/html" },
-      },
-      (res) => {
-        res.resume();
-        resolve(res);
-      },
-    )
-    .on("error", reject);
-});
-
-const rawCookie = page.headers["set-cookie"]?.[0];
-if (!rawCookie) {
-  console.error("no auth cookie from", base.origin);
-  process.exit(1);
-}
-const cookie = rawCookie.split(";")[0];
+const cookie = await pairedCookie(base);
 
 /** Open the upgrade. */
 const socket = net.connect(Number(base.port), base.hostname);

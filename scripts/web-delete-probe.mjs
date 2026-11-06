@@ -12,6 +12,7 @@
  */
 
 import { spawn } from "node:child_process";
+import { pairedCookie } from "./web-auth.mjs";
 import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -31,15 +32,7 @@ if (!browserPath) {
 }
 
 // A throwaway session, created through the same socket the UI uses.
-const cookie = await (async () => {
-  const res = await fetch(`${base}/api/session`);
-  const raw = res.headers.getSetCookie?.() ?? [];
-  const token = raw
-    .map((line) => line.split(";")[0])
-    .find((line) => line.startsWith("alnair_web="));
-  if (!token) throw new Error("no auth cookie");
-  return token;
-})();
+const cookie = await pairedCookie(base);
 
 async function withSocket(run) {
   const socket = new WebSocket(base.replace("http", "ws") + "/ws", {
@@ -198,6 +191,15 @@ const { sessionId: cdp } = await send("Target.attachToTarget", {
 await send("Runtime.enable", {}, cdp);
 await send("Network.enable", {}, cdp);
 await send("Page.enable", {}, cdp);
+const cookieSeparator = cookie.indexOf("=");
+await send("Network.setCookie", {
+  name: cookie.slice(0, cookieSeparator),
+  value: cookie.slice(cookieSeparator + 1),
+  url: base,
+  httpOnly: true,
+  secure: new URL(base).protocol === "https:",
+  sameSite: "Lax",
+}, cdp);
 await send("Page.navigate", { url: `${base}/` }, cdp);
 
 const evaluate = async (expression) => {

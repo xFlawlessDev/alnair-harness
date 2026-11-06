@@ -677,10 +677,28 @@ connection overwrites, so only the newest client sees live deltas.
   so `cargo check` never needs Node; the server reports the placeholder at
   startup and on `/api/session`. Release builds must run
   `npm --prefix web run build` first (docs/RELEASE.md).
-- **Auth is cookie + `Origin`, both required.** A WS upgrade skips CORS
-  preflight, so the cookie alone would let any page in the same browser drive
-  the agent. The dev origin (`:5173`) is accepted only under
-  `cfg!(debug_assertions)`.
+- **Web entry requires pairing.** `/` and `/api/session` never mint cookies.
+  `web pair` issues a 128-bit, single-use, in-memory link (five-minute TTL,
+  bounded to 1000 codes); `/auth/connect/{code}` consumes it and redirects to
+  `/` with a thirty-day HMAC-signed `HttpOnly; SameSite=Lax` cookie named per
+  listener port. The signing key persists across restarts. `web revoke` rotates
+  it, invalidates outstanding links, and cancels live browser connections.
+- **Auth is cookie + exact `Host`/`Origin`.** A WS upgrade skips CORS preflight;
+  both checks are mandatory for sockets and picker mutations. LAN wildcard
+  listeners accept literal IP origins on their own port, never arbitrary DNS
+  names. Reverse proxies declare `--public-url`, preserve `Host`, and forward
+  WebSocket upgrades. HTTPS public origins add `Secure`; forwarded headers are
+  never trusted. The dev origin (`:5173`) remains debug-only.
+- **Background service is user-scoped.** `web start/status/stop/restart/pair`
+  manage one detached server under `~/.alnair/web` (or `ALNAIR_SHARE_DIR`).
+  `config.json` saves launch settings, `auth.json` holds the signing key,
+  `service.json` advertises the actual listener and a separate per-process
+  control credential, and `service.log` stays local. Owner-only file modes/ACLs,
+  symlink refusal, a lifetime OS file lock, and `util::fs::replace_file` protect
+  these stores. Browser cookies cannot issue pairing links, revoke sessions,
+  or stop the server. Stop authenticates over HTTP rather than killing a PID
+  that might have been reused. Closing the terminal leaves the detached service
+  running; auto-start on login/boot and third-party tunnels are not installed.
 - **Never advertise `terminal`/`fs_*`** in the browser's
   `ClientCapabilities`: claiming them routes tool calls to a client that cannot
   serve them and the call hangs.

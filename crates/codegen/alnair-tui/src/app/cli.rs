@@ -71,7 +71,7 @@ See ~/.alnair/README.md for more information.
     Trace(crate::trace_cmd::TraceArgs),
     /// Serve the browser UI for the shared leader
     ///
-    /// Opens an HTTP server on loopback that serves the embedded web client and
+    /// Opens an authenticated HTTP server that serves the embedded web client and
     /// upgrades `/ws` into a JSON-RPC pipe to the leader. Every browser tab is
     /// an ordinary leader client, so the TUI and the browser render the same
     /// live session state.
@@ -171,9 +171,15 @@ pub enum LeaderMgmtCommand {
 /// Arguments for `alnair web`.
 #[derive(Debug, clap::Args, Clone)]
 pub struct WebArgs {
+    /// Manage the background server or issue a pairing link
+    #[command(subcommand)]
+    pub command: Option<WebCommand>,
     /// Address for the web UI to listen on (`:0` picks a free port)
-    #[arg(long, default_value = "127.0.0.1:2420")]
-    pub bind: SocketAddr,
+    #[arg(long, global = true)]
+    pub bind: Option<SocketAddr>,
+    /// Exact browser origin behind a reverse proxy (e.g. https://alnair.example.com)
+    #[arg(long, global = true, value_name = "ORIGIN")]
+    pub public_url: Option<String>,
     /// Target a specific leader process by PID
     #[arg(long)]
     pub pid: Option<u32>,
@@ -181,8 +187,32 @@ pub struct WebArgs {
     #[arg(long, value_name = "PATH")]
     pub socket: Option<PathBuf>,
     /// Open the default browser once the server is listening
-    #[arg(long)]
+    #[arg(long, global = true)]
     pub open: bool,
+    /// Internal detached server entry point
+    #[arg(long, hide = true)]
+    pub serve_service: bool,
+}
+
+/// Background web service lifecycle and pairing.
+#[derive(Debug, clap::Subcommand, Clone)]
+pub enum WebCommand {
+    /// Start the web UI in the background (safe to run repeatedly)
+    Start,
+    /// Stop and start with saved settings or supplied overrides
+    Restart,
+    /// Print background server status without starting it
+    Status,
+    /// Stop the web server; leader sessions keep running
+    Stop,
+    /// Print a one-time browser pairing link, starting the service if needed
+    Pair {
+        /// Reachable LAN address or configured reverse-proxy origin for the link
+        #[arg(long, value_name = "ORIGIN")]
+        url: Option<String>,
+    },
+    /// Sign out every browser and disconnect active web clients
+    Revoke,
 }
 
 /// Arguments for the `agent` subcommand.
@@ -860,6 +890,40 @@ impl PagerArgs {
 }
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn web_service_subcommands_accept_global_options_after_the_command() {
+        use clap::Parser as _;
+        let args = super::PagerArgs::try_parse_from([
+            "alnair",
+            "web",
+            "start",
+            "--bind",
+            "0.0.0.0:2420",
+            "--public-url",
+            "https://alnair.example.com",
+        ])
+        .unwrap();
+        let Some(super::Command::Web(web)) = args.command else {
+            panic!("expected web command")
+        };
+        assert!(matches!(web.command, Some(super::WebCommand::Start)));
+        assert_eq!(web.bind.unwrap().to_string(), "0.0.0.0:2420");
+        let args = super::PagerArgs::try_parse_from([
+            "alnair",
+            "web",
+            "pair",
+            "--url",
+            "http://192.168.1.20:2420",
+        ])
+        .unwrap();
+        let Some(super::Command::Web(web)) = args.command else {
+            panic!("expected web command")
+        };
+        assert!(matches!(
+            web.command,
+            Some(super::WebCommand::Pair { url: Some(_) })
+        ));
+    }
     use super::*;
     #[test]
     fn version_flag_exits_zero() {

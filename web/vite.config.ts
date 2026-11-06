@@ -42,6 +42,7 @@ export default defineConfig({
 	 */
 	server: {
 		proxy: {
+			'/auth': { target: BACKEND, changeOrigin: false },
 			'/api': { target: BACKEND, changeOrigin: false },
 			'/ws': { target: BACKEND.replace(/^http/, 'ws'), ws: true, changeOrigin: false }
 		}

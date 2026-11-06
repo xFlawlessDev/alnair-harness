@@ -1,37 +1,36 @@
-//! Router, bind and startup reporting.
-//!
-//! One origin serves both the SPA and the WebSocket, which is what makes the
-//! `SameSite=Strict` cookie work without a CORS story.
+//! One HTTP origin for the embedded SPA, pairing, and authenticated WebSockets.
 
 use std::net::SocketAddr;
+use std::sync::Arc;
 
 use axum::{
     Router,
-    extract::{ConnectInfo, State, WebSocketUpgrade},
+    extract::{ConnectInfo, Path, State, WebSocketUpgrade},
     http::{HeaderMap, HeaderValue, StatusCode, header},
-    response::{IntoResponse, Response},
+    response::{IntoResponse, Redirect, Response},
     routing::{get, post},
 };
+use tokio_util::sync::CancellationToken;
 use tracing::{info, warn};
 
-use crate::assets;
-use crate::auth::{Gate, RejectReason};
-use crate::bridge;
-use crate::picker;
+use crate::auth::{Gate, PAIR_TTL, RejectReason, public_url, random_token};
+use crate::service::{Registration, ServiceConfig, Store};
+use crate::{assets, bridge, picker};
 
-/// Everything the handlers share.
 #[derive(Clone)]
 struct AppState {
-    gate: Gate,
-    /// The leader this server proxies to, for the startup line and
-    /// `/api/session`. `None` means "whatever `connect_or_spawn` finds".
+    gate: Arc<Gate>,
     leader: LeaderTarget,
+    store: Store,
+    cancel: CancellationToken,
+    // Serialize key persistence and activation across simultaneous revoke requests.
+    revoke_lock: Arc<tokio::sync::Mutex<()>>,
 }
 
 /// Which leader the web server attaches to.
 #[derive(Debug, Clone, Default)]
 pub struct LeaderTarget {
-    /// PID from `--pid`, resolved to a socket before serving.
+    /// PID from `--pid`.
     pub pid: Option<u32>,
     /// Explicit socket path from `--socket`.
     pub socket: Option<std::path::PathBuf>,
@@ -40,196 +39,288 @@ pub struct LeaderTarget {
 /// How the server should be started.
 #[derive(Debug, Clone)]
 pub struct WebServerConfig {
-    /// Address to bind. Port `0` picks a free one, reported after binding.
+    /// Address to bind; port zero selects a free port.
     pub bind: SocketAddr,
-    /// The leader to attach to.
+    /// Leader target.
     pub leader: LeaderTarget,
-    /// Open the default browser once listening.
+    /// Open a one-time pairing link in the default browser.
     pub open: bool,
+    /// Exact origin exposed by a reverse proxy.
+    pub public_url: Option<String>,
+    /// Explicit private state directory, for isolated embedders and tests.
+    pub state_dir: Option<std::path::PathBuf>,
+    /// Background startup must not write pairing credentials to its log.
+    pub background: bool,
 }
 
-/// Bind and serve, returning the address and a handle to the running server.
-///
-/// Returns as soon as the socket is bound, so a caller using port `0` can print
-/// the real URL without waiting for shutdown. Awaiting a serve-forever future
-/// here would deadlock any caller that needs the address.
+/// Bind and return immediately, holding the service lease until shutdown completes.
 pub async fn spawn_web_server(
     config: WebServerConfig,
-    cancel: tokio_util::sync::CancellationToken,
+    cancel: CancellationToken,
 ) -> anyhow::Result<(SocketAddr, tokio::task::JoinHandle<()>)> {
+    let public = config.public_url.as_deref().map(public_url).transpose()?;
+    let store = match &config.state_dir {
+        Some(root) => Store::new(root.clone()),
+        None => Store::user()?,
+    };
+    let store_for_lease = store.clone();
+    let (mut lease, secret) = tokio::task::spawn_blocking(move || -> anyhow::Result<_> {
+        let lease = store_for_lease.acquire()?;
+        let secret = lease.secret()?;
+        Ok((lease, secret))
+    })
+    .await??;
     let listener = tokio::net::TcpListener::bind(config.bind).await?;
     let bound = listener.local_addr()?;
-
-    let gate = Gate::new(bound);
+    let registration = Registration {
+        pid: std::process::id(),
+        bound,
+        config: ServiceConfig {
+            bind: config.bind,
+            public_url: config.public_url.clone(),
+        },
+        control_token: random_token(32)?,
+    };
+    let gate = Arc::new(Gate::new(
+        bound,
+        public,
+        &secret,
+        registration.control_token.clone(),
+    ));
     let state = AppState {
         gate: gate.clone(),
         leader: config.leader.clone(),
+        store,
+        cancel: cancel.clone(),
+        revoke_lock: Arc::new(tokio::sync::Mutex::new(())),
     };
-
     let app = Router::new()
         .route("/ws", get(ws_handler))
+        .route("/auth/connect/{code}", get(connect))
         .route("/api/session", get(session_info))
         .route("/api/pick-directory", post(pick_directory))
-        .route("/healthz", get(healthz))
+        .route("/api/service/status", get(service_status))
+        .route("/api/service/pair", post(issue_pair))
+        .route("/api/service/stop", post(stop))
+        .route("/api/service/revoke", post(revoke))
+        .route("/healthz", get(|| async { "ok" }))
         .fallback(get(static_handler))
         .with_state(state);
 
-    print_startup(bound, &config, &gate);
-    if config.open {
-        open_browser(bound);
+    let registration_for_write = registration.clone();
+    let lease = tokio::task::spawn_blocking(move || -> anyhow::Result<_> {
+        lease.register(&registration_for_write)?;
+        Ok(lease)
+    })
+    .await??;
+    let url = registration.browser_url();
+    eprintln!("Alnair web UI: {url}");
+    if assets::is_placeholder() {
+        eprintln!("Web assets missing: run `npm --prefix web run build` and rebuild Alnair.");
+    }
+    if !config.background {
+        let link = format!(
+            "{}/auth/connect/{}",
+            url.trim_end_matches('/'),
+            gate.issue_pair()?
+        );
+        eprintln!("Open this one-time link within five minutes:\n{link}");
+        if config.open
+            && let Err(error) = webbrowser::open(&link)
+        {
+            warn!(%error, "web: could not open browser");
+        }
     }
 
     let handle = tokio::spawn(async move {
-        if let Err(e) = axum::serve(
+        if let Err(error) = axum::serve(
             listener,
             app.into_make_service_with_connect_info::<SocketAddr>(),
         )
         .with_graceful_shutdown(async move { cancel.cancelled().await })
         .await
         {
-            warn!(error = %e, "web: server stopped with an error");
+            warn!(%error, "web: server stopped with an error");
+        }
+        // Filesystem cleanup may retry on Windows, so it stays off runtime workers.
+        if let Err(error) = tokio::task::spawn_blocking(move || drop(lease)).await {
+            warn!(%error, "web: service lease cleanup failed");
         }
     });
-
     Ok((bound, handle))
 }
 
-/// Bind, serve, and block until the server shuts down.
-///
-/// The CLI entry point. Tests use [`spawn_web_server`] so they can hold the
-/// address while the server is running.
+/// Serve until cancelled, propagating task failures to the CLI.
 pub async fn run_web_server(
     config: WebServerConfig,
-    cancel: tokio_util::sync::CancellationToken,
+    cancel: CancellationToken,
 ) -> anyhow::Result<SocketAddr> {
     let (bound, handle) = spawn_web_server(config, cancel).await?;
-    let _ = handle.await;
+    handle.await?;
     Ok(bound)
 }
 
-/// Startup line: URL, leader target, and a loud note when the assets are a
-/// placeholder. Mirrors `print_serve_startup_info` in `alnair-bin`.
-fn print_startup(bound: SocketAddr, config: &WebServerConfig, _gate: &Gate) {
-    let url = format!("http://{bound}/");
-    eprintln!();
-    eprintln!("   Alnair web UI");
-    eprintln!();
-    eprintln!("   URL:      {url}");
-    match (&config.leader.pid, &config.leader.socket) {
-        (Some(pid), _) => eprintln!("   Leader:   pid {pid}"),
-        (None, Some(socket)) => eprintln!("   Leader:   {}", socket.display()),
-        (None, None) => eprintln!("   Leader:   default (spawned on demand)"),
-    }
-    if assets::is_placeholder() {
-        eprintln!();
-        eprintln!("   WARNING: web/build was not built — serving a placeholder page.");
-        eprintln!("            Run `npm --prefix web run build` and rebuild alnair.");
-    }
-    eprintln!();
-    eprintln!("   The UI is protected by a same-origin cookie; open the URL above.");
-    eprintln!();
-}
-
-/// Best-effort browser launch; a failure is not worth aborting the server.
-fn open_browser(bound: SocketAddr) {
-    let url = format!("http://{bound}/");
-    if let Err(e) = webbrowser::open(&url) {
-        warn!(error = %e, "web: could not open the browser; open the URL manually");
-    }
-}
-
-/// Ask the user for a workspace directory with the OS's own dialog.
-///
-/// The browser cannot answer this: a directory handle exposes only a leaf
-/// name, never an absolute path, and a session needs one. So the dialog runs
-/// here, on the machine serving the page.
-///
-/// Gated exactly like `/ws`. The cookie alone would be enough for a browser
-/// (it is `SameSite=Strict`), but the `Origin` check is what stops a
-/// DNS-rebinding page from popping a modal dialog on the user's desktop — and
-/// a dialog is a visible, disruptive action even though it changes nothing.
-async fn pick_directory(State(state): State<AppState>, headers: HeaderMap) -> Response {
-    // `check` reads both headers; a missing cookie or a foreign Origin is a
-    // 403 with the same wording the socket upgrade uses.
-    if let Err(reason) = state.gate.check(&headers) {
+async fn connect(
+    State(state): State<AppState>,
+    Path(code): Path<String>,
+    headers: HeaderMap,
+) -> Response {
+    if let Err(reason) = state.gate.check_host(&headers) {
         return reject(reason);
     }
-
-    match picker::pick_directory().await {
-        Ok(Some(path)) => {
-            info!("web: workspace directory picked");
-            axum::Json(serde_json::json!({ "path": path })).into_response()
-        }
-        // A cancelled dialog is not an error: the caller simply keeps its
-        // current workspace and shows nothing.
-        Ok(None) => axum::Json(serde_json::json!({ "cancelled": true })).into_response(),
-        Err(error) => {
-            warn!(reason = error.message(), "web: folder picker unavailable");
+    // Embedded pages must not silently consume a link and pair another browsing context.
+    if headers
+        .get("sec-fetch-dest")
+        .is_some_and(|value| value != "document")
+    {
+        return StatusCode::FORBIDDEN.into_response();
+    }
+    let Some(token) = state.gate.consume_pair(&code) else {
+        return private(
             (
-                StatusCode::SERVICE_UNAVAILABLE,
-                axum::Json(serde_json::json!({ "error": error.message() })),
+                StatusCode::UNAUTHORIZED,
+                "Pairing link expired or already used. Run `alnair web pair` on the server.",
             )
-                .into_response()
-        }
-    }
-}
-
-async fn healthz() -> &'static str {
-    "ok"
-}
-
-/// Sets the auth cookie and reports what this server attached to.
-async fn session_info(State(state): State<AppState>) -> Response {
-    let body = serde_json::json!({
-        "version": alnair_version::VERSION,
-        "leaderPid": state.leader.pid,
-        "leaderSocket": state.leader.socket.as_ref().map(|p| p.display().to_string()),
-        "webBuilt": !assets::is_placeholder(),
-    });
-    let mut response = axum::Json(body).into_response();
-    if let Ok(cookie) = HeaderValue::from_str(&state.gate.set_cookie()) {
-        response.headers_mut().insert(header::SET_COOKIE, cookie);
-    }
-    response
-}
-
-/// Embedded asset lookup with the SPA fallback rules from [`crate::assets`].
-async fn static_handler(State(state): State<AppState>, uri: axum::http::Uri) -> Response {
-    let path = uri.path();
-    let mut response = match assets::resolve(path) {
-        Some(asset) => {
-            let cache = if asset.is_shell {
-                // The shell names hashed bundles; caching it would pin a stale
-                // build after an upgrade.
-                "no-cache"
-            } else {
-                "public, max-age=31536000, immutable"
-            };
-            let mut response = asset.body.into_response();
-            let headers = response.headers_mut();
-            headers.insert(
-                header::CONTENT_TYPE,
-                HeaderValue::from_static(asset.content_type),
-            );
-            headers.insert(header::CACHE_CONTROL, HeaderValue::from_static(cache));
-            response
-        }
-        None => {
-            let (status, headers, body) = assets::not_found();
-            let mut response = (status, body).into_response();
-            for (name, value) in headers {
-                response
-                    .headers_mut()
-                    .insert(name, HeaderValue::from_static(value));
-            }
-            response
-        }
+                .into_response(),
+        );
     };
-    // The shell is the entry point, so it hands out the cookie too: a user who
-    // navigates straight to a deep link still gets one before the WS opens.
-    if let Ok(cookie) = HeaderValue::from_str(&state.gate.set_cookie()) {
-        response.headers_mut().insert(header::SET_COOKIE, cookie);
+    let mut response = Redirect::to("/").into_response();
+    match HeaderValue::from_str(&state.gate.set_cookie(&token)) {
+        Ok(cookie) => {
+            response.headers_mut().insert(header::SET_COOKIE, cookie);
+        }
+        Err(_) => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
     }
+    private(response)
+}
+
+async fn issue_pair(State(state): State<AppState>, headers: HeaderMap) -> Response {
+    if !state.gate.check_control(&headers) {
+        return StatusCode::UNAUTHORIZED.into_response();
+    }
+    match state.gate.issue_pair() {
+        Ok(code) => private(
+            axum::Json(serde_json::json!({ "code": code, "expires_in": PAIR_TTL.as_secs() }))
+                .into_response(),
+        ),
+        Err(error) => {
+            warn!(%error, "web: could not issue pairing code");
+            StatusCode::INTERNAL_SERVER_ERROR.into_response()
+        }
+    }
+}
+
+async fn service_status(State(state): State<AppState>, headers: HeaderMap) -> Response {
+    if !state.gate.check_control(&headers) {
+        return StatusCode::UNAUTHORIZED.into_response();
+    }
+    private(
+        axum::Json(
+            serde_json::json!({ "pid": std::process::id(), "version": alnair_version::VERSION }),
+        )
+        .into_response(),
+    )
+}
+
+async fn stop(State(state): State<AppState>, headers: HeaderMap) -> Response {
+    if !state.gate.check_control(&headers) {
+        return StatusCode::UNAUTHORIZED.into_response();
+    }
+    state.cancel.cancel();
+    private(axum::Json(serde_json::json!({ "stopping": true })).into_response())
+}
+
+async fn revoke(State(state): State<AppState>, headers: HeaderMap) -> Response {
+    if !state.gate.check_control(&headers) {
+        return StatusCode::UNAUTHORIZED.into_response();
+    }
+    let _guard = state.revoke_lock.lock().await;
+    let store = state.store.clone();
+    let gate = state.gate.clone();
+    let result = tokio::task::spawn_blocking(move || -> anyhow::Result<()> {
+        let secret = store.rotate_secret()?;
+        gate.revoke(&secret)
+    })
+    .await;
+    match result {
+        Ok(Ok(())) => private(axum::Json(serde_json::json!({ "revoked": true })).into_response()),
+        error => {
+            warn!(?error, "web: could not revoke sessions");
+            StatusCode::INTERNAL_SERVER_ERROR.into_response()
+        }
+    }
+}
+
+async fn pick_directory(State(state): State<AppState>, headers: HeaderMap) -> Response {
+    if let Err(reason) = state.gate.check(&headers, true) {
+        return reject(reason);
+    }
+    match picker::pick_directory().await {
+        Ok(Some(path)) => private(axum::Json(serde_json::json!({ "path": path })).into_response()),
+        Ok(None) => private(axum::Json(serde_json::json!({ "cancelled": true })).into_response()),
+        Err(error) => (
+            StatusCode::SERVICE_UNAVAILABLE,
+            axum::Json(serde_json::json!({ "error": error.message() })),
+        )
+            .into_response(),
+    }
+}
+
+async fn session_info(State(state): State<AppState>, headers: HeaderMap) -> Response {
+    if let Err(reason) = state.gate.check(&headers, false) {
+        return reject(reason);
+    }
+    private(
+        axum::Json(serde_json::json!({
+            "version": alnair_version::VERSION,
+            "leaderPid": state.leader.pid,
+            "leaderSocket": state.leader.socket.as_ref().map(|p| p.display().to_string()),
+            "webBuilt": !assets::is_placeholder(),
+        }))
+        .into_response(),
+    )
+}
+
+async fn static_handler(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    uri: axum::http::Uri,
+) -> Response {
+    if matches!(uri.path(), "/api" | "/auth")
+        || uri.path().starts_with("/api/")
+        || uri.path().starts_with("/auth/")
+    {
+        return StatusCode::NOT_FOUND.into_response();
+    }
+    if let Err(reason) = state.gate.check_host(&headers) {
+        return reject(reason);
+    }
+    let Some(asset) = assets::resolve(uri.path()) else {
+        let (status, _, body) = assets::not_found();
+        return (status, body).into_response();
+    };
+    if asset.is_shell
+        && let Err(reason) = state.gate.check(&headers, false)
+    {
+        return reject(reason);
+    }
+    let mut response = asset.body.into_response();
+    response.headers_mut().insert(
+        header::CONTENT_TYPE,
+        HeaderValue::from_static(asset.content_type),
+    );
+    response.headers_mut().insert(
+        header::CACHE_CONTROL,
+        HeaderValue::from_static(if asset.is_shell {
+            "no-store"
+        } else {
+            "public, max-age=31536000, immutable"
+        }),
+    );
+    response.headers_mut().insert(
+        header::X_CONTENT_TYPE_OPTIONS,
+        HeaderValue::from_static("nosniff"),
+    );
     response
 }
 
@@ -239,27 +330,42 @@ async fn ws_handler(
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
     headers: HeaderMap,
 ) -> Response {
-    if let Err(reason) = state.gate.check(&headers) {
-        // Log the offending Origin but never the cookie value.
-        warn!(
-            %peer,
-            reason = reason.as_str(),
-            origin = ?headers.get(header::ORIGIN).and_then(|v| v.to_str().ok()),
-            "web: rejected WebSocket upgrade"
-        );
-        return reject(reason);
-    }
-
+    let session = match state.gate.check(&headers, true) {
+        Ok(session) => session,
+        Err(reason) => {
+            warn!(%peer, reason = reason.as_str(), "web: rejected WebSocket upgrade");
+            return reject(reason);
+        }
+    };
     info!(%peer, "web: WebSocket attached");
-    ws.on_upgrade(bridge::serve_socket)
+    ws.on_upgrade(move |socket| bridge::serve_socket(socket, state.cancel, session))
 }
 
-/// The 403 body for a refused upgrade.
+fn private(mut response: Response) -> Response {
+    response
+        .headers_mut()
+        .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    response.headers_mut().insert(
+        header::REFERRER_POLICY,
+        HeaderValue::from_static("no-referrer"),
+    );
+    response
+        .headers_mut()
+        .insert(header::X_FRAME_OPTIONS, HeaderValue::from_static("DENY"));
+    response
+}
+
 fn reject(reason: RejectReason) -> Response {
-    (
-        StatusCode::FORBIDDEN,
-        [(header::CONTENT_TYPE, "text/plain; charset=utf-8")],
-        reason.as_str(),
+    let status = match reason {
+        RejectReason::MissingCookie | RejectReason::BadCookie => StatusCode::UNAUTHORIZED,
+        _ => StatusCode::FORBIDDEN,
+    };
+    private(
+        (
+            status,
+            [(header::CONTENT_TYPE, "text/plain; charset=utf-8")],
+            reason.as_str(),
+        )
+            .into_response(),
     )
-        .into_response()
 }

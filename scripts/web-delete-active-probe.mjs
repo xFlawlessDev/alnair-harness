@@ -12,18 +12,11 @@
 import { existsSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import { pairedCookie } from "./web-auth.mjs";
 
 const base = process.argv[2] ?? "http://127.0.0.1:2499";
 
-const cookie = await (async () => {
-  const res = await fetch(`${base}/api/session`);
-  const raw = res.headers.getSetCookie?.() ?? [];
-  const token = raw
-    .map((line) => line.split(";")[0])
-    .find((line) => line.startsWith("alnair_web="));
-  if (!token) throw new Error("no auth cookie");
-  return token;
-})();
+const cookie = await pairedCookie(base);
 
 const socket = new WebSocket(base.replace("http", "ws") + "/ws", {
   headers: { Cookie: cookie, Origin: base },

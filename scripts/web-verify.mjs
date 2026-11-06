@@ -8,30 +8,14 @@
  */
 
 import { randomBytes } from "node:crypto";
-import http from "node:http";
+import { pairedCookie } from "./web-auth.mjs";
 import net from "node:net";
 
 const base = new URL(process.argv[2] ?? "http://127.0.0.1:2499");
 const results = [];
 const check = (name, ok, detail) => results.push({ name, ok, detail });
 
-const page = await new Promise((resolve, reject) => {
-  http
-    .get(
-      {
-        host: base.hostname,
-        port: base.port,
-        path: "/",
-        headers: { accept: "text/html" },
-      },
-      (res) => {
-        res.resume();
-        resolve(res);
-      },
-    )
-    .on("error", reject);
-});
-const cookie = page.headers["set-cookie"][0].split(";")[0];
+const cookie = await pairedCookie(base);
 
 const socket = net.connect(Number(base.port), base.hostname);
 await new Promise((resolve, reject) => {

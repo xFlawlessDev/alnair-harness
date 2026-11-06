@@ -16,15 +16,19 @@
 //! # Modules
 //!
 //! - [`assets`] — the embedded SPA and the lookup rules that serve it.
-//! - [`auth`] — the cookie + `Origin` gate on `/ws`.
+//! - [`auth`] — pairing, signed sessions, and the cookie + origin gate.
 //! - [`bridge`] — one leader client per WebSocket.
 //! - [`picker`] — the native directory chooser behind "add workspace".
 //! - [`server`] — router, bind, startup print.
+//! - [`service`] — private service files and detached process lifecycle.
 
 pub mod assets;
 pub mod auth;
 pub mod bridge;
 pub mod picker;
 pub mod server;
+pub mod service;
+#[cfg(windows)]
+mod service_windows;
 
 pub use server::{WebServerConfig, run_web_server, spawn_web_server};

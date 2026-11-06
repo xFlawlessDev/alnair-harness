@@ -50,7 +50,7 @@ pub(crate) use crate::terminal::kitty_flags_pushed;
 use alnair_shell::util::config;
 pub use cli::{
     AgentArgs, AgentCmd, Command, LeaderArgs, LeaderMgmtArgs, LeaderMgmtCommand, LeaderTargetArgs,
-    OutputFormat, PagerArgs, ServeArgs, WebArgs, WrapArgs,
+    OutputFormat, PagerArgs, ServeArgs, WebArgs, WebCommand, WrapArgs,
 };
 use crossterm::cursor::{self, SetCursorStyle};
 use crossterm::event;

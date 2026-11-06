@@ -13,6 +13,7 @@
  */
 
 import { spawn } from "node:child_process";
+import { pairingLink } from "./web-auth.mjs";
 import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -199,7 +200,7 @@ const loaded = new Promise((resolve) => {
   };
   socket.addEventListener("message", listener);
 });
-await send("Page.navigate", { url: base }, sessionId);
+await send("Page.navigate", { url: await pairingLink(base) }, sessionId);
 await loaded;
 
 // --- 1. loading state -----------------------------------------------------
