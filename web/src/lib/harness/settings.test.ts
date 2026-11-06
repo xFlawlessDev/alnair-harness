@@ -49,6 +49,13 @@ describe('web settings registry', () => {
 	it('stays out of the TUI registry: no terminal-only settings', () => {
 		// These exist in `alnair-tui/src/settings` and mean nothing in a browser.
 		// Keeping them out is the point of this registry being its own thing.
+		//
+		// `group_tool_verbs` is deliberately NOT on this list. It shares the
+		// TUI's key and default because the fold is the same feature on both
+		// surfaces — the browser has runs of reads that bury the answer just as
+		// the terminal does. A setting is "terminal-only" when it tunes a
+		// terminal (scroll speed, vim mode, screen mode), not when it happens to
+		// exist there first.
 		const terminalOnly = [
 			'scroll_speed',
 			'scroll_mode',
@@ -56,7 +63,6 @@ describe('web settings registry', () => {
 			'vim_mode',
 			'screen_mode',
 			'compact_mode',
-			'group_tool_verbs',
 			'display_refresh_auto_cadence',
 			'default_model',
 			'fork_secondary_model',

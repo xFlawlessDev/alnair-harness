@@ -380,6 +380,130 @@ describe('render: every tool call reaches its own row', () => {
 		expect(part.status).toBe('running');
 	});
 
+	it('task_completed settles a backgrounded row instead of leaving it running', () => {
+		// The task outlived the call, so the row said `running`. When the task
+		// finally reports, the row must stop claiming it is still going — that
+		// stuck spinner is what made a finished turn look like a live one.
+		const { acc } = foldTool(
+			{
+				toolCallId: 'tc-done',
+				title: 'run_terminal_command',
+				kind: 'other',
+				status: 'pending',
+				rawInput: { command: 'cargo check' },
+				_meta: meta('run_terminal_command', 'execute', 'Run Command')
+			},
+			{
+				toolCallId: 'tc-done',
+				kind: 'execute',
+				status: 'completed',
+				rawInput: { variant: 'Bash', command: 'cargo check', is_background: true },
+				content: [{ type: 'content', content: { type: 'text', text: 'checking' } }],
+				_meta: meta('run_terminal_command', 'execute', 'Run Command')
+			}
+		);
+		const backgrounded = reduceExtUpdate(
+			acc,
+			{
+				sessionUpdate: 'task_backgrounded',
+				tool_call_id: 'tc-done',
+				task_id: 'task-2',
+				command: 'cargo check',
+				cwd: '/repo',
+				output_file: '/tmp/task-2.log'
+			} as unknown as ExtSessionUpdate,
+			{ now: NOW + 700, sessionId: SESSION }
+		);
+
+		const settled = reduceExtUpdate(
+			backgrounded,
+			{
+				sessionUpdate: 'task_completed',
+				task_snapshot: {
+					task_id: 'task-2',
+					command: 'cargo check',
+					exit_code: 0,
+					output: 'finished'
+				}
+			} as unknown as ExtSessionUpdate,
+			{ now: NOW + 5_000, sessionId: SESSION }
+		);
+
+		const part = settled.turns.at(-1)?.parts[0];
+		expect(part?.kind).toBe('terminal');
+		if (part?.kind !== 'terminal') return;
+		expect(part.backgrounded).toBeUndefined();
+		expect(part.status).toBe('complete');
+		expect(part.exitCode).toBe(0);
+	});
+
+	it('a finished background task keeps its outcome and its own elapsed time', () => {
+		// Clearing `backgrounded` is what stops the row claiming to be running,
+		// but it must not erase the fact that this WAS a task: the TUI leaves a
+		// `BgTaskBlock::Completed` row behind, and the browser keeps the same
+		// information on the row. The duration is the TASK's, measured from the
+		// snapshot's own start/end, not the call's.
+		const { acc } = foldTool(
+			{
+				toolCallId: 'tc-long',
+				title: 'run_terminal_command',
+				kind: 'other',
+				status: 'pending',
+				rawInput: { command: 'cargo build' },
+				_meta: meta('run_terminal_command', 'execute', 'Run Command')
+			},
+			{
+				toolCallId: 'tc-long',
+				kind: 'execute',
+				status: 'completed',
+				rawInput: { variant: 'Bash', command: 'cargo build', is_background: true },
+				content: [{ type: 'content', content: { type: 'text', text: 'building' } }],
+				_meta: meta('run_terminal_command', 'execute', 'Run Command')
+			}
+		);
+		const backgrounded = reduceExtUpdate(
+			acc,
+			{
+				sessionUpdate: 'task_backgrounded',
+				tool_call_id: 'tc-long',
+				task_id: 'task-3',
+				command: 'cargo build',
+				cwd: '/repo',
+				output_file: '/tmp/task-3.log'
+			} as unknown as ExtSessionUpdate,
+			{ now: NOW + 700, sessionId: SESSION }
+		);
+
+		const settled = reduceExtUpdate(
+			backgrounded,
+			{
+				sessionUpdate: 'task_completed',
+				task_snapshot: {
+					task_id: 'task-3',
+					command: 'cargo build',
+					cwd: '/repo',
+					start_time: '2026-10-20T09:41:12Z',
+					end_time: '2026-10-20T09:43:42Z',
+					output: 'done',
+					output_file: '/tmp/task-3.log',
+					truncated: false,
+					exit_code: 1,
+					completed: true,
+					block_waited: false,
+					explicitly_killed: false
+				}
+			} as unknown as ExtSessionUpdate,
+			{ now: NOW + 150_000, sessionId: SESSION }
+		);
+
+		const part = settled.turns.at(-1)?.parts[0];
+		expect(part?.kind).toBe('terminal');
+		if (part?.kind !== 'terminal') return;
+		expect(part.backgroundOutcome).toBe('failed');
+		expect(part.backgroundElapsedMs).toBe(150_000);
+		expect(part.status).toBe('error');
+	});
+
 	it('a permission-gated call stays a plain row until it resolves', () => {
 		let acc = openUserTurn(emptyAcc(), 'go', NOW);
 		acc = reduceAcpUpdate(

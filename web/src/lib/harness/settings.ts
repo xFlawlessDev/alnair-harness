@@ -139,6 +139,15 @@ export const SETTINGS: SettingMeta[] = [
 		kind: { kind: 'bool' }
 	},
 	{
+		key: 'group_tool_verbs',
+		category: 'conversation',
+		label: 'Group tool calls',
+		description:
+			'Fold runs of reads, searches and subagents into one summary line, like the terminal does.',
+		keywords: ['group', 'tool', 'verb', 'fold', 'trace'],
+		kind: { kind: 'bool' }
+	},
+	{
 		key: 'render_mermaid',
 		category: 'conversation',
 		label: 'Render Mermaid diagrams',
@@ -221,6 +230,10 @@ export const SETTINGS: SettingMeta[] = [
  * `collapse_edits` defaults to `true` because that is what the thread already
  * did: a diff opened folded. A default of `false` would have made the setting's
  * first effect a visual regression for everyone who never touched it.
+ *
+ * `group_tool_verbs` also defaults to `true`, matching the TUI's own default:
+ * the fold is what keeps a long run of reads from burying the answer, and a
+ * reader who never opens Settings gets the compact transcript either way.
  */
 export const DEFAULT_SETTINGS: SettingsState = {
 	theme: 'system',
@@ -228,6 +241,7 @@ export const DEFAULT_SETTINGS: SettingsState = {
 	density: 'comfortable',
 	show_thinking: true,
 	collapse_edits: true,
+	group_tool_verbs: true,
 	render_mermaid: false,
 	context_threshold_percent: 85,
 	enter_to_send: true,

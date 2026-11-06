@@ -4,7 +4,7 @@
 	import * as Trace from '#lib/components/ui/trace/index.js';
 	import { formatClock, formatWorked } from '#lib/harness/format.js';
 	import { DEFAULT_VIEW_PREFS } from '#lib/harness/view-prefs.js';
-	import type { Turn, ViewPrefs } from '#lib/harness/types.js';
+	import type { Turn, TurnPart, ViewPrefs } from '#lib/harness/types.js';
 	import Markdown from './markdown-lazy.svelte';
 	import NoticeRow from './parts/notice-row.svelte';
 	import PartView from './parts/part-view.svelte';
@@ -15,6 +15,8 @@
 	import TurnChanges from './turn-changes.svelte';
 	import { turnChanges } from './turn-changes.js';
 	import TurnMeta from './turn-meta.svelte';
+	import { groupVerbRuns } from './verb-group.js';
+	import VerbGroupRow from './verb-group-row.svelte';
 	import WorkSummary from './work-summary.svelte';
 
 	let {
@@ -110,6 +112,33 @@
 	const changes = $derived(turnChanges(turn));
 </script>
 
+<!--
+	The trace renderer, shared by all three places a turn's steps are painted:
+	the standalone system turn, the folded work summary, and the live turn.
+
+	One snippet rather than three copies, because the verb-group fold has to be
+	the SAME fold everywhere. A copy that forgot it would show grouped steps in
+	the live turn and ungrouped ones the moment the turn closed, which reads as
+	the transcript rewriting itself.
+
+	`groupToolVerbs` off renders the parts flat — the setting's whole meaning.
+-->
+{#snippet trace(parts: TurnPart[])}
+	{#if prefs.groupToolVerbs}
+		{#each groupVerbRuns(parts) as segment, index (index)}
+			{#if segment.kind === 'run'}
+				<VerbGroupRow run={segment.run} {turnClosed} {collapseEdits} />
+			{:else}
+				<PartView part={segment.part} {turnClosed} {collapseEdits} />
+			{/if}
+		{/each}
+	{:else}
+		{#each parts as part (part.id)}
+			<PartView {part} {turnClosed} {collapseEdits} />
+		{/each}
+	{/if}
+{/snippet}
+
 {#if turn.role === 'user'}
 	<Message.Root align="end">
 		<Message.Content class="items-end gap-1.5">
@@ -136,9 +165,7 @@
 		{#each groupParts(turn.parts) as segment, index (index)}
 			{#if segment.kind === 'trace'}
 				<Trace.Root class="gap-1.5">
-					{#each segment.parts as part (part.id)}
-						<PartView {part} {turnClosed} {collapseEdits} />
-					{/each}
+					{@render trace(segment.parts)}
 				</Trace.Root>
 			{:else if segment.kind === 'notice'}
 				<NoticeRow part={segment.part} />
@@ -167,9 +194,7 @@
 					<Trace.Root class="gap-1.5">
 						{#each groupParts(split.work) as segment, index (index)}
 							{#if segment.kind === 'trace'}
-								{#each segment.parts as part (part.id)}
-									<PartView {part} {turnClosed} {collapseEdits} />
-								{/each}
+								{@render trace(segment.parts)}
 							{:else if segment.kind === 'notice'}
 								<NoticeRow part={segment.part} />
 							{:else if segment.kind === 'system'}
@@ -189,9 +214,7 @@
 			{#each segments as segment, index (index)}
 				{#if segment.kind === 'trace'}
 					<Trace.Root class="gap-1.5">
-						{#each segment.parts as part (part.id)}
-							<PartView {part} {turnClosed} {collapseEdits} />
-						{/each}
+						{@render trace(segment.parts)}
 					</Trace.Root>
 				{:else if segment.kind === 'notice'}
 					<NoticeRow part={segment.part} />

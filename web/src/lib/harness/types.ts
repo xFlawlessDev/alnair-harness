@@ -143,6 +143,19 @@ export interface TerminalPart {
 	backgrounded?: boolean;
 	taskId?: string;
 	outputFile?: string;
+	/**
+	 * Set once a backgrounded task reports back, so the row can say it was a
+	 * task and how long it ran.
+	 *
+	 * `backgrounded` is cleared at that point (the row must stop claiming to be
+	 * running), which would otherwise erase every trace that this was ever
+	 * anything but an ordinary command. The TUI keeps that history by leaving a
+	 * `BgTaskBlock::Completed` row behind; this is the browser's equivalent
+	 * without a second row.
+	 */
+	backgroundOutcome?: 'completed' | 'failed';
+	/** Wall-clock time the backgrounded task ran, when the wire reported it. */
+	backgroundElapsedMs?: number;
 }
 
 /** A subagent, folded from spawned / progress / finished. */
@@ -319,6 +332,8 @@ export interface ViewPrefs {
 	density: 'comfortable' | 'compact';
 	/** Draw Mermaid fences instead of showing their source. */
 	mermaid: boolean;
+	/** Fold runs of non-destructive tool calls into one summary row. */
+	groupToolVerbs: boolean;
 }
 
 /* ----------------------------------------------------------------- session */

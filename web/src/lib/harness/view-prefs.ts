@@ -24,7 +24,8 @@ export function viewPrefs(settings: SettingsState): ViewPrefs {
 		thinking: pick('show_thinking') !== false,
 		collapseEdits: pick('collapse_edits') === true,
 		density: pick('density') === 'compact' ? 'compact' : 'comfortable',
-		mermaid: pick('render_mermaid') === true
+		mermaid: pick('render_mermaid') === true,
+		groupToolVerbs: pick('group_tool_verbs') !== false
 	};
 }
 

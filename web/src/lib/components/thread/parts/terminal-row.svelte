@@ -34,6 +34,10 @@
 
 	const heading = $derived.by(() => {
 		if (part.backgrounded) return 'Backgrounded';
+		// A task that outlived its call and has since reported: the row keeps
+		// saying it was a task, the way the TUI leaves a `BgTaskBlock` behind.
+		if (part.backgroundOutcome === 'completed') return 'Background task finished';
+		if (part.backgroundOutcome === 'failed') return 'Background task failed';
 		if (running) return 'Running';
 		if (failed) return 'Failed';
 		return 'Ran';
@@ -98,7 +102,17 @@
 				{exitLabel}
 			</Trace.Description>
 		{/if}
-		{#if part.durationMs}
+		{#if part.backgroundElapsedMs !== undefined}
+			<!--
+				The TASK's wall clock, not the call's. `durationMs` stops when the
+				call returned, which for a backgrounded task is the moment it was
+				handed off — reporting that as the run time would understate a
+				long build by minutes.
+			-->
+			<Trace.Description class="tabular">
+				{formatDuration(part.backgroundElapsedMs)}
+			</Trace.Description>
+		{:else if part.durationMs}
 			<Trace.Description class="tabular">{formatDuration(part.durationMs)}</Trace.Description>
 		{/if}
 	</Trace.Line>

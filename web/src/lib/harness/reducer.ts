@@ -88,6 +88,17 @@ export interface ToolState {
 	endedAt?: number;
 	/** Set when the task outlived the call (`task_backgrounded`). */
 	backgrounded?: { taskId: string; outputFile?: string; description?: string };
+	/**
+	 * How a backgrounded task ended, kept after `backgrounded` is cleared.
+	 *
+	 * Clearing the flag is what lets the row stop rendering as running, but it
+	 * also erases the only evidence that this was a task rather than an
+	 * ordinary command. The TUI leaves a separate `BgTaskBlock::Completed` row
+	 * behind; the browser keeps the fact on the row itself.
+	 */
+	backgroundOutcome?: 'completed' | 'failed';
+	/** How long the backgrounded task ran, from its own start/end stamps. */
+	backgroundElapsedMs?: number;
 	/** Set when a permission request gates this call. */
 	pendingPermission?: { options: PermissionPart['options'] };
 	/**
@@ -699,7 +710,6 @@ export function toolToParts(tool: ToolState, now: number): TurnPart[] {
 		};
 		return [part];
 	}
-
 	// File reads and writes come back as a text block holding the file content.
 	const textItem = content.find(
 		(item) =>
@@ -814,7 +824,12 @@ export function toolToParts(tool: ToolState, now: number): TurnPart[] {
 			output: outputText(tool.rawOutput) || textBlock?.text || '',
 			exitCode: exitCodeOf(tool.rawOutput),
 			status,
-			durationMs
+			durationMs,
+			// A task that was backgrounded and has since reported keeps the fact
+			// after `backgrounded` is cleared, so the row can still say it was a
+			// task and how long it ran.
+			backgroundOutcome: tool.backgroundOutcome,
+			backgroundElapsedMs: tool.backgroundElapsedMs
 		};
 		return [part];
 	}
@@ -822,6 +837,22 @@ export function toolToParts(tool: ToolState, now: number): TurnPart[] {
 	// Everything else: the agent's own title is the summary, and the text block
 	// is the output. `rawInput` is shown only when it is short enough to read.
 	return [genericToolPart(tool, status, durationMs, textBlock?.text)];
+}
+
+/**
+ * How long a backgrounded task ran, from its own start and end stamps.
+ *
+ * Both are ISO strings on the snapshot. Either missing means the elapsed time
+ * is unknown, and `undefined` is the honest answer — the row then shows the
+ * outcome without a duration rather than inventing one from the tool call's
+ * own clock, which stopped when the CALL returned, not when the task did.
+ */
+function backgroundElapsedOf(snapshot: TaskSnapshot): number | undefined {
+	const start = snapshot.start_time ? Date.parse(snapshot.start_time) : Number.NaN;
+	const end = snapshot.end_time ? Date.parse(snapshot.end_time) : Number.NaN;
+	if (!Number.isFinite(start) || !Number.isFinite(end)) return undefined;
+	const elapsed = end - start;
+	return elapsed >= 0 ? elapsed : undefined;
 }
 
 /**
@@ -1027,6 +1058,14 @@ export function reduceAcpUpdate(input: Acc, update: SessionUpdate, ctx: ReduceCo
 				// `_meta` is merged by the agent across updates, but a later
 				// update may omit it entirely; keep what the first one carried.
 				meta: (fields as { _meta?: Record<string, unknown> })._meta ?? existing.meta,
+				// A backgrounded task that reports a terminal status is over.
+				// Leaving the flag set would keep the row painting as a running
+				// task — the spinner that never stops after a failed or
+				// cancelled background command.
+				backgrounded:
+					fields.status === 'failed' || fields.status === 'completed'
+						? undefined
+						: existing.backgrounded,
 				endedAt: settled ? (existing.endedAt ?? now) : existing.endedAt
 			};
 			const next = { ...acc, tools: { ...acc.tools, [fields.toolCallId]: tool } };
@@ -1247,6 +1286,17 @@ export function reduceExtUpdate(input: Acc, update: ExtSessionUpdate, ctx: Reduc
 				...entry,
 				status: snapshot.exit_code === 0 ? 'completed' : 'failed',
 				content: [{ type: 'content', content: { type: 'text', text: snapshot.output } }],
+				// `toolToParts` reads the exit code off `rawOutput`, so the
+				// snapshot's own code has to be stamped there or the settled row
+				// shows no status at all.
+				rawOutput: { exit_code: snapshot.exit_code, output: snapshot.output },
+				// The task is over: clearing the flag is what lets the row settle
+				// to `Ran`/`Failed` instead of reading as a running task forever.
+				// The outcome and the elapsed time survive it, so the row can
+				// still say it was a background task and how long it took.
+				backgrounded: undefined,
+				backgroundOutcome: snapshot.exit_code === 0 ? 'completed' : 'failed',
+				backgroundElapsedMs: backgroundElapsedOf(snapshot),
 				endedAt: now
 			};
 			const next = { ...acc, tools: { ...acc.tools, [entry.toolCallId]: tool } };
@@ -1669,7 +1719,9 @@ export function closeTurn(
 					promptId: promptId ?? current.promptId,
 					durationMs: Math.max(0, now - turnStartOf(current)),
 					parts: current.parts.map((part) =>
-						'status' in part && part.status === 'running'
+						'status' in part &&
+						part.status === 'running' &&
+						!('backgrounded' in part && part.backgrounded)
 							? { ...part, status: 'complete' as PartStatus }
 							: part
 					)
