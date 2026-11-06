@@ -37,7 +37,7 @@ function clip(value: string): string {
 function activityOfPart(part: TurnPart): TurnActivity | undefined {
 	switch (part.kind) {
 		case 'reasoning':
-			return { kind: 'thinking', label: 'Thinking' };
+			return { kind: 'thinking', label: 'Wait for response' };
 		case 'text':
 			return { kind: 'responding', label: 'Responding' };
 		case 'terminal':
@@ -91,13 +91,13 @@ function activityOfPart(part: TurnPart): TurnActivity | undefined {
 export function resolveActivity(turns: Turn[], busy: boolean): TurnActivity | undefined {
 	if (!busy) return undefined;
 	const open = [...turns].reverse().find((turn) => turn.status === 'streaming');
-	if (!open) return { kind: 'thinking', label: 'Thinking' };
+	if (!open) return { kind: 'thinking', label: 'Wait for response' };
 	// Walk backwards: the last part that means something is the current step.
 	for (let index = open.parts.length - 1; index >= 0; index -= 1) {
 		const activity = activityOfPart(open.parts[index]);
 		if (activity) return activity;
 	}
-	return { kind: 'thinking', label: 'Thinking' };
+	return { kind: 'thinking', label: 'Wait for response' };
 }
 
 /** The open turn's start, for the turn timer. */

@@ -11,8 +11,7 @@
 	 * "is it working, and on what?". A browser tab that has just sent a prompt
 	 * otherwise shows nothing until the first token arrives, which reads as a
 	 * hung request. This row fills that gap with the same information — a pulse,
-	 * what the agent is doing, how long this phase and the turn have taken, and
-	 * a stop button.
+	 * what the agent is doing, and how long this phase and the turn have taken.
 	 *
 	 * It is deliberately outside the scroller: it must not scroll away.
 	 */
@@ -20,15 +19,13 @@
 		turns,
 		busy,
 		blocked,
-		contextUsed,
-		oncancel
+		contextUsed
 	}: {
 		turns: Turn[];
 		busy: boolean;
 		/** A parked permission or question — the agent is waiting on the user. */
 		blocked: boolean;
 		contextUsed: number;
-		oncancel: () => void;
 	} = $props();
 
 	/** A 1 Hz clock: both timers count seconds, so a faster tick buys nothing. */
@@ -103,15 +100,6 @@
 				<span class="tabular font-mono text-[10.5px] text-ink-tertiary">
 					{formatDuration(turnElapsed)}
 				</span>
-			{/if}
-			{#if busy}
-				<button
-					type="button"
-					class="rounded-md px-1.5 py-0.5 font-mono text-[10.5px] text-error transition-colors hover:bg-error/10"
-					onclick={oncancel}
-				>
-					[stop]
-				</button>
 			{/if}
 		</span>
 	</div>

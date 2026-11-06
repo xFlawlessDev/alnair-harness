@@ -73,7 +73,7 @@ describe('resolveActivity', () => {
 	it('reports thinking for reasoning', () => {
 		expect(resolveActivity([turn([reasoning()])], true)).toMatchObject({
 			kind: 'thinking',
-			label: 'Thinking'
+			label: 'Wait for response'
 		});
 	});
 

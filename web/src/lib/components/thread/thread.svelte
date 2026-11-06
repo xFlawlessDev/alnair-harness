@@ -47,6 +47,31 @@
 		[...turns].reverse().find((turn) => turn.role === 'assistant')?.id
 	);
 
+	/**
+	 * Whether a turn is still producing output.
+	 *
+	 * Only the last assistant turn can be live. Two things keep it live: the
+	 * agent is still working, or a backgrounded command it started is still
+	 * running. A backgrounded command alone does not make the turn stream once
+	 * the agent has spoken its last word — the answer already landed, and
+	 * painting a live indicator over it is the "never finishes" symptom.
+	 */
+	function isStreaming(turn: Turn): boolean {
+		if (!busy) return false;
+		if (turn.id !== lastAssistantId) return false;
+		const hasRunningBackground = turn.parts.some(
+			(part) =>
+				'backgrounded' in part &&
+				part.backgrounded === true &&
+				'status' in part &&
+				part.status === 'running'
+		);
+		if (!hasRunningBackground) return true;
+		// The agent has finished talking: the turn reads as complete even
+		// though the background task keeps running.
+		return turn.parts[turn.parts.length - 1]?.kind !== 'text';
+	}
+
 	/** The turn that owns a part, so a reveal can open it before scrolling. */
 	function turnOf(partId: string): string | undefined {
 		return turns.find((turn) => turn.parts.some((part) => part.id === partId))?.id;
@@ -138,7 +163,7 @@
 										{turn}
 										{prefs}
 										{onopenfile}
-										streaming={busy && turn.id === lastAssistantId}
+										streaming={isStreaming(turn)}
 										forcedOpen={revealTurn === turn.id ? revealTick : undefined}
 									/>
 								</div>

@@ -746,7 +746,14 @@ export class HarnessStore implements SessionStore {
 	private localBusy = $state(false);
 
 	get busy(): boolean {
-		return this.localBusy || this.acc.openTurnId !== undefined;
+		// The transcript is the authority. `turn_completed` closes the turn the
+		// moment the agent stops working, while `session/prompt:result` can
+		// trail behind a backgrounded task — and a status row that keeps
+		// pulsing after the answer already landed reads as a hung request.
+		// The local flag therefore only covers the window before the agent has
+		// acknowledged anything at all.
+		if (this.acc.openTurnId !== undefined) return true;
+		return this.localBusy && this.acc.turns.length === 0;
 	}
 
 	/**

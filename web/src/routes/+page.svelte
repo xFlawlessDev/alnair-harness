@@ -353,7 +353,6 @@
 						busy={store.busy}
 						blocked={Boolean(store.question || store.permission || store.plan)}
 						contextUsed={store.context.used}
-						oncancel={() => store.cancel()}
 					/>
 
 					<Composer
