@@ -114,7 +114,7 @@ pub struct BuiltAuthMethods {
 ///    `PlatformId::ALL` order — interactive logins after `kimi-code`
 /// 5. every API-key registry platform, in `PlatformId::ALL` order
 ///    (`moonshot-cn`, `moonshot-ai`, …), always advertised
-/// 6. the two custom provider rows (`custom-openai`, `custom-anthropic`)
+/// 6. custom provider rows (`custom-openai`, `custom-responses`, `custom-anthropic`)
 ///
 /// The platform methods are for the INTERACTIVE login picker only: they come
 /// after `kimi-code` so they can never become `auth_methods.first()` (the
@@ -430,8 +430,8 @@ fn platform_for_method_id_str(id: &str) -> Option<alnair_models::PlatformId> {
 /// exist because the three row families store credentials under different keys:
 /// subscription-OAuth rows under `oauth/<provider>`, API-key platform rows
 /// under the bare platform id, and a saved custom provider under its own name.
-/// `None` means the row holds nothing a disconnect could remove — the two
-/// `custom-openai` / `custom-anthropic` picker rows (declaration starters, not
+/// `None` means the row holds nothing a disconnect could remove — the
+/// `custom-openai` / `custom-responses` / `custom-anthropic` picker rows (declaration starters, not
 /// logins), `xai.api_key` / `cached_token` (eager-auth, never listed), and any
 /// id the registry does not know.
 ///
@@ -643,7 +643,7 @@ mod tests {
         assert!(kind.is_api_key());
         assert!(!kind.is_session_based());
         assert!(!kind.needs_interactive_login());
-        for picker in ["custom-openai", "custom-anthropic"] {
+        for picker in ["custom-openai", "custom-responses", "custom-anthropic"] {
             assert_eq!(
                 AuthMethodKind::from_id(&acp::AuthMethodId::new(picker)),
                 AuthMethodKind::Unknown,
@@ -686,6 +686,7 @@ mod tests {
         // Rows that hold nothing a disconnect could remove.
         for none in [
             "custom-openai",
+            "custom-responses",
             "custom-anthropic",
             "xai.api_key",
             "cached_token",
@@ -1004,6 +1005,7 @@ mod tests {
                 "minimax",
                 "minimax-cn",
                 "custom-openai",
+                "custom-responses",
                 "custom-anthropic"
             ]
         );
@@ -1058,6 +1060,7 @@ mod tests {
                 "minimax",
                 "minimax-cn",
                 "custom-openai",
+                "custom-responses",
                 "custom-anthropic"
             ]
         );
@@ -1105,6 +1108,7 @@ mod tests {
                 "minimax",
                 "minimax-cn",
                 "custom-openai",
+                "custom-responses",
                 "custom-anthropic"
             ]
         );
@@ -1155,6 +1159,7 @@ mod tests {
                 "minimax",
                 "minimax-cn",
                 "custom-openai",
+                "custom-responses",
                 "custom-anthropic"
             ]
         );

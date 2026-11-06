@@ -7,7 +7,11 @@ use super::CredentialedProvider;
 
 const PICKER_PREFIX: &str = "custom-";
 const LOGIN_PREFIX: &str = "custom:";
-const ALL_APIS: [CustomApi; 2] = [CustomApi::OpenAi, CustomApi::Anthropic];
+const ALL_APIS: [CustomApi; 3] = [
+    CustomApi::OpenAi,
+    CustomApi::Responses,
+    CustomApi::Anthropic,
+];
 
 /// The picker row for one wire.
 pub fn picker_method(api: CustomApi) -> acp::AuthMethod {
@@ -20,7 +24,7 @@ pub fn picker_method(api: CustomApi) -> acp::AuthMethod {
     )
 }
 
-/// Both picker rows, in picker order.
+/// Custom wire picker rows, in picker order.
 pub fn picker_methods() -> Vec<acp::AuthMethod> {
     ALL_APIS.into_iter().map(picker_method).collect()
 }
@@ -48,7 +52,7 @@ pub(crate) async fn validate_key(credentialed: &CredentialedProvider) -> Result<
     let client = crate::http::shared_client();
     let send = |bearer_fallback: bool| {
         let request = match (provider.api, bearer_fallback) {
-            (CustomApi::OpenAi, _) => client
+            (CustomApi::OpenAi | CustomApi::Responses, _) => client
                 .get(&url)
                 .header("Authorization", format!("Bearer {}", credentialed.key())),
             (CustomApi::Anthropic, false) => client
@@ -106,11 +110,12 @@ mod tests {
             let method = picker_method(api);
             assert_eq!(picker_api(method.id().0.as_ref()), Some(api));
         }
-        assert_eq!(picker_api("custom-responses"), None);
+        assert_eq!(picker_api("custom-responses"), Some(CustomApi::Responses));
+        assert_eq!(picker_api("custom-unknown"), None);
         assert_eq!(picker_api("custom-OpenAI"), None);
         assert_eq!(picker_api("custom:proxy"), None);
         assert_eq!(picker_api("moonshot-cn"), None);
-        assert_eq!(picker_methods().len(), 2);
+        assert_eq!(picker_methods().len(), 3);
     }
 
     #[test]
@@ -129,13 +134,15 @@ mod tests {
             .and(path("/v1/models"))
             .and(header("authorization", "Bearer sk-openai"))
             .respond_with(ResponseTemplate::new(200).set_body_string("{}"))
-            .expect(1)
+            .expect(2)
             .mount(&server)
             .await;
         let base = format!("{}/v1", server.uri());
-        validate_key(&credentialed(CustomApi::OpenAi, &base, "sk-openai"))
-            .await
-            .unwrap();
+        for api in [CustomApi::OpenAi, CustomApi::Responses] {
+            validate_key(&credentialed(api, &base, "sk-openai"))
+                .await
+                .unwrap();
+        }
 
         let server = MockServer::start().await;
         Mock::given(method("GET"))

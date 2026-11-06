@@ -230,4 +230,31 @@ mod tests {
             crate::sampling::ApiBackend::ChatCompletions
         );
     }
+
+    #[test]
+    fn responses_selection_resolves_credentials_and_keeps_its_wire() {
+        let raw: toml::Value = toml::from_str(
+            "[platforms.proxy]\nbase_url = \"https://p.example/v1\"\napi = \"responses\"\nmodels = [\"shared\"]\n\n[model.donorx]\nmodel = \"shared\"\napi_backend = \"messages\"\ncontext_window = 500000\n",
+        )
+        .unwrap();
+        let cfg = crate::agent::config::Config::new_from_toml_cfg(&raw).unwrap();
+        let proxy =
+            CustomProvider::new("proxy", CustomApi::Responses, "https://p.example/v1").unwrap();
+        let keys = PlatformApiKeys::test_custom(keyed(proxy));
+
+        let resolved = crate::agent::config::resolve_model_list(&cfg, None, &keys);
+        let entry = &resolved["proxy/shared"];
+        assert_eq!(
+            entry.info.api_backend,
+            crate::sampling::ApiBackend::Responses
+        );
+        assert_eq!(entry.api_key.as_deref(), Some("sk-x"));
+        assert!(entry.has_own_credentials());
+        assert_eq!(entry.info.base_url, "https://p.example/v1");
+        assert!(
+            cfg.endpoints
+                .custom_provider_bases
+                .contains(&entry.info.base_url)
+        );
+    }
 }

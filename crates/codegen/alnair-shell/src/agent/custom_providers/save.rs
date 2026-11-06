@@ -147,14 +147,14 @@ mod tests {
         save_custom_provider_in(
             &config,
             dir.path(),
-            &provider("gw", CustomApi::Anthropic, "https://b.example/v1"),
+            &provider("gw", CustomApi::Responses, "https://b.example/v1"),
             "k2",
             &["b1".to_owned()],
         )
         .unwrap();
 
         let saved: TomlValue = toml::from_str(&std::fs::read_to_string(&config).unwrap()).unwrap();
-        assert_eq!(saved["platforms"]["gw"]["api"].as_str(), Some("anthropic"));
+        assert_eq!(saved["platforms"]["gw"]["api"].as_str(), Some("responses"));
         assert_eq!(
             saved["platforms"]["gw"]["base_url"].as_str(),
             Some("https://b.example/v1")

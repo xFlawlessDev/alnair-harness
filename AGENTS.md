@@ -998,7 +998,7 @@ client-side, no backend surface.
   items valid for its target — never patch downstream except in the
   per-backend body adapters. Concretely: the Responses input drops
   Reasoning items without a native `rs_*` id (foreign capture is id "")
-  and provenance-gates whole turns via `transform_items_for_responses`
+  and provenance-gates whole turns via `transform_items_for_backend`
   (`AssistantItem.model_id` vs the request model: foreign Reasoning
   dropped, foreign BackendToolCall demoted to its `text_summary`);
   the codex adapter additionally drops bare `rs_*` references (stateless
@@ -1094,13 +1094,14 @@ client-side, no backend surface.
   `platform.oauth().is_some()` → `platform.base_url()` (kimi-code alone →
   `proxy_url()`). Tokens/codes/verifiers are NEVER logged.
 - CUSTOM PROVIDERS (0.1.19): `[platforms.<name>]` with `base_url` and `api =
-  "openai" | "anthropic"` declares a provider outside the closed registry.
+  "openai" | "responses" | "anthropic"` declares a provider outside the closed registry.
   `alnair-models/src/custom.rs` owns the validated type (name `[a-z0-9][a-z0-9_-]{0,31}`,
   never a registry id; base URL `http(s)://host[/path]`, no userinfo, query or
   fragment); `alnair-shell/src/agent/custom_providers/` owns the rest. Key order:
   auth.json scope `<name>`, then the table's `api_key`; a key is REQUIRED (a
   keyless declaration is inert). Wires: openai = `/chat/completions`, Bearer,
-  `GET {base}/models`; anthropic = `/messages`, `x-api-key`,
+  `GET {base}/models`; responses = `/responses`, Bearer, the same OpenAI listing;
+  anthropic = `/messages`, `x-api-key`,
   `GET {base}/models?limit=1000`. Catalog keys are `<name>/<model>`; the entry's
   `description` carries the provider name for the picker. Entries reach the disk
   cache without a key; `stamp_credentials` stamps `api_key` in memory, only onto
@@ -1117,7 +1118,18 @@ client-side, no backend surface.
   catalog entry (`auth_facts_of`), not from a disk reload: fetched entries never
   live on disk, and the reload sent fetched Messages models out with `Bearer`
   instead of `x-api-key` (this also repaired `anthropic` and `minimax`).
-  Login: picker rows `custom-openai` / `custom-anthropic` are not loginable
+  Responses reuses the sampler's stateless request/stream pipeline with
+  `store:false` and encrypted reasoning inclusion. The unified conversation
+  defaults apply configured reasoning effort before any wire conversion;
+  an explicit per-request effort (including `none`) wins. Codex-specific adaptation
+  and headers remain gated on the built-in Codex provider. No protocol probing
+  or automatic inference fallback. `alnair-sampler/tests/cross_backend_replay.rs`
+  covers serialized tool-turn replay across ChatCompletions, Messages, Responses,
+  and Codex, including same-slug dialect switches and tool-result images.
+  Messages applies the shared model-provenance gate and only turns empty-id
+  reasoning (Messages capture) into thinking blocks; a Responses item must never
+  become an Anthropic signature, even in an open tool loop with the same slug.
+  Login: picker rows `custom-openai` / `custom-responses` / `custom-anthropic` are not loginable
   (`AuthMethodKind::Unknown`); the TUI asks base URL, name (default from the
   host), key, then opens a MODEL-SELECTION screen (`custom_entry.rs`
   `CustomSelectState`, welcome `AuthMode::CustomProviderSelect`): the listing

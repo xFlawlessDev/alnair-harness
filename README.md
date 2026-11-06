@@ -212,10 +212,11 @@ api_key = "xai-..."
 
 ### Your own endpoint
 
-Anything that speaks the OpenAI Chat Completions API or the Anthropic Messages
-API works: a gateway, a proxy, Ollama, LM Studio, vLLM. In `alnair`, open
-`/connect` (or the welcome picker) and pick **Custom provider (OpenAI
-compatible)** or **(Anthropic compatible)**, then enter a base URL, a name, and
+Custom providers can use OpenAI Chat Completions, OpenAI Responses, or Anthropic
+Messages. In `alnair`, open `/connect` (or the welcome picker) and pick
+**Custom provider (OpenAI Chat Completions compatible)**,
+**(OpenAI Responses compatible)**, or **(Anthropic compatible)** to match the
+endpoint, then enter a base URL, a name, and
 an API key. Alnair saves the provider,
 checks the key against `GET {base}/models`, and `/model` lists what the endpoint
 serves as `name/model`.
@@ -224,13 +225,22 @@ serves as `name/model`.
 # ~/.alnair/config.toml
 [platforms.my-gateway]
 base_url = "https://gateway.example.com/v1"   # include /v1 when the API lives there
-api = "openai"                                # or "anthropic"
+api = "responses"                           # "openai", "responses", or "anthropic"
 api_key = "sk-..."                            # or store it in ~/.alnair/auth.json under "my-gateway"
 ```
 
 A key is required. A local server that ignores auth takes any value. The
 context window is 256K unless the endpoint reports one. To remove a provider,
 disconnect it in `/connect`, or delete its table and its `auth.json` entry.
+
+`openai` sends requests to `{base}/chat/completions`; `responses` uses
+`{base}/responses`. Both use Bearer authentication and an OpenAI-style
+`GET {base}/models` listing. `anthropic` uses `{base}/messages` and `x-api-key`.
+The protocol is explicit; Alnair does not retry through a different API.
+Responses requests default to `store: false` and replay locally held history.
+You can switch between the three protocols within a session: text, tool calls,
+and results carry over; opaque reasoning only replays where compatible.
+Codex OAuth headers apply only to the built-in Codex provider.
 
 Model lists sync on startup. Pick one with `/model`, set its thinking level
 with `/effort`.

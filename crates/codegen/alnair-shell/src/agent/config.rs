@@ -832,7 +832,7 @@ pub struct PlatformCredentialConfig {
     /// With `api`, declares a custom provider outside the registry.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub base_url: Option<String>,
-    /// `"openai"` or `"anthropic"`.
+    /// `"openai"` (Chat Completions), `"responses"`, or `"anthropic"` (Messages).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub api: Option<String>,
     /// A custom provider's login-curated model allowlist; absent = whole listing.

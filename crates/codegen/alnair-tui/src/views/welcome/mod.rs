@@ -2752,7 +2752,7 @@ mod tests {
             "https://very-long-host.example/v1",
         );
         assert!(url.contains("https://very-long-host.example/v1"), "{url}");
-        assert!(url.contains("OpenAI compatible"), "{url}");
+        assert!(url.contains("OpenAI Chat Completions compatible"), "{url}");
 
         let key = render_custom_entry(step(CustomEntryField::Key), &draft, "sk-abcdefghijklmnop");
         assert!(

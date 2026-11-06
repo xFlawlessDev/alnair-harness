@@ -37,7 +37,7 @@ fn listing_body(provider: &CustomProvider, key: &str) -> Result<String, BackendE
     let client = crate::http::shared_blocking_client();
     let send = |bearer_fallback: bool| {
         let request = match (provider.api, bearer_fallback) {
-            (CustomApi::OpenAi, _) => client
+            (CustomApi::OpenAi | CustomApi::Responses, _) => client
                 .get(&url)
                 .header("Authorization", format!("Bearer {key}")),
             (CustomApi::Anthropic, false) => client.get(&url).header("x-api-key", key).header(
@@ -73,7 +73,7 @@ fn parse_listing(
     body: &str,
 ) -> Result<Vec<WireModel>, serde_json::Error> {
     match provider.api {
-        CustomApi::OpenAi => alnair_models::parse_openai_listing(body),
+        CustomApi::OpenAi | CustomApi::Responses => alnair_models::parse_openai_listing(body),
         CustomApi::Anthropic => alnair_models::parse_anthropic_listing(body),
     }
 }
@@ -427,6 +427,38 @@ mod tests {
         assert_eq!(models[0].description.as_deref(), Some("proxy"));
         assert!(models[0].api_key.is_none() && models[0].env_key.is_none());
         assert!(models[0].supported_in_api);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn responses_listing_becomes_bearer_responses_entries() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/v1/models"))
+            .and(header("authorization", "Bearer sk-proxy"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "data": [{"id": "gpt-6.1-sol", "context_length": 272000}]
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let base = format!("{}/v1", server.uri());
+        let models = fetch_on_thread(credentialed(
+            "proxy",
+            CustomApi::Responses,
+            &base,
+            "sk-proxy",
+        ))
+        .await
+        .unwrap();
+
+        assert_eq!(models.len(), 1);
+        let entry = &models[0];
+        assert_eq!(entry.id.as_deref(), Some("proxy/gpt-6.1-sol"));
+        assert_eq!(entry.model, "gpt-6.1-sol");
+        assert_eq!(entry.api_backend, crate::sampling::ApiBackend::Responses);
+        assert_eq!(entry.auth_scheme, None);
+        assert_eq!(entry.context_window.get(), 272_000);
+        assert!(entry.api_key.is_none());
     }
 
     #[tokio::test(flavor = "multi_thread")]

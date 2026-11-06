@@ -2221,7 +2221,7 @@ impl From<&ConversationRequest> for rs::CreateResponse {
 /// so they appear inline in the same order the model originally emitted —
 /// which is what lets the server-side prefix KV-cache hit on repeat turns.
 fn build_responses_input(req: &ConversationRequest) -> rs::InputParam {
-    let transformed = transform_items_for_responses(&req.items, req.model.as_deref());
+    let transformed = transform_items_for_backend(&req.items, req.model.as_deref());
     let items: Vec<rs::InputItem> = transformed
         .iter()
         .flat_map(conversation_item_to_input_items)
@@ -2229,7 +2229,7 @@ fn build_responses_input(req: &ConversationRequest) -> rs::InputParam {
     rs::InputParam::Items(items)
 }
 
-/// Provenance gate for the Responses input (the Pi `transform-messages`
+/// Provenance gate for Responses and Messages input (the Pi `transform-messages`
 /// pattern): opaque provider-issued items replay verbatim only when the
 /// turn that produced them ran on the SAME model this request targets.
 ///
@@ -2249,7 +2249,7 @@ fn build_responses_input(req: &ConversationRequest) -> rs::InputParam {
 /// Same-model runs, unknown provenance (pre-provenance histories with
 /// `model_id: None`), and trailing orphans pass through verbatim — that
 /// byte-stability is what lets the server-side prefix KV-cache hit.
-fn transform_items_for_responses(
+fn transform_items_for_backend(
     items: &[ConversationItem],
     target_model: Option<&str>,
 ) -> Vec<ConversationItem> {
@@ -3216,8 +3216,8 @@ pub fn build_messages_request(req: &ConversationRequest) -> crate::messages::Mes
         }
     };
 
-    // Process all conversation items
-    for item in &req.items {
+    let transformed = transform_items_for_backend(&req.items, req.model.as_deref());
+    for item in &transformed {
         match item {
             ConversationItem::System(s) => {
                 flush_assistant(&mut pending_assistant, &mut messages);
@@ -3324,10 +3324,15 @@ pub fn build_messages_request(req: &ConversationRequest) -> crate::messages::Mes
                     cache_control: None,
                 });
             }
-            // Reasoning sibling — emit as Anthropic `thinking` block on the
-            // pending assistant turn. `tco_*` encrypted blobs only set
-            // `signature`; real model reasoning sets `thinking`.
+            // Replay compatible reasoning as a thinking block on the
+            // pending assistant turn.
             ConversationItem::Reasoning(r) => {
+                // Messages captures signatures with an empty id. Responses
+                // items have a server-issued id and an incompatible payload,
+                // even when both providers report the same model slug.
+                if !r.id.is_empty() {
+                    continue;
+                }
                 flush_tool_results(&mut pending_tool_results, &mut messages);
                 let thinking = reasoning_item_text(r);
                 let signature = r
@@ -3457,9 +3462,9 @@ pub fn build_messages_request(req: &ConversationRequest) -> crate::messages::Mes
 /// signed thinking back verbatim. Prior turns' thinking is ignored even
 /// when valid (Pi/Claude Code replay exactly this way). So: keep the
 /// final assistant message's thinking when the loop is open and the block
-/// is genuinely signed (non-empty text AND signature — an open loop can
-/// never span a model switch, so that signature is always the current
-/// model's); strip every other thinking block. An assistant message left
+/// is genuinely signed (non-empty text AND signature). The item conversion
+/// already filters foreign models and Responses payloads before this step.
+/// Strip every other thinking block. An assistant message left
 /// EMPTY by the strip (a thinking-only aborted turn) is removed — the API
 /// rejects empty content arrays.
 fn prune_replayed_thinking(messages: &mut Vec<crate::messages::Message>) {
@@ -5931,10 +5936,46 @@ mod tests {
         );
     }
 
-    /// The active tool-use continuation is the one place Anthropic REQUIRES
-    /// the signed thinking block back: the final assistant message issued
-    /// tool_use and its results follow. Exactly that block is kept; a
-    /// prior turn's signed thinking is still stripped.
+    #[test]
+    fn messages_active_tool_loop_only_replays_its_own_models_signature() {
+        for (reasoning_id, producer, keep) in [
+            ("", "target-model", true),
+            ("", "other-model", false),
+            ("rs_native", "target-model", false),
+            ("tco_native", "target-model", false),
+        ] {
+            let mut signed = reasoning("thinking text", Some("opaque-payload"));
+            if let ConversationItem::Reasoning(r) = &mut signed {
+                r.id = reasoning_id.to_owned();
+            }
+            let mut req = ConversationRequest::from_items(vec![
+                ConversationItem::user("read the file"),
+                signed,
+                ConversationItem::Assistant(AssistantItem {
+                    content: "".into(),
+                    tool_calls: vec![ToolCall {
+                        id: "call-1".into(),
+                        name: "read_file".into(),
+                        arguments: "{}".into(),
+                    }],
+                    model_id: Some(producer.into()),
+                    model_fingerprint: None,
+                    reasoning_effort: None,
+                }),
+                ConversationItem::tool_result("call-1", "file contents"),
+            ]);
+            req.model = Some("target-model".into());
+            let original = serde_json::to_value(&req.items).unwrap();
+            let wire = serde_json::to_value(build_messages_request(&req)).unwrap();
+            assert_eq!(thinking_blocks(&wire).len(), usize::from(keep), "{wire:#}");
+            assert!(wire.to_string().contains("tool_use"));
+            assert!(wire.to_string().contains("tool_result"));
+            assert_eq!(serde_json::to_value(&req.items).unwrap(), original);
+        }
+    }
+
+    /// The active tool-use continuation must keep its signed thinking;
+    /// thinking from earlier, completed turns is stripped.
     #[test]
     fn messages_request_keeps_signed_thinking_for_active_tool_loop() {
         let req = ConversationRequest::from_items(vec![

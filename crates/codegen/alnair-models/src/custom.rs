@@ -9,6 +9,8 @@ const MAX_NAME_LEN: usize = 32;
 pub enum CustomApi {
     /// Chat Completions with a Bearer key.
     OpenAi,
+    /// Responses with a Bearer key and an OpenAI-style model listing.
+    Responses,
     /// Messages with an `x-api-key` header.
     Anthropic,
 }
@@ -17,6 +19,7 @@ impl CustomApi {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::OpenAi => "openai",
+            Self::Responses => "responses",
             Self::Anthropic => "anthropic",
         }
     }
@@ -24,6 +27,7 @@ impl CustomApi {
     pub fn parse(s: &str) -> Option<Self> {
         match s.trim().to_ascii_lowercase().as_str() {
             "openai" => Some(Self::OpenAi),
+            "responses" => Some(Self::Responses),
             "anthropic" => Some(Self::Anthropic),
             _ => None,
         }
@@ -32,7 +36,8 @@ impl CustomApi {
     /// Login picker wording.
     pub fn label(self) -> &'static str {
         match self {
-            Self::OpenAi => "OpenAI compatible",
+            Self::OpenAi => "OpenAI Chat Completions compatible",
+            Self::Responses => "OpenAI Responses compatible",
             Self::Anthropic => "Anthropic compatible",
         }
     }
@@ -40,20 +45,21 @@ impl CustomApi {
     pub fn wire_api(self) -> PlatformWireApi {
         match self {
             Self::OpenAi => PlatformWireApi::ChatCompletions,
+            Self::Responses => PlatformWireApi::Responses,
             Self::Anthropic => PlatformWireApi::Messages,
         }
     }
 
     pub fn listing(self) -> ListingDialect {
         match self {
-            Self::OpenAi => ListingDialect::OpenAi,
+            Self::OpenAi | Self::Responses => ListingDialect::OpenAi,
             Self::Anthropic => ListingDialect::Anthropic,
         }
     }
 
     pub fn key_header(self) -> PlatformKeyHeader {
         match self {
-            Self::OpenAi => PlatformKeyHeader::Bearer,
+            Self::OpenAi | Self::Responses => PlatformKeyHeader::Bearer,
             Self::Anthropic => PlatformKeyHeader::XApiKey,
         }
     }
@@ -103,7 +109,7 @@ impl CustomProvider {
     /// The listing endpoint, with the dialect's query.
     pub fn models_url(&self) -> String {
         match self.api {
-            CustomApi::OpenAi => format!("{}/models", self.base_url),
+            CustomApi::OpenAi | CustomApi::Responses => format!("{}/models", self.base_url),
             // Anthropic paginates (default 20); 1000 is the documented max.
             CustomApi::Anthropic => format!("{}/models?limit=1000", self.base_url),
         }
@@ -233,11 +239,19 @@ mod tests {
 
     #[test]
     fn api_round_trips_and_maps_to_the_wire() {
-        for api in [CustomApi::OpenAi, CustomApi::Anthropic] {
+        for api in [
+            CustomApi::OpenAi,
+            CustomApi::Responses,
+            CustomApi::Anthropic,
+        ] {
             assert_eq!(CustomApi::parse(api.as_str()), Some(api));
         }
         assert_eq!(CustomApi::parse(" OpenAI "), Some(CustomApi::OpenAi));
-        assert_eq!(CustomApi::parse("responses"), None);
+        assert_eq!(CustomApi::parse(" RESPONSES "), Some(CustomApi::Responses));
+        assert_eq!(CustomApi::parse("unknown"), None);
+        assert_eq!(CustomApi::Responses.wire_api(), PlatformWireApi::Responses);
+        assert_eq!(CustomApi::Responses.key_header(), PlatformKeyHeader::Bearer);
+        assert_eq!(CustomApi::Responses.listing(), ListingDialect::OpenAi);
         assert_eq!(
             CustomApi::OpenAi.wire_api(),
             PlatformWireApi::ChatCompletions
@@ -250,7 +264,11 @@ mod tests {
         );
         assert_eq!(CustomApi::OpenAi.listing(), ListingDialect::OpenAi);
         assert_eq!(CustomApi::Anthropic.listing(), ListingDialect::Anthropic);
-        for api in [CustomApi::OpenAi, CustomApi::Anthropic] {
+        for api in [
+            CustomApi::OpenAi,
+            CustomApi::Responses,
+            CustomApi::Anthropic,
+        ] {
             assert_eq!(api.chat_compat(), PlatformChatCompat::Passthrough);
         }
     }

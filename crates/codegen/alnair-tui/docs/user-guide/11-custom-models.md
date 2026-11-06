@@ -79,6 +79,47 @@ Environment overrides take priority: `ALNAIR_SESSION_SUMMARY_MODEL`,
 `ALNAIR_IMAGE_DESCRIPTION_MODEL`, `ALNAIR_PROMPT_SUGGESTIONS_MODEL`,
 `ALNAIR_SHELL_SUGGESTION_MODEL`, and `ALNAIR_MEMORY_REWRITE_MODEL`.
 
+## Custom Providers
+
+Use `/connect` to add a provider by base URL and API key. Choose the row for
+OpenAI Chat Completions, OpenAI Responses, or Anthropic Messages to match the
+API your endpoint serves. Select models from its listing or enter model IDs
+manually. Alnair saves the definition in `~/.alnair/config.toml` and the key
+in its own credential store.
+
+You can also declare the provider yourself:
+
+```toml
+[platforms.my-gateway]
+base_url = "https://gateway.example.com/v1"
+api = "responses"
+api_key = "sk-..."
+models = ["my-model"]
+```
+
+| `api` | Inference endpoint | Authentication |
+|-------|--------------------|----------------|
+| `"openai"` | `{base}/chat/completions` | Bearer |
+| `"responses"` | `{base}/responses` | Bearer |
+| `"anthropic"` | `{base}/messages` | `x-api-key` |
+
+Include `/v1` in `base_url` when your server requires it. Responses uses the
+same OpenAI-style `GET {base}/models` listing as Chat Completions. A key is
+required; for a local server that ignores authentication, use any value.
+Omit `models` to include the whole listing. Selected IDs absent from the
+listing still get entries with default metadata. Models appear as
+`my-gateway/my-model` in `/model`.
+
+The chosen protocol is used explicitly, without automatic fallback. Responses
+defaults to `store: false` and sends locally managed conversation history.
+Switching protocols in a session preserves text, tool calls, results, and
+supported images. Reasoning signatures and encrypted content are replayed only
+in their compatible wire format and model context. Custom Responses providers
+use ordinary API-key authentication; Codex OAuth headers remain specific to
+the built-in Codex provider.
+
+---
+
 ## Supported API Backends
 
 Alnair supports three API backends. Set `api_backend` in your `[model.*]` config to choose which protocol the model uses:

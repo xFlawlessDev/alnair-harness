@@ -590,61 +590,64 @@ fn custom_provider_steps_end_in_the_model_selection() {
     use crate::app::custom_entry::CustomEntryField;
     use alnair_shell::models::custom::CustomApi;
 
-    let mut app = test_app();
-    app.auth_state = AuthState::Pending { error: None };
+    for api in [
+        CustomApi::OpenAi,
+        CustomApi::Responses,
+        CustomApi::Anthropic,
+    ] {
+        let mut app = test_app();
+        app.auth_state = AuthState::Pending { error: None };
 
-    let effects = dispatch(
-        Action::BeginCustomProviderEntry(CustomApi::Anthropic),
-        &mut app,
-    );
-    assert!(effects.is_empty());
-    assert_eq!(custom_field(&app), CustomEntryField::BaseUrl);
-    let seq = match &app.auth_state {
-        AuthState::Authenticating { request_seq, .. } => *request_seq,
-        _ => unreachable!(),
-    };
+        let effects = dispatch(Action::BeginCustomProviderEntry(api), &mut app);
+        assert!(effects.is_empty());
+        assert_eq!(custom_field(&app), CustomEntryField::BaseUrl);
+        let seq = match &app.auth_state {
+            AuthState::Authenticating { request_seq, .. } => *request_seq,
+            _ => unreachable!(),
+        };
 
-    dispatch(
-        Action::SubmitCustomProviderInput("https://api.gw.example/v1/".into()),
-        &mut app,
-    );
-    assert_eq!(custom_field(&app), CustomEntryField::Name);
-    assert_eq!(
-        app.auth_code_input, "gw-example",
-        "the name is prefilled from the host"
-    );
+        dispatch(
+            Action::SubmitCustomProviderInput("https://api.gw.example/v1/".into()),
+            &mut app,
+        );
+        assert_eq!(custom_field(&app), CustomEntryField::Name);
+        assert_eq!(
+            app.auth_code_input, "gw-example",
+            "the name is prefilled from the host"
+        );
 
-    dispatch(Action::SubmitCustomProviderInput("gw".into()), &mut app);
-    assert_eq!(custom_field(&app), CustomEntryField::Key);
-    assert!(app.auth_code_input.is_empty(), "the key box starts empty");
+        dispatch(Action::SubmitCustomProviderInput("gw".into()), &mut app);
+        assert_eq!(custom_field(&app), CustomEntryField::Key);
+        assert!(app.auth_code_input.is_empty(), "the key box starts empty");
 
-    let effects = dispatch(Action::SubmitCustomProviderInput("sk-gw".into()), &mut app);
-    match effects.as_slice() {
-        [
-            Effect::FetchCustomProviderModels {
-                request_seq,
-                provider,
-                key,
-            },
-        ] => {
-            assert_eq!(*request_seq, seq);
-            assert_eq!(provider.name, "gw");
-            assert_eq!(provider.api, CustomApi::Anthropic);
-            assert_eq!(provider.base_url, "https://api.gw.example/v1");
-            assert_eq!(key, "sk-gw");
+        let effects = dispatch(Action::SubmitCustomProviderInput("sk-gw".into()), &mut app);
+        match effects.as_slice() {
+            [
+                Effect::FetchCustomProviderModels {
+                    request_seq,
+                    provider,
+                    key,
+                },
+            ] => {
+                assert_eq!(*request_seq, seq);
+                assert_eq!(provider.name, "gw");
+                assert_eq!(provider.api, api);
+                assert_eq!(provider.base_url, "https://api.gw.example/v1");
+                assert_eq!(key, "sk-gw");
+            }
+            other => panic!("expected exactly the fetch effect, got {other:?}"),
         }
-        other => panic!("expected exactly the fetch effect, got {other:?}"),
+        assert!(matches!(
+            app.auth_state,
+            AuthState::Authenticating {
+                request_seq,
+                mode: AuthMode::CustomProviderSelect,
+                ..
+            } if request_seq == seq
+        ));
+        assert!(app.custom_select.is_some());
+        assert!(app.auth_code_input.is_empty());
     }
-    assert!(matches!(
-        app.auth_state,
-        AuthState::Authenticating {
-            request_seq,
-            mode: AuthMode::CustomProviderSelect,
-            ..
-        } if request_seq == seq
-    ));
-    assert!(app.custom_select.is_some());
-    assert!(app.auth_code_input.is_empty());
 }
 
 /// The listing fills rows; the selection persists only the chosen models.

@@ -307,6 +307,7 @@ struct ClientDefaults {
     max_completion_tokens: Option<u32>,
     temperature: Option<f32>,
     top_p: Option<f32>,
+    reasoning_effort: Option<alnair_sampling_types::ReasoningEffort>,
     api_backend: ApiBackend,
     auth_scheme: AuthScheme,
     chat_compat: alnair_sampling_types::ChatCompat,
@@ -574,6 +575,7 @@ impl SamplingClient {
             max_completion_tokens: config.max_completion_tokens,
             temperature: config.temperature,
             top_p: config.top_p,
+            reasoning_effort: config.reasoning_effort,
             api_backend: config.api_backend,
             auth_scheme: config.auth_scheme,
             chat_compat: config.chat_compat,
@@ -1796,6 +1798,10 @@ impl SamplingClient {
             request.max_output_tokens = self.defaults.max_completion_tokens;
         }
 
+        if request.reasoning_effort.is_none() {
+            request.reasoning_effort = self.defaults.reasoning_effort;
+        }
+
         Ok(())
     }
 
@@ -2061,6 +2067,22 @@ mod tests {
             doom_loop_recovery: None,
             header_injector: None,
         }
+    }
+
+    #[test]
+    fn conversation_defaults_apply_reasoning_effort_without_overriding_the_request() {
+        use alnair_sampling_types::ReasoningEffort;
+
+        let mut config = minimal_config();
+        config.reasoning_effort = Some(ReasoningEffort::High);
+        let client = SamplingClient::new(config).unwrap();
+        let mut request = ConversationRequest::default();
+        client.apply_conversation_defaults(&mut request).unwrap();
+        assert_eq!(request.reasoning_effort, Some(ReasoningEffort::High));
+
+        request.reasoning_effort = Some(ReasoningEffort::None);
+        client.apply_conversation_defaults(&mut request).unwrap();
+        assert_eq!(request.reasoning_effort, Some(ReasoningEffort::None));
     }
 
     /// The real Anthropic Messages wire rejects requests without

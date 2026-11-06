@@ -33,9 +33,9 @@ fn parse_declaration(
     let api = entry
         .api
         .as_deref()
-        .ok_or("api is required (\"openai\" or \"anthropic\")")?;
+        .ok_or("api is required (\"openai\", \"responses\", or \"anthropic\")")?;
     let api = CustomApi::parse(api)
-        .ok_or_else(|| format!("api {api:?} is not \"openai\" or \"anthropic\""))?;
+        .ok_or_else(|| format!("api {api:?} is not \"openai\", \"responses\", or \"anthropic\""))?;
     let base_url = entry.base_url.as_deref().ok_or("base_url is required")?;
     CustomProvider::new(name, api, base_url).map_err(|e| e.to_string())
 }
@@ -140,14 +140,18 @@ mod tests {
             [gw]
             base_url = "https://g.example/v1"
             api = "Anthropic"
+            [reasoner]
+            base_url = "https://r.example/v1"
+            api = "responses"
             "#,
         );
         let found = providers(&cfg);
-        assert_eq!(found.len(), 2);
+        assert_eq!(found.len(), 3);
         assert_eq!(found[0].name, "proxy");
         assert_eq!(found[0].api, CustomApi::OpenAi);
         assert_eq!(found[0].base_url, "https://h.example/v1");
         assert_eq!(found[1].api, CustomApi::Anthropic);
+        assert_eq!(found[2].api, CustomApi::Responses);
     }
 
     #[test]
@@ -160,7 +164,7 @@ mod tests {
             api = "openai"
             [bad-api]
             base_url = "https://h.example/v1"
-            api = "responses"
+            api = "unsupported"
             [bad-url]
             base_url = "h.example"
             api = "openai"
@@ -180,7 +184,7 @@ mod tests {
         assert_eq!(reasons.len(), 6);
         assert!(reasons[0].contains("api is required"));
         assert!(reasons[1].contains("base_url is required"));
-        assert!(reasons[2].contains("responses"));
+        assert!(reasons[2].contains("unsupported"));
         assert!(reasons[3].contains("base_url"));
         assert!(reasons[4].contains("built-in platform id"));
         assert!(reasons[5].contains("provider name"));
