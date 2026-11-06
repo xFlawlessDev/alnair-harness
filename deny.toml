@@ -38,6 +38,7 @@ ignore = [
     { id = "RUSTSEC-2026-0372", reason = "zbus 5 via dark-light 3; Linux theme detection" },
     # serde_yaml is deprecated and archived; its parser is vendored inside it.
     { id = "RUSTSEC-2024-0449", reason = "serde_yaml 0.9 (deprecated) via alnair-agent; bundled parser" },
+    { id = "RUSTSEC-2026-0441", reason = "pin-utils 0.1.0 via aws-smithy-http; no safe upgrade available, transitive AWS SDK dependency" },
 ]
 
 [licenses]
