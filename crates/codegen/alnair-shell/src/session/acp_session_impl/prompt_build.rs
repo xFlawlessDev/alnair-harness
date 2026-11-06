@@ -611,23 +611,29 @@ impl SessionActor {
             &alnair_chat_state::compaction_utils::extract_user_query(&original_user_message),
         );
         let active_session_config = self.reconstruct_full_config().await;
-        let resolved_describe = self
-            .resolve_aux_sampler_config(&self.image_description_model)
-            .await;
+        let describe_selection = self
+            .models_manager
+            .auxiliary_model(crate::agent::auxiliary_models::AuxiliaryModel::ImageDescription);
+        let resolved_describe = match describe_selection.as_deref() {
+            Some(model) => self.resolve_aux_sampler_config(model).await,
+            None => None,
+        };
         // LEAK 1b: the aux bearer_resolver is decided at the chokepoint from the
         // IMAGE-DESCRIBE model's own platform + endpoint and passed in
         // explicitly, so an aux model on another provider can never inherit the
         // session (Kimi) resolver and have its own key overwritten on the aux
         // host. The `None` fallback yields the SESSION config verbatim, whose
         // own resolver must stay as-is.
-        let describe_resolver = resolved_describe
-            .as_ref()
-            .map(|cfg| self.aux_bearer_resolver(&self.image_description_model, &cfg.base_url));
+        let describe_resolver = resolved_describe.as_ref().and_then(|cfg| {
+            describe_selection
+                .as_deref()
+                .and_then(|model| self.aux_bearer_resolver(model, &cfg.base_url))
+        });
         let (describe_model, sampler_config) =
             crate::agent::config::finalize_image_describe_sampler_config(
                 resolved_describe,
                 &active_session_config,
-                describe_resolver.flatten(),
+                describe_resolver,
                 Some(self.max_retries),
             );
         let client = alnair_sampler::SamplingClient::new(sampler_config).map_err(|e| {

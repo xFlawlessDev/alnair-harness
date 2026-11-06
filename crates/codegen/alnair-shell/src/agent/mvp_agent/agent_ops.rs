@@ -9,22 +9,23 @@ impl MvpAgent {
             .borrow()
             .image_description_model
             .as_deref()
-            .unwrap_or(crate::models::default_image_description_model())
+            .unwrap_or_default()
             .to_owned()
     }
-    fn resolve_session_summary_model(&self) -> String {
+    fn resolve_session_summary_model(&self) -> Option<String> {
         self.cfg
             .borrow()
             .session_summary_model
-            .as_deref()
-            .unwrap_or(crate::models::default_session_summary_model())
-            .to_owned()
+            .clone()
     }
     pub(super) fn build_summary_client(
         &self,
         primary: &SamplingConfig,
     ) -> Result<(OaiCompatClient, String), acp::Error> {
-        let slug = self.resolve_session_summary_model();
+        let Some(slug) = self.resolve_session_summary_model() else {
+            let client = OaiCompatClient::new(primary.clone()).map_err(map_sampling_err_to_acp)?;
+            return Ok((client, primary.model.clone()));
+        };
         let models = self.models_manager.models();
         // Resolve the aux token by the summary model's OWN platform AND
         // endpoint: a grok (oauth-platform) summary model draws its pooled grok
@@ -57,11 +58,7 @@ impl MvpAgent {
                 cfg.max_retries = primary.max_retries;
                 cfg
             }
-            None => {
-                let mut fallback = primary.clone();
-                fallback.model = slug;
-                fallback
-            }
+            None => primary.clone(),
         };
         let model = config.model.clone();
         let client = OaiCompatClient::new(config).map_err(map_sampling_err_to_acp)?;

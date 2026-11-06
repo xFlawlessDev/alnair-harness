@@ -94,6 +94,8 @@ pub enum DynamicEnumSource {
     /// Models from the active session's catalog. Prepends a
     /// `"(no override)"` sentinel so the user can clear the setting.
     ActiveModelCatalog,
+    /// Background models inherit the active chat selection when unset.
+    ChatModelCatalog,
 }
 
 /// Build the owned choice list for a `DynamicEnum` at picker-open time.
@@ -104,12 +106,22 @@ pub fn dynamic_enum_choices(
     snapshot: &PagerLocalSnapshot,
 ) -> Vec<OwnedEnumChoice> {
     match source {
-        DynamicEnumSource::ActiveModelCatalog => {
+        DynamicEnumSource::ActiveModelCatalog | DynamicEnumSource::ChatModelCatalog => {
             let mut out = Vec::with_capacity(snapshot.available_models.len() + 1);
             out.push(OwnedEnumChoice {
                 canonical: String::new(),
-                display: "(no override)".to_string(),
-                description: "Inherit the default model (no per-user override).".to_string(),
+                display: if source == DynamicEnumSource::ChatModelCatalog {
+                    "Follow chat model"
+                } else {
+                    "(no override)"
+                }
+                .to_string(),
+                description: if source == DynamicEnumSource::ChatModelCatalog {
+                    "Use the model currently selected for chat."
+                } else {
+                    "Inherit the default model (no per-user override)."
+                }
+                .to_string(),
             });
             for (name, _id) in &snapshot.available_models {
                 out.push(OwnedEnumChoice {
@@ -240,6 +252,7 @@ pub struct PagerLocalSnapshot {
     /// Cloned into the snapshot so the modal's validator/resolver is
     /// self-contained (the modal outlives the borrow on `app.agents`).
     pub available_models: Vec<(String, acp::ModelId)>,
+    pub auxiliary_models: alnair_shell::agent::config::ModelsConfig,
     /// Whether plan mode is active. Uses effective state
     /// (`pending.unwrap_or(active)`) so rapid toggles don't double-send.
     /// Refreshed on all mutation paths including ACP `CurrentModeUpdate`.
@@ -274,6 +287,7 @@ impl Default for PagerLocalSnapshot {
             auto_mode: false,
             current_model_name: None,
             available_models: Vec::new(),
+            auxiliary_models: alnair_shell::agent::config::ModelsConfig::default(),
             plan_mode_active: false,
             show_tips: None,
             auto_update: None,
@@ -588,16 +602,20 @@ pub fn current_value_for(
         // CLI batch: snapshot mirrors; `None` → effective default `true`.
         "show_tips" => Some(SettingValue::Bool(pager.show_tips.unwrap_or(true))),
         "auto_update" => Some(SettingValue::Bool(pager.auto_update.unwrap_or(true))),
-        // fork_secondary_model: baseline value folds to empty string.
-        "fork_secondary_model" => Some(SettingValue::String({
-            let baseline = alnair_shell::models::default_model();
-            if ui.fork_secondary_model == baseline {
-                String::new()
-            } else {
-                ui.fork_secondary_model.clone()
-            }
-        })),
+        "fork_secondary_model" => Some(SettingValue::String(ui.fork_secondary_model.clone())),
 
+        key if alnair_shell::agent::auxiliary_models::AuxiliaryModel::from_key(key).is_some() => {
+            let kind = alnair_shell::agent::auxiliary_models::AuxiliaryModel::from_key(key)?;
+            let selected = kind.selection(&pager.auxiliary_models).unwrap_or_default();
+            Some(SettingValue::String(
+                pager
+                    .available_models
+                    .iter()
+                    .find(|(_, id)| id.0.as_ref() == selected)
+                    .map(|(name, _)| name.clone())
+                    .unwrap_or_else(|| selected.to_owned()),
+            ))
+        }
         _ => None,
     }
 }
@@ -959,20 +977,24 @@ mod tests {
                          None, mapped to the `always_allow_all_sessions` canonical)",
                     );
                 }
-                // fork_secondary_model: empty-string default = "no opinion".
+                (key, SettingKind::DynamicEnum { default, .. })
+                    if alnair_shell::agent::auxiliary_models::AuxiliaryModel::from_key(key)
+                        .is_some() =>
+                {
+                    assert_eq!(*default, "");
+                }
+                // Empty fork selection follows the chat model.
                 ("fork_secondary_model", SettingKind::DynamicEnum { default, .. }) => {
                     assert_eq!(
                         *default, "",
                         "fork_secondary_model registry default must be empty string — \
-                         the live default is `crate::models::default_model()` and the \
-                         current_value_for arm folds matching values to the empty sentinel",
+                         the empty selection follows the chat model",
                     );
-                    // Cross-check: the UiConfig field IS the built-in default.
+                    // The schema and picker both use empty to inherit chat.
                     assert_eq!(
-                        ui.fork_secondary_model,
-                        alnair_shell::models::default_model(),
+                        ui.fork_secondary_model, "",
                         "UiConfig::default().fork_secondary_model must equal \
-                         models::default_model() — drift here breaks the empty-fold contract",
+                         the empty chat-inheritance sentinel",
                     );
                 }
 

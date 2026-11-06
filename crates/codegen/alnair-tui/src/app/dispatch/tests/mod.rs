@@ -84,6 +84,7 @@ fn test_app() -> AppView {
         registry: crate::actions::ActionRegistry::defaults(),
         settings_registry: std::sync::Arc::new(crate::settings::SettingsRegistry::defaults()),
         current_ui: alnair_shell::agent::config::UiConfig::default(),
+        current_auxiliary_models: alnair_shell::agent::config::ModelsConfig::default(),
         cwd: PathBuf::from("/tmp"),
         project_picker_shown: true,
         project_picker_disabled: false,

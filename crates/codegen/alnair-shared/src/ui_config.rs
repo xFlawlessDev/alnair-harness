@@ -7,8 +7,7 @@ pub struct UiConfig {
     pub max_thoughts_width: u16,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub theme: Option<String>,
-    /// Secondary-agent model when forking; defaults to the main default model
-    /// (from default_models.json).
+    /// Secondary-agent model when forking; empty inherits the chat model.
     pub fork_secondary_model: String,
     /// Read by `util::config`, declared here for `serde_ignored`.
     #[serde(default)]
@@ -218,7 +217,7 @@ impl Default for UiConfig {
         Self {
             max_thoughts_width: DEFAULT_MAX_THOUGHTS_WIDTH,
             theme: None,
-            fork_secondary_model: alnair_models::default_model().to_string(),
+            fork_secondary_model: String::new(),
             yolo: false,
             ui_theme: None,
             compact_mode: false,

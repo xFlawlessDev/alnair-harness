@@ -53,6 +53,32 @@ default = "alnair"
 
 ---
 
+## Background Models
+
+Open `/settings` and choose **Models** to configure session titles, image
+descriptions, prompt suggestions, shell command suggestions, and memory note
+formatting. Each picker includes **Follow chat model**, which uses the active
+chat model and its provider credentials. Switching the chat model also changes
+these inherited selections. A session title is generated only once.
+
+The same overrides can be set in `config.toml` using catalog model IDs:
+
+```toml
+[models]
+session_summary = ""     # Follow chat model
+image_description = ""
+prompt_suggestion = ""
+shell_suggestion = ""
+memory_rewrite = ""
+```
+
+Set a value to a model's catalog ID to use a separate provider. Unset values
+follow the chat model unless a remote setting supplies a title, image, or prompt
+suggestion model. An explicit empty value clears that remote selection.
+Environment overrides take priority: `ALNAIR_SESSION_SUMMARY_MODEL`,
+`ALNAIR_IMAGE_DESCRIPTION_MODEL`, `ALNAIR_PROMPT_SUGGESTIONS_MODEL`,
+`ALNAIR_SHELL_SUGGESTION_MODEL`, and `ALNAIR_MEMORY_REWRITE_MODEL`.
+
 ## Supported API Backends
 
 Alnair supports three API backends. Set `api_backend` in your `[model.*]` config to choose which protocol the model uses:

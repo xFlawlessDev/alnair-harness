@@ -1,5 +1,57 @@
 //! Tests for settings setters, toggles, resets, and rollback.
 use super::*;
+
+#[test]
+fn auxiliary_model_settings_persist_catalog_ids_and_roll_back_failed_writes() {
+    use alnair_shell::agent::auxiliary_models::AuxiliaryModel;
+    for kind in AuxiliaryModel::ALL {
+        let mut app = test_app_with_agent();
+        let id = acp::ModelId::new("provider/aux-model");
+        app.agents
+            .get_mut(&AgentId(0))
+            .unwrap()
+            .session
+            .models
+            .available
+            .insert(
+                id.clone(),
+                acp::ModelInfo::new(id.clone(), "Auxiliary model"),
+            );
+        let effects = dispatch(
+            Action::SetAuxiliaryModel {
+                kind,
+                model: Some(id),
+            },
+            &mut app,
+        );
+        let Effect::PersistSetting {
+            key,
+            value,
+            rollback_value,
+        } = &effects[0]
+        else {
+            panic!("expected a persisted auxiliary model selection");
+        };
+        assert_eq!(*key, kind.key());
+        assert_eq!(
+            *value,
+            crate::settings::SettingValue::String("provider/aux-model".into())
+        );
+        assert_eq!(
+            kind.selection(&app.current_auxiliary_models),
+            Some("provider/aux-model")
+        );
+        let snapshot = build_pager_snapshot(&app);
+        assert_eq!(
+            crate::settings::current_value_for(kind.key(), &app.current_ui, &snapshot),
+            Some(crate::settings::SettingValue::String(
+                "Auxiliary model".into()
+            ))
+        );
+        let _ = apply_setting_rollback(&mut app, key, rollback_value);
+        assert_eq!(kind.selection(&app.current_auxiliary_models), None);
+    }
+}
 /// `Action::ToggleVimMode` flips the active agent's `vim_mode` field,
 /// updates the in-process pager cache so future agents pick it up
 /// via `load_vim_mode`, emits `Effect::PersistSetting` so the new
@@ -1294,6 +1346,14 @@ fn move_setting_away_from_default(app: &mut AppView, key: crate::settings::Setti
             let _ = dispatch(
                 Action::SetDefaultSelectedPermission("allow_once".to_string()),
                 app,
+            );
+        }
+        key if alnair_shell::agent::auxiliary_models::AuxiliaryModel::from_key(key).is_some() => {
+            let kind =
+                alnair_shell::agent::auxiliary_models::AuxiliaryModel::from_key(key).unwrap();
+            kind.set(
+                &mut app.current_auxiliary_models,
+                Some("test-aux-model".into()),
             );
         }
         other => {

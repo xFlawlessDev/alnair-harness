@@ -328,7 +328,7 @@ pub fn default_settings() -> Vec<SettingMeta> {
     // Shell schema defaults, used as registry source of truth.
     let ui_default = UiConfig::default();
 
-    vec![
+    let mut settings = vec![
         SettingMeta {
             key: "compact_mode",
             category: SettingCategory::Appearance,
@@ -1224,5 +1224,29 @@ pub fn default_settings() -> Vec<SettingMeta> {
             restart_required: false,
             hidden_in_minimal: false,
         },
-    ]
+    ];
+    for kind in alnair_shell::agent::auxiliary_models::AuxiliaryModel::ALL {
+        settings.push(SettingMeta {
+            key: kind.key(),
+            category: SettingCategory::Models,
+            owner: SettingOwner::Shell,
+            label: kind.label(),
+            description: "Background model override. Pick `Follow chat model` to follow the current chat model. Environment overrides take priority.",
+            keywords: match kind {
+                alnair_shell::agent::auxiliary_models::AuxiliaryModel::SessionTitle => &["model", "title", "session", "summary"],
+                alnair_shell::agent::auxiliary_models::AuxiliaryModel::ImageDescription => &["model", "image", "vision", "description"],
+                alnair_shell::agent::auxiliary_models::AuxiliaryModel::PromptSuggestion => &["model", "prompt", "suggestion", "autocomplete"],
+                alnair_shell::agent::auxiliary_models::AuxiliaryModel::ShellSuggestion => &["model", "shell", "command", "autocomplete"],
+                alnair_shell::agent::auxiliary_models::AuxiliaryModel::MemoryRewrite => &["model", "memory", "note", "rewrite"],
+            },
+            kind: SettingKind::DynamicEnum {
+                default: "",
+                source: DynamicEnumSource::ChatModelCatalog,
+                supports_preview: false,
+            },
+            restart_required: false,
+            hidden_in_minimal: false,
+        });
+    }
+    settings
 }

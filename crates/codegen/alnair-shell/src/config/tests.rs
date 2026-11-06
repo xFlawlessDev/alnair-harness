@@ -1261,7 +1261,7 @@ fn model_overrides_local_image_description_wins_over_remote() {
     );
 }
 #[test]
-fn model_overrides_default_image_description_is_alnair() {
+fn model_overrides_default_image_description_follows_chat() {
     with_model_overrides_env(
         None,
         None,
@@ -1269,14 +1269,13 @@ fn model_overrides_default_image_description_is_alnair() {
             let empty = toml::Value::Table(toml::map::Map::new());
             let cfg = ModelOverrideConfig::resolve(None, &empty, None);
             assert_eq!(
-                cfg.image_description, Some(crate
-                ::models::default_image_description_model().to_owned())
+                cfg.image_description, None
             );
         },
     );
 }
 #[test]
-fn model_overrides_default_session_summary_is_alnair() {
+fn model_overrides_default_session_summary_follows_chat() {
     with_model_overrides_env(
         None,
         None,
@@ -1284,8 +1283,7 @@ fn model_overrides_default_session_summary_is_alnair() {
             let empty = toml::Value::Table(toml::map::Map::new());
             let cfg = ModelOverrideConfig::resolve(None, &empty, None);
             assert_eq!(
-                cfg.session_summary, Some(crate ::models::default_session_summary_model()
-                .to_owned())
+                cfg.session_summary, None
             );
         },
     );
@@ -1361,8 +1359,7 @@ fn model_overrides_empty_session_summary_toml_uses_default() {
                 .unwrap();
             let cfg = ModelOverrideConfig::resolve(None, &config, None);
             assert_eq!(
-                cfg.session_summary, Some(crate ::models::default_session_summary_model()
-                .to_owned())
+                cfg.session_summary, None
             );
         },
     );
@@ -1380,8 +1377,7 @@ fn model_overrides_empty_session_summary_remote_uses_default() {
             };
             let cfg = ModelOverrideConfig::resolve(None, &empty, Some(&remote));
             assert_eq!(
-                cfg.session_summary, Some(crate ::models::default_session_summary_model()
-                .to_owned())
+                cfg.session_summary, None
             );
         },
     );
@@ -1421,8 +1417,7 @@ fn model_overrides_empty_cli_session_summary_uses_default() {
             let empty = toml::Value::Table(toml::map::Map::new());
             let cfg = ModelOverrideConfig::resolve(Some(""), &empty, None);
             assert_eq!(
-                cfg.session_summary, Some(crate ::models::default_session_summary_model()
-                .to_owned())
+                cfg.session_summary, None
             );
         },
     );
@@ -1476,8 +1471,7 @@ fn model_overrides_empty_image_description_toml_uses_default() {
                 .unwrap();
             let cfg = ModelOverrideConfig::resolve(None, &config, None);
             assert_eq!(
-                cfg.image_description, Some(crate
-                ::models::default_image_description_model().to_owned())
+                cfg.image_description, None
             );
         },
     );
@@ -1495,8 +1489,7 @@ fn model_overrides_empty_image_description_remote_uses_default() {
             };
             let cfg = ModelOverrideConfig::resolve(None, &empty, Some(&remote));
             assert_eq!(
-                cfg.image_description, Some(crate
-                ::models::default_image_description_model().to_owned())
+                cfg.image_description, None
             );
         },
     );
@@ -1556,6 +1549,28 @@ fn model_overrides_prompt_suggestion_remote_applies_without_local() {
             );
         },
     );
+}
+
+#[test]
+fn model_overrides_empty_local_selections_clear_remote_pins() {
+    with_model_overrides_env_full(None, None, None, || {
+        let config: toml::Value = toml::from_str(r#"
+            [models]
+            session_summary = ""
+            image_description = ""
+            prompt_suggestion = ""
+        "#).unwrap();
+        let remote = crate::util::config::RemoteSettings {
+            session_summary_model: Some("remote-title".into()),
+            image_description_model: Some("remote-image".into()),
+            prompt_suggestion_model: Some("remote-prompt".into()),
+            ..Default::default()
+        };
+        let resolved = ModelOverrideConfig::resolve(None, &config, Some(&remote));
+        assert_eq!(resolved.session_summary, None);
+        assert_eq!(resolved.image_description, None);
+        assert_eq!(resolved.prompt_suggestion, PromptSuggestModelPin::Unpinned);
+    });
 }
 #[test]
 fn model_overrides_prompt_suggestion_env_wins_over_local_and_remote() {

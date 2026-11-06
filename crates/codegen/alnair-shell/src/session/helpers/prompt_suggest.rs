@@ -4,11 +4,8 @@
 //! user is likely to type next. The prediction renders as dim ghost text in
 //! the empty prompt input; Tab accepts it. Modelled on common coding-agent
 //! prompt suggestion features, but instead of replaying the full conversation prefix
-//! it sends a *compact text-only transcript* — the call always routes to a
-//! dedicated model (configurable, [`default_suggest_model`] by
-//! default, never the session model — see [`effective_suggest_model`]),
-//! where the parent session's prompt cache would not apply anyway, so a
-//! small request wins on both cost and latency.
+//! it sends a compact text-only transcript. An explicit model override can
+//! route the request elsewhere; otherwise it uses the active chat model.
 //!
 //! The pure helpers here build the request items and filter the model output;
 //! the actual model call lives on the `SessionActor`
@@ -18,37 +15,21 @@ use crate::config::PromptSuggestModelPin;
 use crate::sampling::ConversationItem;
 use crate::session::helpers::chat::floor_char_boundary;
 
-/// Model used for suggestion calls when nothing pins one (no env /
-/// `[models] prompt_suggestion` / remote setting / client hint — see
-/// [`effective_suggest_model`]). The Kimi catalog has no dedicated small
-/// suggestion model, so this is the bundled default coding model; the
-/// catalog guard still controls whether the request fires at all.
-pub(crate) fn default_suggest_model() -> &'static str {
-    crate::models::default_model()
-}
-
-/// Resolve the model for one suggestion request, or `None` to skip the
-/// request entirely (controlled disable).
-///
-/// Precedence: env pin > config.toml/remote pin > client hint (the request's
-/// `model` param) > [`default_suggest_model`]. Every tier except the env pin
-/// is catalog-guarded via `in_catalog`: firing an unavailable pin or default
-/// would send a doomed per-turn request
-/// that can never render ghost text. Skipping keeps the per-turn cost at
-/// zero; deliberately NOT a session-model fallback — a per-turn background
-/// call must stay on a small cheap model. The env pin bypasses the guard so
-/// `ALNAIR_PROMPT_SUGGESTIONS_MODEL` keeps working for models the catalog does
-/// not list (mirrors the pager, which forwards the env value unchecked).
+/// Resolve env/config pins and client hints, falling back to the active chat model.
+/// Explicit non-env selections remain catalog-guarded.
 pub(crate) fn effective_suggest_model(
     pin: &PromptSuggestModelPin,
     client_hint: Option<&str>,
+    chat_model: &str,
     in_catalog: impl Fn(&str) -> bool,
 ) -> Option<String> {
     let client_hint = client_hint.map(str::trim).filter(|s| !s.is_empty());
     let (model, catalog_guarded) = match pin {
         PromptSuggestModelPin::Env(m) => (m.as_str(), false),
         PromptSuggestModelPin::Pinned(m) => (m.as_str(), true),
-        PromptSuggestModelPin::Unpinned => (client_hint.unwrap_or(default_suggest_model()), true),
+        PromptSuggestModelPin::Unpinned => {
+            (client_hint.unwrap_or(chat_model), client_hint.is_some())
+        }
     };
     if catalog_guarded && !in_catalog(model) {
         return None;
@@ -318,55 +299,63 @@ mod tests {
     use crate::config::PromptSuggestModelPin as Pin;
 
     #[test]
-    fn effective_model_default_requires_catalog() {
-        // No pin, no hint: the built-in default fires only when this shell's
-        // catalog can sample it.
+    fn effective_model_default_follows_chat_without_catalog_entry() {
+        // The active chat model remains usable without an auxiliary catalog entry.
         assert_eq!(
-            effective_suggest_model(&Pin::Unpinned, None, |m| m == default_suggest_model())
+            effective_suggest_model(&Pin::Unpinned, None, "chat-model", |m| m == "chat-model")
                 .as_deref(),
-            Some(default_suggest_model())
+            Some("chat-model")
         );
-        // OAuth catalogs exclude alnair-0.1 → skip the request entirely,
-        // never a doomed call (and never the session model).
+
         assert_eq!(
-            effective_suggest_model(&Pin::Unpinned, None, |_| false),
-            None
+            effective_suggest_model(&Pin::Unpinned, None, "chat-model", |_| false),
+            Some("chat-model".to_owned())
         );
     }
 
     #[test]
     fn effective_model_client_hint_beats_default_and_is_guarded() {
         assert_eq!(
-            effective_suggest_model(&Pin::Unpinned, Some("hinted"), |m| m == "hinted").as_deref(),
+            effective_suggest_model(&Pin::Unpinned, Some("hinted"), "chat-model", |m| m
+                == "hinted")
+            .as_deref(),
             Some("hinted")
         );
         // A hint the shell can't sample skips — no silent fall-through.
         assert_eq!(
-            effective_suggest_model(&Pin::Unpinned, Some("hinted"), |_| false),
+            effective_suggest_model(&Pin::Unpinned, Some("hinted"), "chat-model", |_| false),
             None
         );
         // Blank hints are ignored: the default tier applies.
         assert_eq!(
-            effective_suggest_model(&Pin::Unpinned, Some("  "), |m| m == default_suggest_model())
-                .as_deref(),
-            Some(default_suggest_model())
+            effective_suggest_model(&Pin::Unpinned, Some("  "), "chat-model", |m| m
+                == "chat-model")
+            .as_deref(),
+            Some("chat-model")
         );
     }
 
     #[test]
     fn effective_model_pin_beats_client_hint_and_is_guarded() {
         assert_eq!(
-            effective_suggest_model(&Pin::Pinned("pinned".into()), Some("hinted"), |m| m
-                == "pinned"
-                || m == "hinted")
+            effective_suggest_model(
+                &Pin::Pinned("pinned".into()),
+                Some("hinted"),
+                "chat-model",
+                |m| m == "pinned" || m == "hinted"
+            )
             .as_deref(),
             Some("pinned")
         );
         // A pinned-but-unavailable model skips — the pin is an explicit
         // choice, not a preference list; no fall-through to hint or default.
         assert_eq!(
-            effective_suggest_model(&Pin::Pinned("pinned".into()), Some("hinted"), |m| m
-                == "hinted"),
+            effective_suggest_model(
+                &Pin::Pinned("pinned".into()),
+                Some("hinted"),
+                "chat-model",
+                |m| m == "hinted"
+            ),
             None
         );
     }
@@ -377,8 +366,13 @@ mod tests {
         // verbatim even when the catalog does not list the model (mirrors
         // the pager, which forwards the env value unchecked).
         assert_eq!(
-            effective_suggest_model(&Pin::Env("custom-model".into()), Some("hinted"), |_| false)
-                .as_deref(),
+            effective_suggest_model(
+                &Pin::Env("custom-model".into()),
+                Some("hinted"),
+                "chat-model",
+                |_| false
+            )
+            .as_deref(),
             Some("custom-model")
         );
     }

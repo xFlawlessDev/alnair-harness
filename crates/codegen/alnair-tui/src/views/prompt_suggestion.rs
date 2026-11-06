@@ -26,14 +26,6 @@ pub const PROMPT_SUGGESTIONS_ENV: &str = "ALNAIR_PROMPT_SUGGESTIONS";
 /// `ALNAIR_PROMPT_SUGGESTIONS_MODEL=<model-id>`.
 pub const PROMPT_SUGGESTIONS_MODEL_ENV: &str = "ALNAIR_PROMPT_SUGGESTIONS_MODEL";
 
-/// Preferred model for suggestion calls when the server catalog offers it.
-/// The session model is never used: when this is absent from the catalog the
-/// request carries no model hint and the shell resolves (or skips) it — see
-/// [`resolve_model`].
-pub fn preferred_suggestion_model() -> &'static str {
-    alnair_shell::models::default_model()
-}
-
 /// Controller for the predicted-next-prompt ghost text.
 #[derive(Debug, Default)]
 pub struct PromptSuggestionController {
@@ -152,26 +144,12 @@ pub fn suggestion_size(text: &str) -> (usize, usize) {
     (text.chars().count(), text.split_whitespace().count())
 }
 
-/// Resolve the client-side model hint sent with the suggestion request:
-/// env override > `alnair-0.1` when the catalog offers it > `None`.
-///
-/// The hint is one tier of the shell-side resolution (env > config.toml >
-/// remote settings > this hint > `alnair-0.1` default): the shell
-/// catalog-guards the effective model and skips the request entirely when
-/// it is not sampleable — the session model is never used for suggestion
-/// calls.
-pub fn resolve_model(models: &crate::acp::model_state::ModelState) -> Option<String> {
-    if let Ok(model) = std::env::var(PROMPT_SUGGESTIONS_MODEL_ENV)
-        && !model.trim().is_empty()
-    {
-        return Some(model);
-    }
-    let preferred =
-        agent_client_protocol::ModelId::new(std::sync::Arc::from(preferred_suggestion_model()));
-    models
-        .available
-        .contains_key(&preferred)
-        .then(|| preferred_suggestion_model().to_owned())
+/// Only send an explicit environment hint. The shell resolves configured
+/// overrides and otherwise uses the active chat model.
+pub fn resolve_model(_models: &crate::acp::model_state::ModelState) -> Option<String> {
+    std::env::var(PROMPT_SUGGESTIONS_MODEL_ENV)
+        .ok()
+        .filter(|model| !model.trim().is_empty())
 }
 
 #[cfg(test)]

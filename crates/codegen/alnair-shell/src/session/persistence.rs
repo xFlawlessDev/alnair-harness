@@ -26,14 +26,35 @@ use tokio::sync::mpsc;
 /// - Version 1: ConversationItem format (used for new sessions)
 pub const CHAT_FORMAT_VERSION: u8 = 1;
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct PersistenceContentChunk {
     content_chunks: Vec<acp::ContentBlock>,
+    title_sampler: Option<Box<crate::sampling::SamplerConfig>>,
+}
+
+impl std::fmt::Debug for PersistenceContentChunk {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PersistenceContentChunk")
+            .field("content_chunks", &self.content_chunks)
+            .field(
+                "title_model",
+                &self.title_sampler.as_ref().map(|config| &config.model),
+            )
+            .finish()
+    }
 }
 
 impl PersistenceContentChunk {
     pub fn new(content_chunks: Vec<acp::ContentBlock>) -> Self {
-        Self { content_chunks }
+        Self {
+            content_chunks,
+            title_sampler: None,
+        }
+    }
+
+    pub(crate) fn with_title_sampler(mut self, config: crate::sampling::SamplerConfig) -> Self {
+        self.title_sampler = Some(Box::new(config));
+        self
     }
 }
 
@@ -1681,7 +1702,8 @@ impl SessionPersistence {
                         })
                         .collect::<Vec<_>>()
                         .join("\n");
-                    self.summary.update(content_part);
+                    self.summary
+                        .update_with_sampler(content_part, content_chunks.title_sampler);
 
                     // Notify session search index so this turn becomes searchable
                     crate::session::storage::search::notify_session_updated(

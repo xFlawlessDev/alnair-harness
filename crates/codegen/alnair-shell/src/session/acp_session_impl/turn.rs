@@ -590,12 +590,7 @@ impl SessionActor {
             )
             .await
         };
-        let _ = self
-            .notifications
-            .persistence_tx
-            .send(PersistenceMsg::ContentChunk(PersistenceContentChunk::new(
-                prompt_blocks.to_vec(),
-            )));
+        self.persist_title_source(prompt_blocks.to_vec()).await;
         let model_id = self
             .chat_state_handle
             .get_sampling_config()

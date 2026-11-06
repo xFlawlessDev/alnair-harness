@@ -173,12 +173,7 @@ impl SessionActor {
                 ))));
         }
 
-        let _ = self
-            .notifications
-            .persistence_tx
-            .send(PersistenceMsg::ContentChunk(PersistenceContentChunk::new(
-                prompt_blocks.to_vec(),
-            )));
+        self.persist_title_source(prompt_blocks.to_vec()).await;
 
         let tool_call_id = acp::ToolCallId::from(format!("bash-mode-{}", uuid::Uuid::new_v4()));
 

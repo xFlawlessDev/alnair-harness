@@ -472,6 +472,18 @@ bug, not a feature. `/terminal-setup` owns the per-terminal recipe.
 
 ## Config hot-reload
 
+Auxiliary models inherit the active chat model when unset: session title,
+image description, prompt suggestion, shell suggestion, and memory-note
+formatting. Their selectors live under Settings → Models and persist as
+`[models] session_summary`, `image_description`, `prompt_suggestion`,
+`shell_suggestion`, and `memory_rewrite`. Empty strings explicitly clear
+remote pins and survive the merge writer. Never fill these with the bundled
+Kimi catalog default. Resolve explicit selections through the shared auxiliary
+sampler routing so provider endpoints and credentials stay together. Title
+generation receives the current sampler with its first user content, rather
+than relying on the model selected when the session was created. Image
+description reads the live models manager so clearing an override hot-reloads.
+
 `ConfigFileWatcher` (notify + 1s debounce) feeds `ConfigReloader`, which diffs
 and emits `ConfigUpdate`. Two transports consume that stream, both in
 `agent/app.rs`:

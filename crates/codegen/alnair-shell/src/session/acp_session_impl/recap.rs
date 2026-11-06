@@ -486,7 +486,13 @@ impl SessionActor {
         cwd: &str,
         model_override: Option<&str>,
     ) -> Option<String> {
-        let sampling_client = self.prepare_chat_completion(false).await.ok()?;
+        let (sampling_client, model) = self
+            .prepare_auxiliary_completion(
+                crate::agent::auxiliary_models::AuxiliaryModel::ShellSuggestion,
+                model_override,
+            )
+            .await
+            .ok()?;
 
         let system = "You are a shell command autocomplete engine. \
             Given a partial command, output ONLY the completed command. \
@@ -498,11 +504,6 @@ impl SessionActor {
             ConversationItem::system(system.to_owned()),
             ConversationItem::user(user_msg),
         ];
-
-        let model = match model_override {
-            Some(m) => m.to_owned(),
-            None => crate::models::default_model().to_owned(),
-        };
 
         let request = ConversationRequest {
             items,
@@ -559,37 +560,23 @@ impl SessionActor {
         }
     }
 
-    /// Predict the user's likely next prompt for tab-autocomplete ghost text.
-    /// Fired by the client after a turn completes. Builds a compact text-only
-    /// transcript of the recent conversation (see
-    /// [`prompt_suggest::build_transcript`]) and makes one tool-free model
-    /// call. The model is resolved by
-    /// [`prompt_suggest::effective_suggest_model`]: env
-    /// (`ALNAIR_PROMPT_SUGGESTIONS_MODEL`) > `[models] prompt_suggestion`
-    /// (config.toml) > remote `prompt_suggestion_model` (remote settings) >
-    /// [`prompt_suggest::default_suggest_model`]. Every
-    /// tier except env is catalog-guarded against this shell's own model
-    /// catalog — when the effective model is not sampleable here (e.g.
-    /// a model the catalog does not offer) the request is **skipped
-    /// entirely** instead of fired doomed. The session model is never used:
-    /// a per-turn background call must stay on the small model.
-    /// Temperature, max_output_tokens, and
-    /// reasoning_effort are left unset — mirrors [`Self::handle_recap`]: the
-    /// proxy may inject provider defaults, a small token cap silently empties
-    /// a reasoning model's response, and some models (e.g. `alnair`)
-    /// reject an explicit `reasoningEffort` with a 400. Output is filtered
-    /// through [`prompt_suggest::sanitize_suggestion`]; any failure returns
-    /// `None`.
+    /// Predict the next prompt using an explicit override or the active chat model.
+    /// Configured non-env pins are catalog-guarded. Responses are filtered through
+    /// [`prompt_suggest::sanitize_suggestion`]; failures return `None`.
     pub(super) async fn handle_suggest_prompt(
         &self,
         model_override: Option<&str>,
     ) -> Option<String> {
         use crate::session::helpers::prompt_suggest;
 
+        self.refresh_token_if_expired().await;
         let pin = self.models_manager.prompt_suggest_model_pin();
-        let Some(model) = prompt_suggest::effective_suggest_model(&pin, model_override, |m| {
-            self.models_manager.model_in_catalog(m)
-        }) else {
+        let primary = self.chat_state_handle.get_sampling_config().await?;
+        let Some(model) =
+            prompt_suggest::effective_suggest_model(&pin, model_override, &primary.model, |m| {
+                self.models_manager.model_in_catalog(m)
+            })
+        else {
             tracing::debug!(
                 pin = ?pin,
                 client_hint = ?model_override,
@@ -607,13 +594,18 @@ impl SessionActor {
             return None;
         };
 
-        let sampling_client = match self.prepare_chat_completion(false).await {
-            Ok(c) => c,
-            Err(e) => {
-                tracing::debug!(error = %e, "prompt suggest: sampling client unavailable");
-                return None;
-            }
+        let config = if matches!(pin, crate::config::PromptSuggestModelPin::Env(_))
+            && !self.models_manager.model_in_catalog(&model)
+        {
+            // An unlisted env pin uses the current provider, as before.
+            let mut config = self.auxiliary_sampler_config(None).await;
+            config.model = model;
+            config
+        } else {
+            self.auxiliary_sampler_config(Some(&model)).await
         };
+        let model = config.model.clone();
+        let sampling_client = crate::sampling::Client::new(config).ok()?;
 
         tracing::debug!(
             model = %model,

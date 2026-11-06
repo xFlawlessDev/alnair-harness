@@ -799,10 +799,14 @@ fn action_for_string(
             }
         }
 
-        _ => {
-            let _ = value;
-            let _ = snapshot;
-            None
+        key => {
+            let kind = alnair_shell::agent::auxiliary_models::AuxiliaryModel::from_key(key)?;
+            let model = if value.is_empty() {
+                None
+            } else {
+                Some(snapshot.resolve_model_name(&value)?)
+            };
+            Some(Action::SetAuxiliaryModel { kind, model })
         }
     }
 }
@@ -3225,7 +3229,17 @@ fn render_setting_row(
             }
         }
         SettingValue::String(s) => {
-            if s.is_empty() && matches!(meta.kind, SettingKind::DynamicEnum { .. }) {
+            if s.is_empty()
+                && matches!(
+                    meta.kind,
+                    SettingKind::DynamicEnum {
+                        source: crate::settings::DynamicEnumSource::ChatModelCatalog,
+                        ..
+                    }
+                )
+            {
+                "Follow chat model"
+            } else if s.is_empty() && matches!(meta.kind, SettingKind::DynamicEnum { .. }) {
                 "(no override)"
             } else {
                 s.as_str()
@@ -5420,6 +5434,18 @@ mod tests {
                          SetForkSecondaryModel(_), got {nonempty_action:?}",
                     );
                 }
+                key if alnair_shell::agent::auxiliary_models::AuxiliaryModel::from_key(key)
+                    .is_some() =>
+                {
+                    assert!(matches!(
+                        empty_action,
+                        Some(Action::SetAuxiliaryModel { model: None, .. })
+                    ));
+                    assert!(matches!(
+                        nonempty_action,
+                        Some(Action::SetAuxiliaryModel { model: Some(_), .. })
+                    ));
+                }
                 other => panic!(
                     "Unknown DynamicEnum key `{other}` — add a discriminating arm in \
                      every_dynamic_enum_setting_has_action_for_string_arm so future \
@@ -5652,9 +5678,13 @@ mod tests {
                 "plan_mode",
                 // SHELL-owned default_model (Models category).
                 "default_model",
-                // Models category. `default_reasoning_effort` and
-                // `session_summary_model` are not exposed in the modal.
+                // Models category. Background overrides follow the chat selection.
                 "fork_secondary_model",
+                "session_summary",
+                "image_description",
+                "prompt_suggestion",
+                "shell_suggestion",
+                "memory_rewrite",
                 // `auto_compact_threshold_percent` (Session category) is
                 // not exposed in the modal.
                 // Advanced category.

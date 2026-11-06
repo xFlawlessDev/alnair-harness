@@ -373,7 +373,6 @@ pub(crate) async fn create_test_actor_ex(
         turn_stream_drained: parking_lot::Mutex::new(None),
         sampler_handle: alnair_sampler::SamplerHandle::noop(),
         rebuild_spec: crate::session::agent_rebuild::test_rebuild_spec_default(),
-        image_description_model: crate::test_support::TEST_MODEL.to_owned(),
         image_describe_cache: Arc::new(crate::session::image_describe::ImageDescribeCache::new()),
         subagent_spawn_info: parking_lot::Mutex::new(HashMap::new()),
         subagent_token_records: parking_lot::Mutex::new(HashMap::new()),

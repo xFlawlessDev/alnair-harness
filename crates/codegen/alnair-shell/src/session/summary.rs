@@ -3,7 +3,7 @@
 //! Encapsulates the full lifecycle: check if a summary already exists,
 //! generate one via the LLM, persist it, sync to remote, update the
 //! session registry, and notify the client. The persistence actor just
-//! calls [`SummaryGenerator::update`] — all state transitions are internal.
+//! calls [`SummaryGenerator::update_with_sampler`] — all state transitions are internal.
 
 use crate::extensions::notification::{SessionNotification, SessionUpdate as XaiSessionUpdate};
 use crate::sampling::Client as OaiCompatClient;
@@ -16,7 +16,7 @@ use tokio::sync::mpsc;
 
 /// Internal state for the summary generation lifecycle.
 enum State {
-    /// No summary generated yet. Will attempt on the next [`SummaryGenerator::update`] call.
+    /// No summary generated yet. Will attempt on the next [`SummaryGenerator::update_with_sampler`] call.
     Idle,
     /// Summary generation has been attempted (spawned or already on disk). No further work needed.
     Done,
@@ -32,7 +32,7 @@ pub(crate) struct SummaryConfig {
 
 /// Manages session title generation with explicit lifecycle state.
 ///
-/// Created once per persistence actor. The only public method is [`update`],
+/// Created once per persistence actor. The only public method is [`Self::update_with_sampler`],
 /// which is called from the `ContentChunk` handler. Internally it transitions
 /// through `Idle -> Done`, spawning the LLM call as a background task and
 /// routing the result back through the persistence channel for storage.
@@ -55,7 +55,11 @@ impl SummaryGenerator {
     ///   task for LLM title generation so the persistence actor is not blocked.
     ///   Empty content is skipped (stays Idle) so the next chunk can retry.
     /// - **Done**: no-op.
-    pub(crate) fn update(&mut self, content: String) {
+    pub(crate) fn update_with_sampler(
+        &mut self,
+        content: String,
+        sampler: Option<Box<crate::sampling::SamplerConfig>>,
+    ) {
         match self.state {
             State::Done => {}
             State::Idle => {
@@ -69,8 +73,27 @@ impl SummaryGenerator {
                 // don't spawn duplicate title generation tasks.
                 self.state = State::Done;
 
-                let sampling_client = self.config.sampling_client.clone();
-                let model = self.config.model.clone();
+                let (sampling_client, model) = match sampler {
+                    Some(config) => {
+                        let model = config.model.clone();
+                        match OaiCompatClient::new(*config) {
+                            Ok(client) => (client, model),
+                            Err(error) => {
+                                tracing::warn!(%error, "failed to build session title client");
+                                let title = crate::session::helpers::session_summary::title_fallback_from_user_text(&content);
+                                let _ = self
+                                    .config
+                                    .persistence_tx
+                                    .send(PersistenceMsg::GeneratedTitle(title));
+                                return;
+                            }
+                        }
+                    }
+                    None => (
+                        self.config.sampling_client.clone(),
+                        self.config.model.clone(),
+                    ),
+                };
                 let persistence_tx = self.config.persistence_tx.clone();
 
                 // Spawn title generation as a background task so the
@@ -120,5 +143,63 @@ pub(crate) fn notify_client(gateway: &Option<GatewaySender>, info: &Info, title:
             "alnair/session_notification",
             params.into(),
         ));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn auxiliary_title_uses_the_sampler_supplied_with_the_first_prompt() {
+        let server = wiremock::MockServer::start().await;
+        let response = serde_json::json!({
+            "id": "title-response", "object": "chat.completion.chunk", "created": 0,
+            "model": "current-chat",
+            "choices": [{"index": 0, "finish_reason": "tool_calls", "delta": {
+                "role": "assistant", "content": null,
+                "tool_calls": [{"index": 0, "id": "title-call", "type": "function", "function": {
+                    "name": "session_title", "arguments": "{\"session_title\":\"A generated session title\"}"
+                }}]
+            }}]
+        });
+        wiremock::Mock::given(wiremock::matchers::method("POST"))
+            .and(wiremock::matchers::body_partial_json(
+                serde_json::json!({"model": "current-chat"}),
+            ))
+            .respond_with(
+                wiremock::ResponseTemplate::new(200)
+                    .insert_header("content-type", "text/event-stream")
+                    .set_body_string(format!("data: {response}\n\ndata: [DONE]\n\n")),
+            )
+            .expect(1)
+            .mount(&server)
+            .await;
+        let mut config = crate::sampling::SamplerConfig {
+            base_url: server.uri(),
+            api_key: Some("test-key".into()),
+            model: "creation-time-model".into(),
+            api_backend: crate::sampling::ApiBackend::ChatCompletions,
+            max_retries: Some(0),
+            ..Default::default()
+        };
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let mut generator = SummaryGenerator::new(SummaryConfig {
+            sampling_client: OaiCompatClient::new(config.clone()).unwrap(),
+            model: config.model.clone(),
+            persistence_tx: tx,
+        });
+        config.model = "current-chat".into();
+        generator.update_with_sampler("Fix the authentication bug".into(), Some(Box::new(config)));
+        let message = tokio::time::timeout(std::time::Duration::from_secs(10), rx.recv())
+            .await
+            .unwrap()
+            .unwrap();
+        let PersistenceMsg::GeneratedTitle(title) = message else {
+            panic!("expected generated title")
+        };
+        assert_eq!(title, "A generated session title");
+        generator.update_with_sampler("Later message".into(), None);
+        assert!(rx.try_recv().is_err());
     }
 }

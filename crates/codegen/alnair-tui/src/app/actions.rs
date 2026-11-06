@@ -528,6 +528,11 @@ pub enum Action {
     /// Active session's model is unchanged; next session resolves
     /// via the shell's default-resolution chain.
     ClearDefaultModel,
+    /// Select a background model, or inherit the active chat model.
+    SetAuxiliaryModel {
+        kind: alnair_shell::agent::auxiliary_models::AuxiliaryModel,
+        model: Option<acp::ModelId>,
+    },
     /// Commit the max-thoughts-width (column budget for the thoughts panel).
     /// Payload is `i64`; clamped to `u16` at the shell helper boundary.
     SetMaxThoughtsWidth(i64),

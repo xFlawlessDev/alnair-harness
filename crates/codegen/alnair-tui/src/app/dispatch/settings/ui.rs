@@ -42,6 +42,7 @@ pub(crate) fn refresh_open_settings_modals(app: &mut AppView) {
         return;
     }
     let ui_snapshot = app.current_ui.clone();
+    let auxiliary_models = app.current_auxiliary_models.clone();
     // Capture app-level fields before the mut-borrow loop.
     let show_tips_from_app = app.show_tips;
     let auto_update_from_app = app.auto_update;
@@ -63,6 +64,7 @@ pub(crate) fn refresh_open_settings_modals(app: &mut AppView) {
             state.rebuild_rows();
             state.ui_snapshot = ui_snapshot.clone();
             state.pager_snapshot = crate::settings::PagerLocalSnapshot {
+                auxiliary_models: auxiliary_models.clone(),
                 multiline_mode: agent.multiline_mode,
                 yolo_mode: agent.session.is_yolo(),
                 auto_mode: agent.session.is_auto(),
@@ -145,6 +147,7 @@ pub(in crate::app::dispatch) fn dispatch_open_settings(app: &mut AppView) -> Vec
     // mutable borrow on `agent` so the borrow checker is happy.
     let registry = app.settings_registry.clone();
     let ui_snapshot = app.current_ui.clone();
+    let auxiliary_models = app.current_auxiliary_models.clone();
     let show_tips_from_app = app.show_tips;
     let auto_update_from_app = app.auto_update;
     let respect_manual_folds_from_app = app.appearance.scrollback.scroll.respect_manual_folds;
@@ -171,6 +174,7 @@ pub(in crate::app::dispatch) fn dispatch_open_settings(app: &mut AppView) -> Vec
     tracing::info!(target: "settings", "opened modal");
 
     let pager_snapshot = crate::settings::PagerLocalSnapshot {
+        auxiliary_models,
         multiline_mode: agent.multiline_mode,
         yolo_mode: agent.session.is_yolo(),
         auto_mode: agent.session.is_auto(),
@@ -644,6 +648,7 @@ fn agent_available_models(app: &AppView) -> Vec<(String, acp::ModelId)> {
 /// Build a `PagerLocalSnapshot` from the current `AppView`.
 pub(crate) fn build_pager_snapshot(app: &AppView) -> crate::settings::PagerLocalSnapshot {
     crate::settings::PagerLocalSnapshot {
+        auxiliary_models: app.current_auxiliary_models.clone(),
         multiline_mode: agent_multiline_mode(app),
         yolo_mode: agent_yolo_mode(app),
         auto_mode: agent_auto_mode(app),
@@ -816,6 +821,10 @@ pub(in crate::app::dispatch) fn action_for_reset(
             }
         }
 
+        (key, SettingValue::String(value)) if value.is_empty() => {
+            alnair_shell::agent::auxiliary_models::AuxiliaryModel::from_key(key)
+                .map(|kind| Action::SetAuxiliaryModel { kind, model: None })
+        }
         _ => None,
     }
 }
@@ -1021,16 +1030,19 @@ pub(in crate::app::dispatch) fn apply_setting_rollback(
                 set_auto_update_inner(app, *b);
             }
         }
-        // fork_secondary_model: empty rollback restores baseline default.
+        // Empty fork selection follows the chat model.
         ("fork_secondary_model", SettingValue::String(s)) => {
-            let restored = if s.is_empty() {
-                alnair_shell::models::default_model().to_string()
-            } else {
-                s.clone()
-            };
-            set_fork_secondary_model_inner(app, restored);
+            set_fork_secondary_model_inner(app, s.clone());
         }
 
+        (key, SettingValue::String(value))
+            if alnair_shell::agent::auxiliary_models::AuxiliaryModel::from_key(key).is_some() =>
+        {
+            if let Some(kind) = alnair_shell::agent::auxiliary_models::AuxiliaryModel::from_key(key)
+            {
+                kind.set(&mut app.current_auxiliary_models, Some(value.clone()));
+            }
+        }
         _ => {
             tracing::error!(
                 target: "settings",

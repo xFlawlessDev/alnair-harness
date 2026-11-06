@@ -785,6 +785,61 @@ impl SessionActor {
             creds.alpha_test_key.clone(),
         )
     }
+    /// Resolve a background request through its model's own endpoint and credentials.
+    pub(super) async fn auxiliary_sampler_config(&self, model: Option<&str>) -> SamplingConfig {
+        let primary = self.reconstruct_full_config().await;
+        let Some(slug) = model.map(str::trim).filter(|m| !m.is_empty()) else {
+            return primary;
+        };
+        if slug == primary.model {
+            return primary;
+        }
+        let Some(mut config) = self.resolve_aux_sampler_config(slug).await else {
+            tracing::warn!(
+                model = slug,
+                "auxiliary model unavailable; using chat model"
+            );
+            return primary;
+        };
+        let resolver = self.aux_bearer_resolver(slug, &config.base_url);
+        crate::agent::config::stamp_session_local_sampler_fields(
+            &mut config,
+            &primary,
+            resolver,
+            Some(self.max_retries),
+        );
+        config
+    }
+
+    pub(super) async fn prepare_auxiliary_completion(
+        &self,
+        kind: crate::agent::auxiliary_models::AuxiliaryModel,
+        hint: Option<&str>,
+    ) -> Result<(alnair_sampler::SamplingClient, String), acp::Error> {
+        self.refresh_token_if_expired().await;
+        let selection = self.models_manager.auxiliary_model(kind);
+        let config = self
+            .auxiliary_sampler_config(selection.as_deref().or(hint))
+            .await;
+        let model = config.model.clone();
+        let client =
+            alnair_sampler::SamplingClient::new(config).map_err(|e| self.to_acp_error(e))?;
+        Ok((client, model))
+    }
+
+    pub(super) async fn persist_title_source(&self, blocks: Vec<acp::ContentBlock>) {
+        self.refresh_token_if_expired().await;
+        let selection = self
+            .models_manager
+            .auxiliary_model(crate::agent::auxiliary_models::AuxiliaryModel::SessionTitle);
+        let config = self.auxiliary_sampler_config(selection.as_deref()).await;
+        let chunk = PersistenceContentChunk::new(blocks).with_title_sampler(config);
+        let _ = self
+            .notifications
+            .persistence_tx
+            .send(PersistenceMsg::ContentChunk(chunk));
+    }
+
     /// Resolve a dedicated sampler for the Auto-mode classifier model `slug`,
     /// stamping session-local auth/attribution like image-describe (which relies
     /// on the resolver, not a config override, for `base_url`/`api_backend` so

@@ -694,10 +694,16 @@ pub struct ModelsConfig {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub image_description: Option<String>,
     /// Model pin for next-prompt suggestions (tab-autocomplete ghost text).
-    /// Unset = remote pin, then the client hint / built-in bundled-model
-    /// default with the catalog guard; see `ModelOverrideConfig::resolve`.
+    /// Unset = remote pin, then a catalog-guarded client hint or current chat
+    /// model; see `ModelOverrideConfig::resolve`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub prompt_suggestion: Option<String>,
+    /// Shell command completion model. Unset follows the current chat model.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub shell_suggestion: Option<String>,
+    /// Memory note formatting model. Unset follows the current chat model.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub memory_rewrite: Option<String>,
     /// Restricts which models are user-selectable for normal chat (picker,
     /// `/model`, `-m`). Non-matching models stay in the catalog but are never
     /// shown, defaulted to, or selectable. Special/internal models (web_search,
@@ -972,7 +978,7 @@ impl SandboxSettingsConfig {
 /// [suggestions]
 /// enabled = true
 /// ai_enabled = true
-/// ai_model = "kimi-for-coding"
+/// ai_model = "" # use the current chat model
 /// debounce_ms = 50
 /// ```
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
@@ -1008,7 +1014,7 @@ impl SuggestionsConfig {
             .default(false)
             .resolve()
     }
-    pub fn resolve_ai_model(&self) -> String {
+    pub fn resolve_ai_model(&self) -> Option<String> {
         resolve_string_flag(
             None,
             "ALNAIR_SUGGESTIONS_AI_MODEL",
@@ -1016,7 +1022,6 @@ impl SuggestionsConfig {
             None,
         )
         .map(|r| r.value)
-        .unwrap_or_else(|| crate::models::default_model().to_owned())
     }
 }
 /// `[storage]` section from config.toml.
@@ -1308,11 +1313,10 @@ pub struct Config {
     /// Enforced requirement pins from `requirements.toml`.
     #[serde(skip)]
     pub requirements: Requirements,
-    /// Session title model. Resolved to the compiled default
-    /// (`default_session_summary_model`) when unset; see `ModelOverrideConfig::resolve`.
+    /// Session title model override. Unset follows the active chat model.
     #[serde(skip)]
     pub session_summary_model: Option<String>,
-    /// Image describe model (bundled default via `ModelOverrideConfig::resolve`).
+    /// Image description model override. Unset follows the active chat model.
     #[serde(skip)]
     pub image_description_model: Option<String>,
     /// Next-prompt suggestion model pin (`env > [models] prompt_suggestion >
@@ -4742,14 +4746,12 @@ reasoning_effort = "low"
         let empty: toml::Value = toml::Value::Table(toml::map::Map::new());
         let cfg = Config::new_from_toml_cfg(&empty).expect("empty config should parse");
         assert_eq!(
-            cfg.session_summary_model,
-            Some(crate::models::default_session_summary_model().to_owned()),
-            "empty config should produce compiled default session_summary model"
+            cfg.session_summary_model, None,
+            "unset session title model must inherit chat"
         );
         assert_eq!(
-            cfg.image_description_model,
-            Some(crate::models::default_image_description_model().to_owned()),
-            "empty config should produce compiled default image_description model"
+            cfg.image_description_model, None,
+            "unset image description model must inherit chat"
         );
         let with_overrides: toml::Value = toml::from_str(
             r#"
@@ -8977,10 +8979,7 @@ hooks = true
         });
         assert!(cfg.subagents_enabled);
         assert!(!cfg.respect_gitignore);
-        assert_eq!(
-            cfg.session_summary_model,
-            Some(crate::models::default_session_summary_model().to_owned())
-        );
+        assert_eq!(cfg.session_summary_model, None);
         assert!(!cfg.path_not_found_hints);
     }
     #[test]

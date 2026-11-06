@@ -645,6 +645,7 @@ pub struct AppView {
     /// startup; updated synchronously by `set_X_inner` so dispatch
     /// stays sans-IO.
     pub current_ui: alnair_shell::agent::config::UiConfig,
+    pub current_auxiliary_models: alnair_shell::agent::config::ModelsConfig,
     /// Working directory.
     pub cwd: PathBuf,
     /// Whether the project picker question has already been shown this session.
@@ -1133,6 +1134,7 @@ impl AppView {
             registry: ActionRegistry::defaults(),
             settings_registry: Arc::new(crate::settings::SettingsRegistry::defaults()),
             current_ui: alnair_shell::agent::config::UiConfig::default(),
+            current_auxiliary_models: alnair_shell::agent::config::ModelsConfig::default(),
             cwd: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
             project_picker_shown: false,
             project_picker_disabled: false,
@@ -4971,6 +4973,7 @@ pub(crate) mod tests {
             registry: ActionRegistry::defaults(),
             settings_registry: std::sync::Arc::new(crate::settings::SettingsRegistry::defaults()),
             current_ui: alnair_shell::agent::config::UiConfig::default(),
+            current_auxiliary_models: alnair_shell::agent::config::ModelsConfig::default(),
             cwd: std::path::PathBuf::from("/tmp"),
             project_picker_shown: true,
             project_picker_disabled: false,

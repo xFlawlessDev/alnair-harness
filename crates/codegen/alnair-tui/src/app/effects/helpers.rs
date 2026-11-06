@@ -951,6 +951,14 @@ pub(crate) async fn persist_setting(
                 .await
                 .map_err(|e| e.to_string())
         }
+        key if alnair_shell::agent::auxiliary_models::AuxiliaryModel::from_key(key).is_some() => {
+            let SettingValue::String(value) = value else {
+                return Err(kind_mismatch(key, "String", &value));
+            };
+            let kind = alnair_shell::agent::auxiliary_models::AuxiliaryModel::from_key(key)
+                .ok_or_else(|| format!("unknown auxiliary model key: {key}"))?;
+            alnair_shell::util::config::set_auxiliary_model(kind, value).await.map_err(|e| e.to_string())
+        }
         other => Err(format!("unknown setting key for persist: `{other}`")),
     }
 }

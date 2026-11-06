@@ -953,6 +953,11 @@ pub(crate) async fn run(
     // Seed app state from disk once at the I/O boundary so dispatch
     // stays sans-IO.
     app.current_ui = load_initial_ui_config();
+    app.current_auxiliary_models = alnair_shell::config::load_effective_config()
+        .ok()
+        .and_then(|root| root.get("models").cloned())
+        .and_then(|models| models.try_into().ok())
+        .unwrap_or_default();
     // Field-tolerant: a whole-`UiConfig` default (malformed unrelated `[ui]`
     // field) must not wipe a valid `show_timeline` or leave appearance /
     // cache / `current_ui` disagreeing — `/timeline` and the rail all read

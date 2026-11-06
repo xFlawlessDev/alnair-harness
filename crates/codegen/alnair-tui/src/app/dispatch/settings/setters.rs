@@ -1598,10 +1598,49 @@ pub(in crate::app::dispatch) fn clear_default_model(app: &mut AppView) -> Vec<Ef
 // runtime state — they update `current_ui` mirrors and persist.
 // No live preview. Rollback is purely disk + mirror.
 
-/// State-only mutation for `fork_secondary_model`. Updates the
-/// `app.current_ui.fork_secondary_model` mirror so the modal
-/// indicator stays in sync; the shell's config-reloader propagates
-/// the disk change to any running agents on the next fork.
+/// Commit a catalog model selection for a background request.
+pub(in crate::app::dispatch) fn set_auxiliary_model(
+    app: &mut AppView,
+    kind: alnair_shell::agent::auxiliary_models::AuxiliaryModel,
+    model: Option<acp::ModelId>,
+) -> Vec<Effect> {
+    let value = match model {
+        Some(id) => {
+            let ActiveView::Agent(aid) = app.active_view else {
+                return vec![];
+            };
+            let Some(agent) = app.agents.get(&aid) else {
+                return vec![];
+            };
+            if !agent.session.models.available.contains_key(&id) {
+                return vec![];
+            }
+            id.0.to_string()
+        }
+        None => String::new(),
+    };
+    let previous = kind
+        .selection(&app.current_auxiliary_models)
+        .unwrap_or_default()
+        .to_owned();
+    if value == previous && kind.is_configured(&app.current_auxiliary_models) {
+        return vec![];
+    }
+    kind.set(&mut app.current_auxiliary_models, Some(value.clone()));
+    refresh_open_settings_modals(app);
+    let display = if value.is_empty() {
+        "Follow chat model"
+    } else {
+        &value
+    };
+    app.show_toast(&format!("{}: {display}", kind.label()));
+    vec![Effect::PersistSetting {
+        key: kind.key(),
+        value: crate::settings::SettingValue::String(value),
+        rollback_value: crate::settings::SettingValue::String(previous),
+    }]
+}
+
 pub(super) fn set_fork_secondary_model_inner(app: &mut AppView, value: String) {
     app.current_ui.fork_secondary_model = value;
 }
@@ -1650,11 +1689,7 @@ pub(in crate::app::dispatch) fn set_fork_secondary_model(
         );
         return vec![];
     }
-    // Mirror, idempotency, persist, and rollback all use the model ID
-    // (catalog key), not the display name. The shell's
-    // `cfg.ui.fork_secondary_model` consumers match by slug / map key,
-    // and the `current_value_for` fold-to-empty comparison checks
-    // against `models::default_model()` (also a slug).
+    // Persist the catalog key so display-name changes preserve the selection.
     let new_id_str = new_id.0.to_string();
     let prev_id_str = app.current_ui.fork_secondary_model.clone();
     if prev_id_str == new_id_str {
@@ -1678,11 +1713,9 @@ pub(in crate::app::dispatch) fn set_fork_secondary_model(
     }]
 }
 
-/// Outer dispatcher for `Action::ClearForkSecondaryModel`. Resets
-/// the persisted override to the built-in baseline
-/// (`alnair_shell::models::default_model()`).
+/// Clear the secondary-model override so forks inherit chat.
 pub(in crate::app::dispatch) fn clear_fork_secondary_model(app: &mut AppView) -> Vec<Effect> {
-    let baseline = alnair_shell::models::default_model().to_string();
+    let baseline = String::new();
     let prev_id_str = app.current_ui.fork_secondary_model.clone();
     if prev_id_str == baseline {
         app.show_toast("\u{2713} Fork secondary model: already at default");

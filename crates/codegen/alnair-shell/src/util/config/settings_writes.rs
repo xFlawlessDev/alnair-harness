@@ -85,8 +85,19 @@ pub async fn set_default_model(value: String) -> Result<()> {
     .await
 }
 
+pub async fn set_auxiliary_model(
+    kind: crate::agent::auxiliary_models::AuxiliaryModel,
+    value: String,
+) -> Result<()> {
+    if value.len() > MAX_DEFAULT_MODEL_LEN {
+        anyhow::bail!("{} model name too long", kind.key());
+    }
+    // An explicit empty value survives the merge writer and clears remote pins.
+    update_config(|cfg| kind.set(&mut cfg.models, Some(value))).await
+}
+
 /// Caller must validate against the model catalog. Empty string
-/// restores the built-in default.
+/// follows the current chat model.
 pub async fn set_fork_secondary_model(value: String) -> Result<()> {
     if value.len() > MAX_DEFAULT_MODEL_LEN {
         anyhow::bail!(
@@ -96,11 +107,7 @@ pub async fn set_fork_secondary_model(value: String) -> Result<()> {
         );
     }
     update_config(|cfg| {
-        cfg.ui.fork_secondary_model = if value.is_empty() {
-            crate::models::default_model().to_string()
-        } else {
-            value
-        };
+        cfg.ui.fork_secondary_model = value;
     })
     .await
 }

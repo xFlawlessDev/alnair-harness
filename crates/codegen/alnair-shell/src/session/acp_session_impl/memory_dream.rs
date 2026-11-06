@@ -630,8 +630,11 @@ impl SessionActor {
             ));
         }
 
-        let sampling_client = self
-            .prepare_chat_completion(false)
+        let (sampling_client, model) = self
+            .prepare_auxiliary_completion(
+                crate::agent::auxiliary_models::AuxiliaryModel::MemoryRewrite,
+                None,
+            )
             .await
             .map_err(|e| format!("failed to prepare client: {e}"))?;
 
@@ -658,7 +661,7 @@ impl SessionActor {
         let request = ConversationRequest {
             items,
             tools: vec![],
-            model: Some(crate::models::default_model().to_owned()),
+            model: Some(model),
             temperature: Some(0.3),
             max_output_tokens: Some(1024),
             ..Default::default()

@@ -347,6 +347,7 @@ pub(super) fn dispatch_send_prompt_inner(
                 screen_mode: app.screen_mode,
                 // PAGER-owned snapshot for slash commands.
                 pager_state: crate::settings::PagerLocalSnapshot {
+                    auxiliary_models: app.current_auxiliary_models.clone(),
                     multiline_mode: agent.multiline_mode,
                     yolo_mode: agent.session.is_yolo(),
                     auto_mode: agent.session.is_auto(),

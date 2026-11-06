@@ -287,7 +287,6 @@ async fn persist_ack_waits_for_disk_flush_before_success() {
                 turn_stream_drained: parking_lot::Mutex::new(None),
                 sampler_handle: alnair_sampler::SamplerHandle::noop(),
                 rebuild_spec: crate::session::agent_rebuild::test_rebuild_spec_default(),
-                image_description_model: crate::test_support::TEST_MODEL.to_owned(),
                 image_describe_cache: Arc::new(
                     crate::session::image_describe::ImageDescribeCache::new(),
                 ),
@@ -751,7 +750,6 @@ async fn first_turn_memory_injection_disabled_does_not_persist_to_chat_history()
                 turn_stream_drained: parking_lot::Mutex::new(None),
                 sampler_handle: alnair_sampler::SamplerHandle::noop(),
                 rebuild_spec: crate::session::agent_rebuild::test_rebuild_spec_default(),
-                image_description_model: crate::test_support::TEST_MODEL.to_owned(),
                 image_describe_cache: Arc::new(
                     crate::session::image_describe::ImageDescribeCache::new(),
                 ),
@@ -1015,7 +1013,6 @@ async fn cancel_running_task_teardown_clears_running_and_pending_work() {
                 turn_stream_drained: parking_lot::Mutex::new(None),
                 sampler_handle: alnair_sampler::SamplerHandle::noop(),
                 rebuild_spec: crate::session::agent_rebuild::test_rebuild_spec_default(),
-                image_description_model: crate::test_support::TEST_MODEL.to_owned(),
                 image_describe_cache: Arc::new(
                     crate::session::image_describe::ImageDescribeCache::new(),
                 ),
@@ -2016,7 +2013,6 @@ async fn cancel_propagates_to_sampler_handle_so_no_further_emission() {
                 turn_stream_drained: parking_lot::Mutex::new(None),
                 sampler_handle: sampler_handle.clone(),
                 rebuild_spec: crate::session::agent_rebuild::test_rebuild_spec_default(),
-                image_description_model: crate::test_support::TEST_MODEL.to_owned(),
                 image_describe_cache: Arc::new(
                     crate::session::image_describe::ImageDescribeCache::new(),
                 ),

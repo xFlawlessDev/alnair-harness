@@ -698,6 +698,19 @@ impl ModelsManager {
         self.inner.cfg.read().prompt_suggest_model_pin.clone()
     }
 
+    pub fn auxiliary_model(&self, kind: super::auxiliary_models::AuxiliaryModel) -> Option<String> {
+        use super::auxiliary_models::AuxiliaryModel;
+        let cfg = self.inner.cfg.read();
+        match kind {
+            AuxiliaryModel::SessionTitle => cfg.session_summary_model.clone(),
+            AuxiliaryModel::ImageDescription => cfg.image_description_model.clone(),
+            _ => std::env::var(kind.env_var())
+                .ok()
+                .filter(|m| !m.trim().is_empty())
+                .or_else(|| kind.selection(&cfg.models).map(str::to_owned)),
+        }
+    }
+
     /// Whether `model_id` resolves in the current catalog — as a config key
     /// or a routing slug (see [`resolve_catalog_key`]). Deliberately checks
     /// the full catalog rather than the user-selectable projection: auxiliary

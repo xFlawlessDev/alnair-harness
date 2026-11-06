@@ -549,10 +549,9 @@ impl SubagentsConfig {
 pub struct ModelOverrideConfig {
     /// `None` = current model.
     pub session_summary: Option<String>,
-    /// Compiled default (`alnair_models::default_model()`) when unset locally, remotely, and via env.
+    /// `None` = current chat model.
     pub image_description: Option<String>,
-    /// Next-prompt suggestion model pin. Unlike the other overrides this does
-    /// NOT fill a compiled default — see [`PromptSuggestModelPin`].
+    /// Next-prompt suggestion model pin; unset follows chat.
     #[serde(skip)]
     pub prompt_suggestion: PromptSuggestModelPin,
 }
@@ -562,9 +561,9 @@ pub struct ModelOverrideConfig {
 ///
 /// Unlike the other auxiliary overrides this does not collapse to a plain
 /// model string: the consumer (`handle_suggest_prompt`) must distinguish
-/// an explicit pin from "unpinned" (where the client hint and the built-in
-/// default apply), and whether the pin came from the env
-/// escape hatch. Every effective model except an env pin is catalog-guarded —
+/// an explicit pin from "unpinned" (where the client hint and current chat
+/// model apply), and whether the pin came from the env
+/// escape hatch. Explicit non-env models are catalog-guarded —
 /// when the model is not in the shell's catalog the per-turn suggestion request is
 /// skipped entirely rather than fired doomed. The env pin is deliberately
 /// exempt so `ALNAIR_PROMPT_SUGGESTIONS_MODEL` keeps working for models a
@@ -578,8 +577,7 @@ pub enum PromptSuggestModelPin {
     /// `[models] prompt_suggestion` in config.toml, or the remote
     /// `prompt_suggestion_model` (remote settings) — catalog-guarded.
     Pinned(String),
-    /// No explicit pin: the client hint, then the built-in default apply
-    /// (both catalog-guarded).
+    /// No explicit pin: a catalog-guarded client hint, then the active chat model.
     #[default]
     Unpinned,
 }
@@ -595,9 +593,8 @@ fn non_empty_model_override(value: Option<&str>) -> Option<String> {
     })
 }
 impl ModelOverrideConfig {
-    /// CLI flag > env var > config.toml > remote settings > compiled default.
-    /// `image_description` and `session_summary` always resolve to `Some(_)`
-    /// (the bundled default model), never the session model.
+    /// CLI flag > env var > config.toml > remote settings > active chat model.
+    /// Unset image-description and session-title selections follow the chat model.
     /// `prompt_suggestion` resolves to a [`PromptSuggestModelPin`] instead of
     /// a model string (no CLI flag; the default and the catalog guard live at
     /// the consumer, `handle_suggest_prompt`).
@@ -632,7 +629,10 @@ impl ModelOverrideConfig {
                 result.image_description =
                     non_empty_model_override(remote.image_description_model.as_deref());
             }
-            if result.prompt_suggestion == PromptSuggestModelPin::Unpinned
+            if models_table
+                .and_then(|m| m.get("prompt_suggestion"))
+                .is_none()
+                && result.prompt_suggestion == PromptSuggestModelPin::Unpinned
                 && let Some(v) = non_empty_model_override(remote.prompt_suggestion_model.as_deref())
             {
                 result.prompt_suggestion = PromptSuggestModelPin::Pinned(v);
@@ -651,14 +651,6 @@ impl ModelOverrideConfig {
         }
         if let Some(v) = cli_session_summary_model {
             result.session_summary = non_empty_model_override(Some(v));
-        }
-        if result.session_summary.is_none() {
-            result.session_summary =
-                Some(crate::models::default_session_summary_model().to_owned());
-        }
-        if result.image_description.is_none() {
-            result.image_description =
-                Some(crate::models::default_image_description_model().to_owned());
         }
         result
     }

@@ -1223,6 +1223,7 @@ pub(super) fn dispatch_dashboard_dispatch_slash(app: &mut AppView, text: String)
             bundle_state: &app.bundle_state,
             screen_mode: app.screen_mode,
             pager_state: crate::settings::PagerLocalSnapshot {
+                auxiliary_models: app.current_auxiliary_models.clone(),
                 multiline_mode: dashboard_multiline,
                 yolo_mode: app.default_yolo,
                 auto_mode: app.current_ui.permission_mode.as_deref() == Some("auto")
