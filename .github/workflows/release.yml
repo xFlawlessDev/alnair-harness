@@ -62,11 +62,14 @@ jobs:
             ext: tar.gz
             cross_gnu: true
           - target: aarch64-apple-darwin
-            runner: macos-14
+            # macos-14 was retired on 2026-11-02; a job scheduled on it is
+            # cancelled with no runner and no steps. macos-15 is pinned rather
+            # than macos-latest because -latest moves again in October 2026.
+            runner: macos-15
             protoc: osx-aarch_64
             ext: tar.gz
           - target: x86_64-apple-darwin
-            runner: macos-14
+            runner: macos-15
             protoc: osx-aarch_64
             ext: tar.gz
           - target: x86_64-pc-windows-msvc
